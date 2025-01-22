@@ -36,7 +36,7 @@ DFF, MP4等音频格式。
 # 🦀 Show Project
 DEMO 地址账号密码为：admin/admin
 
-[【音乐标签Web｜Music Tag Web】](http://42.193.218.103:8002/#/)
+[【音乐标签Web｜Music Tag Web】](http://114.96.87.132:8002/#/)
 
 # 🔨 How to Build?
 ```bash
