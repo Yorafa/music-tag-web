@@ -31,20 +31,39 @@ def exists_dir(dir_list):
     return False
 
 
+def _clean_for_match(s):
+    """清洗字符串用于匹配：去空格/标点/feat/括号内容"""
+    s = s.lower()
+    s = re.sub(r'\([^)]*\)', '', s)
+    s = re.sub(r'\[[^\]]*\]', '', s)
+    s = re.sub(r'\bfeat\.?\s*\S*', '', s, flags=re.I)
+    s = re.sub(r'\bft\.?\s*\S*', '', s, flags=re.I)
+    s = re.sub(r'[^\w]', '', s)
+    return s
+
+
 def match_score(my_value, u_value):
     try:
-        my_value = my_value.lower().replace(" ", "")
-        u_value = u_value.lower().replace(" ", "")
+        my_clean = _clean_for_match(my_value)
+        u_clean = _clean_for_match(u_value)
         if not issimp(my_value):
-            my_value = convert(my_value, 'zh-cn')
+            my_clean = _clean_for_match(convert(my_value, 'zh-cn'))
         if not issimp(u_value):
-            u_value = convert(u_value, 'zh-cn')
-        if not my_value or not u_value:
+            u_clean = _clean_for_match(convert(u_value, 'zh-cn'))
+        if not my_clean or not u_clean:
             return 0
-        if my_value == u_value:
+        if my_clean == u_clean:
             return 2
-        elif my_value in u_value or u_value in my_value:
+        if my_clean in u_clean or u_clean in my_clean:
             return 1
+        my_tokens = [t for t in re.split(r'[^\w]', my_clean) if t]
+        u_tokens = [t for t in re.split(r'[^\w]', u_clean) if t]
+        if my_tokens and u_tokens:
+            matches = sum(1 for t in my_tokens if t in u_tokens)
+            if matches == len(my_tokens):
+                return 2
+            if matches >= len(my_tokens) / 2:
+                return 1
         return 0
     except Exception:
         return 0

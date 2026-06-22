@@ -56,10 +56,6 @@ class FetchLlyricSerializer(serializers.Serializer):
     resource = serializers.CharField(required=True)
 
 
-class TranslationLycSerializer(serializers.Serializer):
-    lyc = serializers.CharField(required=True)
-
-
 class TidyFolderSerializer(serializers.Serializer):
     root_path = serializers.CharField(required=True)
     first_dir = serializers.CharField(required=True)
@@ -90,3 +86,12 @@ class TaskSerializer(serializers.ModelSerializer):
 
 class UploadImageSerializer(serializers.Serializer):
     upload_file = serializers.ImageField(required=True)
+
+
+class YoutubeSearchSerializer(serializers.Serializer):
+    query = serializers.CharField(required=True)
+    max_results = serializers.IntegerField(required=False, default=10, max_value=20)
+
+
+class YoutubeDownloadSerializer(serializers.Serializer):
+    video_id = serializers.CharField(required=True)

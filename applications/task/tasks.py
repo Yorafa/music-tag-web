@@ -17,7 +17,8 @@ from applications.task.services.music_ids import MusicIDS
 from applications.task.services.music_resource import MusicResource
 from applications.task.services.scan_utils import ScanMusic, MusicInfo
 from applications.task.utils import folder_update_time, exists_dir, match_song
-from django_vue_cli.celery_app import app
+from music_site.celery_app import app
+from applications.task.services.youtube import download_song as yt_download_song
 
 
 def get_uuid():
@@ -300,6 +301,25 @@ def batch_auto_tag_task(batch, source_list, select_mode):
                 "song_name": task.song_name,
                 "artist_name": task.artist_name,
             })
+
+
+@app.task
+def download_youtube_task(video_id):
+    """
+    后台任务：从YouTube下载音频为OGG格式
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        result = yt_download_song(video_id)
+        if result.get("success"):
+            logger.info(f"Downloaded: {result.get('file_name', '')} -> {result.get('file_path', '')}")
+        else:
+            logger.error(f"Download failed: {result.get('error', 'Unknown')}")
+        return result
+    except Exception as e:
+        logger.error(f"Download task exception: {e}")
+        return {"success": False, "error": str(e), "video_id": video_id}
 
 
 def tidy_folder_task(music_path_list, tidy_config):

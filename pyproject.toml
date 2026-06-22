@@ -1,0 +1,33 @@
+[project]
+name = "music-tag-web"
+version = "0.2.0"
+description = "Music Tag Web — Python 3.12 + Django 4.2 现代化升级"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "celery>=5.4",
+    "django>=4.2,<5.0",
+    "django-celery-beat>=2.7",
+    "django-celery-results>=2.5",
+    "django-cors-headers>=4.6",
+    "django-filter>=24.3",
+    "django-mysql>=4.2",
+    "djangorestframework>=3.15",
+    "djangorestframework-simplejwt>=5.3",
+    "gevent>=24.2",
+    "gunicorn>=23.0",
+    "mako>=1.3",
+    "music-tag>=0.4.3",
+    "pillow>=10.4",
+    "pycryptodomex>=3.20",
+    "python-dateutil>=2.9",
+    "requests>=2.32",
+    "yt-dlp>=2024.1.1",
+    "pymysql>=1.1",
+    "redis>=5.2",
+    "sqlalchemy>=2.0",
+    "tqdm>=4.67",
+    "lxml>=5.3",
+    "pathos>=0.3",
+    "qqmusic-api-python>=0.6",
+]
