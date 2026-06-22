@@ -4,7 +4,7 @@ from django.conf import settings
 import time
 from applications.music.models import Folder, Track, Album, Artist, Genre
 from applications.subsonic.constants import AUDIO_EXTENSIONS_AND_MIMETYPE, COVER_TYPE
-from django_vue_cli.celery_app import app
+from music_site.celery_app import app
 import os
 import uuid
 from django.core.files.base import ContentFile

@@ -13,15 +13,15 @@ from applications.task.constants import ALLOW_TYPE
 from applications.task.filters import TaskFilters
 from applications.task.models import TaskRecord, Task
 from applications.task.serialziers import FileListSerializer, Id3Serializer, UpdateId3Serializer, \
-    FetchId3ByTitleSerializer, FetchLlyricSerializer, BatchUpdateId3Serializer, TranslationLycSerializer, \
-    TidyFolderSerializer, TaskSerializer, UploadImageSerializer
+    FetchId3ByTitleSerializer, FetchLlyricSerializer, BatchUpdateId3Serializer, \
+    TidyFolderSerializer, TaskSerializer, UploadImageSerializer, YoutubeSearchSerializer, YoutubeDownloadSerializer
 from applications.task.services.music_ids import MusicIDS
 from applications.task.services.music_resource import MusicResource
 from applications.task.services.update_ids import update_music_info
-from applications.task.tasks import full_scan_folder, scan, clear_music, batch_auto_tag_task, tidy_folder_task
-from applications.utils.translation import translation_lyc_text
+from applications.task.services.youtube import search_youtube
+from applications.task.tasks import full_scan_folder, scan, clear_music, batch_auto_tag_task, tidy_folder_task, download_youtube_task
 from component.drf.viewsets import GenericViewSet
-from django_vue_cli.celery_app import app as celery_app
+from music_site.celery_app import app as celery_app
 
 
 @method_decorator(gzip_page, name="dispatch")
@@ -39,12 +39,14 @@ class TaskViewSets(GenericViewSet):
             return FetchLlyricSerializer
         elif self.action in ["batch_update_id3", "batch_auto_update_id3"]:
             return BatchUpdateId3Serializer
-        elif self.action == "translation_lyc":
-            return TranslationLycSerializer
         elif self.action == "tidy_folder":
             return TidyFolderSerializer
         elif self.action == "upload_image":
             return UploadImageSerializer
+        elif self.action == "youtube_search":
+            return YoutubeSearchSerializer
+        elif self.action == "youtube_download":
+            return YoutubeDownloadSerializer
         return FileListSerializer
 
     @action(methods=['POST'], detail=False)
@@ -214,10 +216,10 @@ class TaskViewSets(GenericViewSet):
         resource = validate_data["resource"]
         song_id = validate_data["song_id"]
         try:
-            lyric = MusicResource(resource).fetch_lyric(song_id) or ""
+            result = MusicResource(resource).fetch_lyric(song_id) or ""
         except Exception as e:
-            lyric = f"未找到歌词 {e}"
-        return self.success_response(data=lyric)
+            result = f"未找到歌词 {e}"
+        return self.success_response(data=result)
 
     @action(methods=['POST'], detail=False)
     def fetch_id3_by_title(self, request, *args, **kwargs):
@@ -232,40 +234,6 @@ class TaskViewSets(GenericViewSet):
             title = {"title": title, "full_path": full_path}
         songs = MusicResource(resource).fetch_id3_by_title(title)
         return self.success_response(data=songs)
-
-    @action(methods=['POST'], detail=False)
-    def translation_lyc(self, request, *args, **kwargs):
-        validate_data = self.is_validated_data(request.data)
-        lyc = validate_data["lyc"]
-        clean_lyc_list = []
-        raw_lyc_list = []
-        for line in lyc.split("\n"):
-            if not line:
-                continue
-            clean_line = line.split("]")[-1]
-            clean_line = clean_line.strip()
-            if not clean_line:
-                continue
-            raw_lyc_list.append(line)
-            clean_lyc_list.append(clean_line)
-        clean_lyc_str = "\n".join(clean_lyc_list)
-        results = translation_lyc_text(clean_lyc_str)
-        new_lyc = []
-        results_list = results.split("\n")
-        for index, result in enumerate(results_list):
-            if not result:
-                new_lyc.append(raw_lyc_list[index])
-            else:
-                try:
-                    src = clean_lyc_list[index]
-                    raw_src = raw_lyc_list[index]
-                except Exception as e:
-                    continue
-                if src.replace(" ", "") == result.replace(" ", ""):
-                    new_lyc.append(raw_src)
-                else:
-                    new_lyc.append(f"{raw_src}\n「{result}」\n")
-        return self.success_response(data="\n".join(new_lyc))
 
     @action(methods=['POST'], detail=False)
     def tidy_folder(self, request, *args, **kwargs):
@@ -334,6 +302,23 @@ class TaskViewSets(GenericViewSet):
     def full_scan_folder(self, request, *args, **kwargs):
         full_scan_folder.delay()
         return self.success_response()
+
+    @action(methods=['POST'], detail=False)
+    def youtube_search(self, request, *args, **kwargs):
+        """搜索YouTube视频"""
+        validate_data = self.is_validated_data(request.data)
+        query = validate_data['query']
+        max_results = validate_data.get('max_results', 10)
+        results = search_youtube(query, max_results)
+        return self.success_response(data=results)
+
+    @action(methods=['POST'], detail=False)
+    def youtube_download(self, request, *args, **kwargs):
+        """下载YouTube音频为OGG格式"""
+        validate_data = self.is_validated_data(request.data)
+        video_id = validate_data['video_id']
+        download_youtube_task.delay(video_id)
+        return self.success_response(msg="下载任务已提交，请稍后刷新文件列表查看")
 
 
 class TaskModelViewSets(mixins.ListModelMixin,

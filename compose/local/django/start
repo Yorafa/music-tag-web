@@ -6,5 +6,5 @@ set -o nounset
 
 
 python manage.py migrate --run-syncdb
-gunicorn -w 2 -b 0.0.0.0:8001 django_vue_cli.wsgi:application --timeout 120 --worker-class=gevent
+gunicorn -w 2 -b 0.0.0.0:8001 music_site.wsgi:application --timeout 120 --worker-class=gevent
 #python manage.py runserver 0.0.0.0:8001
