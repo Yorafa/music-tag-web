@@ -22,5 +22,11 @@ export default defineConfig({
   build: {
     outDir: '../static/dist',
     emptyOutDir: true,
+    // This is an internal tool — the main vendor bundle (react + ui kit +
+    // axios + tailwind runtime) consistently lands around ~700 kB. Bump the
+    // warning ceiling so the build doesn't print a noisy chunk-size advisory
+    // every time. Code-splitting is the proper answer if size ever becomes a
+    // concern; for now we just want a clean build log.
+    chunkSizeWarningLimit: 1024,
   },
 })

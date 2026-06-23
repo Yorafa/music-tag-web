@@ -88,3 +88,19 @@ export async function uploadImage(file: File) {
   });
   return data;
 }
+
+// Library-level operations surfaced in the toolbar.
+export async function scanFolder() {
+  const { data } = await api.get('task1/');
+  return data;
+}
+
+export async function fullScanFolder() {
+  const { data } = await api.get('full_scan_folder/');
+  return data;
+}
+
+export async function clearCelery() {
+  const { data } = await api.get('clear_celery/');
+  return data;
+}
