@@ -17,9 +17,14 @@ export interface FileNode {
   title: string;
   icon: string;
   state: string;
+  size?: number;
+  update_time?: string;
   children?: FileNode[];
   expanded?: boolean;
 }
+
+export type SortField = 'name' | 'size' | 'update_time';
+export type SortDir = 'asc' | 'desc';
 
 export interface MusicTagInfo {
   title: string;

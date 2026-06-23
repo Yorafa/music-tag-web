@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { updateId3, batchUpdateId3, fetchId3ByTitle, uploadImage } from '@/api/client';
+import { updateId3, fetchId3ByTitle, uploadImage } from '@/api/client';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -10,9 +10,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Search, Save, RefreshCw, Sparkles, Upload } from 'lucide-react';
-import type { MusicSource } from '@/types';
+import { Search, Save, Sparkles, Upload } from 'lucide-react';
+import type { MusicSource, MusicTagInfo } from '@/types';
+import {
+  COVER_PLACEHOLDER_GRADIENTS,
+  inspectCoverSrc,
+  resolveCoverSrc,
+  stableIdFromString,
+} from '@/utils/cover';
+import { toInitialChar, toTrimmedString } from '@/utils/string';
 
 interface Props {
   onLoadFiles: (path?: string) => void;
@@ -48,21 +54,129 @@ const FIELD_LABELS: Record<string, string> = {
   tracknumber: '音轨号', duration: '时长', bit_rate: '比特率', size: '文件大小', album_type: '专辑类型',
 };
 
+/** Prominent cover shown in the song-detail header. Mirrors the row-level
+ *  CoverThumb semantics byte-for-byte: same gradient palette, same
+ *  array-indexed seed (`id % length`), same empty-payload + oversized
+ *  short-circuit, same `imgFailed` fallback, same first-letter placeholder.
+ *  The only intentional difference is the visual size (w-32 h-32 vs w-10 h-10). */
+function DetailCover({ src, id, alt }: { src?: string; id: number; alt: string }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const { isEmptyPayload, isOversized, tooltip } = inspectCoverSrc(src);
+  const showImg = !isEmptyPayload && !isOversized && !imgFailed;
+  // Backend sometimes hands us `alt` as a number or another non-string —
+  // `toInitialChar` coerces defensively so a stray type flip here becomes
+  // a no-op instead of "X?.trim is not a function" unmounting the tree.
+  const initial = toInitialChar(alt);
+  const bg: CSSProperties = {
+    background: COVER_PLACEHOLDER_GRADIENTS[id % COVER_PLACEHOLDER_GRADIENTS.length],
+  };
+
+  return (
+    <div className="w-32 h-32 rounded-md overflow-hidden bg-muted shrink-0 ring-1 ring-border/60 shadow-sm">
+      {showImg ? (
+        <img
+          src={src}
+          alt="封面"
+          className="w-full h-full object-cover block"
+          onError={() => setImgFailed(true)}
+        />
+      ) : (
+        <div
+          className="w-full h-full flex items-center justify-center text-white font-semibold text-5xl select-none"
+          style={bg}
+          title={tooltip}
+        >
+          {initial}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Header shown at the top of the song-detail panel. Big cover on the left;
+ *  title/artist/album/year stacked on the right. Stable id derived from
+ *  title so the same song always picks the same gradient slot in sync with
+ *  the row-level CoverThumb. */
+function SongHeader({
+  coverSrc,
+  title,
+  filename,
+  artist,
+  album,
+  year,
+}: {
+  coverSrc: string | undefined;
+  title?: string;
+  filename?: string;
+  artist?: string;
+  album?: string;
+  year?: string;
+}) {
+  const headerTitle = title || filename || '未命名歌曲';
+  const seed = toTrimmedString(title || filename);
+  const coverId = stableIdFromString(seed);
+  return (
+    <div className="flex items-start gap-4 pb-4 border-b border-border">
+      <DetailCover src={coverSrc} id={coverId} alt={headerTitle} />
+      <div className="flex-1 min-w-0 space-y-1.5 pt-0.5">
+        <div
+          className="text-lg font-semibold leading-tight truncate"
+          title={headerTitle}
+        >
+          {headerTitle}
+        </div>
+        <div className="text-sm text-muted-foreground truncate" title={artist || ''}>
+          {artist ? (
+            <>
+              <span className="text-foreground/80">艺术家</span>
+              <span className="mx-1.5 opacity-50">·</span>
+              {artist}
+            </>
+          ) : (
+            <span className="opacity-60">未知艺术家</span>
+          )}
+        </div>
+        <div className="text-sm text-muted-foreground truncate" title={album || ''}>
+          {album ? (
+            <>
+              <span className="text-foreground/80">专辑</span>
+              <span className="mx-1.5 opacity-50">·</span>
+              {album}
+            </>
+          ) : (
+            <span className="opacity-60">未知专辑</span>
+          )}
+        </div>
+        <div
+          className="text-xs text-muted-foreground/80 truncate"
+          title={year || '未知年份'}
+        >
+          <span className="text-foreground/70">年份</span>
+          <span className="mx-1.5 opacity-50">·</span>
+          {toTrimmedString(year) || <span className="opacity-60">未知年份</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function TagEditor({ onLoadFiles }: Props) {
   const {
     musicInfo, updateMusicInfo, fullPath, selectedFile, resource, setResource,
-    showFields, setShowFields, fadeShowDetail, setFadeShowDetail, setSongList,
-    songList, isLoading, setIsLoading, reloadImg, setReloadImg,
-    checkedIds, musicInfoManual, selectAutoMode, sourceList, setSourceList,
-    tidyFormData, setTidyFormData, setSelectAutoMode,
+    showFields, fadeShowDetail, setFadeShowDetail, setSongList,
+    songList, isLoading, setIsLoading,
+    checkedIds,
   } = useAppStore();
 
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [batchOpen, setBatchOpen] = useState(false);
-  const [tidyOpen, setTidyOpen] = useState(false);
+  // (Removed: `<Dialog open={settingsOpen}>` + `<Dialog open={batchOpen}>` stubs
+  // that lived inside the outer AppShell dialog. base-ui's DialogPrimitive.Root
+  // mounts a provider chain per Root; nesting two extra Roots inside the
+  // outermost one silently unmounts the React tree on detail-open, producing
+  // a white screen with no dev-tools error.)
 
   const handleSearch = async () => {
     if (!musicInfo.title) return;
+    setSongList([]);
     setFadeShowDetail(false);
     try {
       const res = await fetchId3ByTitle(musicInfo.title, resource, fullPath);
@@ -98,9 +212,10 @@ export function TagEditor({ onLoadFiles }: Props) {
     try {
       const res = await uploadImage(file);
       if (res.result) {
+        // DetailCover re-resolves via `musicInfo.album_img`, so mutating it
+        // through `updateMusicInfo` is enough to refresh the header preview —
+        // no extra toggle needed.
         updateMusicInfo('album_img', res.data);
-        setReloadImg(false);
-        setTimeout(() => setReloadImg(true), 50);
       }
     } catch {
       // ignore
@@ -237,26 +352,18 @@ export function TagEditor({ onLoadFiles }: Props) {
         return (
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <Label className="w-20 shrink-0 text-xs text-muted-foreground">封面</Label>
+              <Label className="w-20 shrink-0 text-xs text-muted-foreground">封面源</Label>
               <div className="flex items-center gap-3">
-                {musicInfo.album_img && reloadImg && (
-                  <img
-                    src={musicInfo.album_img}
-                    alt="cover"
-                    className="w-16 h-16 rounded-md object-cover border border-border"
-                    onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                  />
-                )}
                 <label className="cursor-pointer">
                   <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
                   <div className="flex items-center gap-1 text-xs text-primary hover:underline">
                     <Upload className="w-3 h-3" />
-                    上传
+                    上传新封面
                   </div>
                 </label>
                 {musicInfo.artwork_w && (
                   <span className="text-[10px] text-muted-foreground">
-                    {musicInfo.artwork_w}×{musicInfo.artwork_h} {musicInfo.artwork_size}MB
+                    嵌入封面：{musicInfo.artwork_w}×{musicInfo.artwork_h} · {musicInfo.artwork_size}MB
                   </span>
                 )}
               </div>
@@ -266,7 +373,7 @@ export function TagEditor({ onLoadFiles }: Props) {
                 checked={musicInfo.is_save_album_cover || false}
                 onCheckedChange={v => updateMusicInfo('is_save_album_cover', v)}
               />
-              <Label className="text-xs text-muted-foreground">保存封面图片</Label>
+              <Label className="text-xs text-muted-foreground">将封面写入文件元数据</Label>
             </div>
           </div>
         );
@@ -311,28 +418,26 @@ export function TagEditor({ onLoadFiles }: Props) {
   return (
     <ScrollArea className="h-full">
       <div className="p-4 space-y-3">
-        {/* Batch mode */}
-        {checkedIds.length > 0 && (
-          <div className="space-y-2 pb-3 border-b border-border">
-            <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={() => setBatchOpen(true)}>
-                <RefreshCw className="w-3 h-3 mr-1" />
-                手动批量
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => {/* batch auto */}}>
-                <Sparkles className="w-3 h-3 mr-1" />
-                自动刮削
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => setTidyOpen(true)}>
-                整理文件夹
-              </Button>
-            </div>
-          </div>
+        {/* Song-detail header. Shown only in single-file mode so the cover
+            reflects the actual selected song rather than the batch aggregate. */}
+        {selectedFile && checkedIds.length === 0 && (
+          <SongHeader
+            coverSrc={resolveCoverSrc(musicInfo as Partial<MusicTagInfo>)}
+            title={musicInfo.title}
+            filename={musicInfo.filename}
+            artist={musicInfo.artist}
+            album={musicInfo.album}
+            year={musicInfo.year}
+          />
         )}
 
-        {/* Source selector */}
+        {/* Tag-source selector + scrape trigger. "标签源" reflects that this
+            picker drives the scrape-by-title search, not playback. The right-
+            side 开始刮削 button is the discoverable secondary CTA of this
+            clicking it runs the same handleSearch as the per-title Search
+            icon, but the placement makes the action discoverable up-front. */}
         <div className="flex items-center gap-2">
-          <Label className="text-xs text-muted-foreground shrink-0">音源</Label>
+          <Label className="text-xs text-muted-foreground shrink-0">标签源</Label>
           <Select value={resource} onValueChange={v => setResource(v as MusicSource)}>
             <SelectTrigger className="h-7 text-xs w-28">
               <SelectValue />
@@ -341,9 +446,15 @@ export function TagEditor({ onLoadFiles }: Props) {
               {SOURCES.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Button size="sm" className="ml-auto h-7 text-xs" onClick={handleSave} disabled={isLoading}>
-            <Save className="w-3 h-3 mr-1" />
-            保存
+          <Button
+            size="sm"
+            variant="secondary"
+            className="ml-auto h-7 text-xs"
+            onClick={handleSearch}
+            disabled={isLoading}
+          >
+            <Sparkles className="w-3 h-3 mr-1" />
+            开始刮削
           </Button>
         </div>
 
@@ -358,52 +469,16 @@ export function TagEditor({ onLoadFiles }: Props) {
 
       </div>
 
-      {/* Settings Dialog */}
-      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>编辑设置</DialogTitle></DialogHeader>
-          <div className="space-y-3 py-4">
-            <div>
-              <Label className="text-xs mb-1 block">音源</Label>
-              <Select value={resource} onValueChange={v => setResource(v as MusicSource)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{SOURCES.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">显示字段</Label>
-              <div className="flex flex-wrap gap-1">
-                {Object.keys(FIELD_LABELS).filter(k => !['duration', 'bit_rate', 'size'].includes(k)).map(k => (
-                  <Badge
-                    key={k}
-                    variant={showFields.includes(k) ? 'default' : 'outline'}
-                    className="cursor-pointer text-[10px]"
-                    onClick={() => {
-                      if (showFields.includes(k)) {
-                        setShowFields(showFields.filter(f => f !== k));
-                      } else {
-                        setShowFields([...showFields, k]);
-                      }
-                    }}
-                  >
-                    {FIELD_LABELS[k]}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Batch dialog placeholder */}
-      <Dialog open={batchOpen} onOpenChange={setBatchOpen}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>批量修改</DialogTitle></DialogHeader>
-          <div className="text-sm text-muted-foreground py-4">
-            批量修改功能开发中...
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Sticky bottom action bar. The save button lives here (rather than
+          next to the source selector at the top) so it stays reachable
+          through any field scroll position without competing for visual
+          space with the source picker. */}
+      <div className="sticky bottom-0 bg-card/95 backdrop-blur-sm border-t border-border px-4 py-3 flex justify-end">
+        <Button size="sm" className="h-8 text-xs" onClick={handleSave} disabled={isLoading}>
+          <Save className="w-3.5 h-3.5 mr-1.5" />
+          保存
+        </Button>
+      </div>
     </ScrollArea>
   );
 }
