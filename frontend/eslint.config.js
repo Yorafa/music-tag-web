@@ -31,16 +31,17 @@ export default defineConfig([
       'react-refresh/only-export-components': 'off',
     },
   },
-  // react-hooks plugin v5 promotes exhaustive-deps to ERROR. The repo has
-  // several intentional patterns (SearchResults/Folder list memos keyed on
-  // a stable projection; HomePage mount-only effect that would re-fire on
-  // every render if `loadFiles` were listed) where the documented deps are
-  // already the right call. Demote to WARN so the gate stays informative
-  // without blocking land for code we've already reviewed by hand.
+  // Two specific files hold intentional stable-projection / mount-only
+  // patterns that the exhaustive-deps rule would otherwise force into
+  // re-render loops. Scope the override to those files so the safety net
+  // stays active everywhere else.
   {
-    files: ['**/*.{ts,tsx}'],
+    files: [
+      'src/components/files/FileBrowser.tsx',
+      'src/pages/HomePage.tsx',
+    ],
     rules: {
-      'react-hooks/exhaustive-deps': 'warn',
+      'react-hooks/exhaustive-deps': 'off',
     },
   },
 ])
