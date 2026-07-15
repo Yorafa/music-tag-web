@@ -105,13 +105,13 @@ Default account/password: `admin/admin`. Change the default password after login
 
 > 🪜 **Upgrading from a previous revision?** *(skip if fresh-installing)*. The new compose defaults resolve relative to the repo root, so a bare `git pull && docker compose up -d` rebuilds an empty sqlite and points nginx at a non-existent directory. The bash block below works at any point — `gobackend/{.env,data,music}` still exist on disk even after the new layout goes live; they are just no longer git-tracked.
 >
-> If your *old* `.env` set `MUSIC_DIR=` to a NAS external mount (Synology `/volume1/music`, SMB/NFS at `/mnt/nas/music`, etc.) — or you bound some other host path into `gobackend/music` — skip line 3 entirely; just make sure your new `./env` `MUSIC_DIR=` still points at the same external path.
+> If your *old* `.env` set `MUSIC_DIR=` to a NAS external mount (Synology `/volume1/music`, SMB/NFS at `/mnt/nas/music`, etc.) — or you used any other host bind mount, or directly `ln -s /volume1/music /path/gobackend/music` symlink — skip line 3 entirely; just make sure your new `./env` `MUSIC_DIR=` still points at the same external path.
 >
-> The bash block below first runs `[ -f X ] && cp -r X X.bak` as a guard-then-mv, so even if `.env.example`-derived `.env` or an empty bind-provisioned `./data` already exists at the root, nothing is silently overwritten. `rmdir` built-in refuses non-empty, so it's safe.
+> The bash block below uses `[ -X ] && mv -n X X.bak` (rename-then-mv via `mv -n`, which refuses to clobber an existing `.bak` so re-running the block doesn't lose the previous backup); empty / missing paths fall through to the plain `mv`. `rmdir` is built-in safe (refuses non-empty).
 > ```bash
-> [ -f ./.env  ] && cp -r ./.env  ./.env.bak;  mv gobackend/.env  ./.env
-> [ -d ./data  ] && cp -r ./data  ./data.bak;  mv gobackend/data  ./data
-> [ -d ./music ] && cp -r ./music ./music.bak; mv gobackend/music ./music   # only if ./gobackend/music was a local bind; skip for NAS mounts
+> [ -f ./.env ] && mv -n ./.env ./.env.bak; mv gobackend/.env ./.env
+> [ -d ./data ] && mv -n ./data ./data.bak; mv gobackend/data ./data
+> [ -d ./music ] && mv -n ./music ./music.bak; mv gobackend/music ./music   # only if ./gobackend/music was a local bind; skip for NAS mounts or symlinks
 > rmdir gobackend   # refuses if non-empty
 > ```
 > Then `docker compose up -d --build`. `${MUSIC_DIR}` and `${DATA_DIR}` are still `./music` / `./data` so semantics don't change.
