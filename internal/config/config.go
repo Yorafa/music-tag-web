@@ -60,7 +60,7 @@ type Config struct {
 const (
 	defaultJWTSecret     = "change-me-in-production"
 	// placeholderAdminUsers / placeholderWebhookToken are the obvious
-	// sentinel tokens shipped in gobackend/.env.example. When any of
+	// sentinel tokens shipped in .env.example. When any of
 	// these (or the equivalent string "__REPLACE_ME__") is detected,
 	// config.Load() refuses to start outside dev mode — siloed the same
 	// way as defaultJWTSecret so an operator who copies the example

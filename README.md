@@ -17,7 +17,7 @@ Music Tag Web 是一款**开源 self-hosted 自托管 Docker 音乐标签编辑�
   <img src="https://img.shields.io/badge/platform-amd64/arm64-pink?style=plastic" alt="docker-platform" />
 </div>
 
-> ⚠️ **仓库源码现为 Go 后端**（`gobackend/`，含 7 个 gRPC 音乐源插件），Docker Hub 上的 `xhongc/music_tag_web:latest` 是 **Python/Django 老镜像**，仅供历史用户使用，不再维护，请改走下面的 V2 源码构建。
+> ⚠️ **仓库源码现为 Go 后端**（`cmd/` + `internal/`、含 7 个 gRPC 音乐源插件），Docker Hub 上的 `xhongc/music_tag_web:latest` 是 **Python/Django 老镜像**，仅供历史用户使用，不再维护，请改走下面的 V2 源码构建。
 
 # 🎉 核心功能 Feature（Self-hosted Docker 专属优势）
 为什么开发 Web 自托管版本？
@@ -104,22 +104,21 @@ git clone https://github.com/xhongc/music-tag-web.git
 cd music-tag-web
 ```
 
-> ⚠️ **Pre-flight: boilerplate 检查。** 进入 step 2 之前必须看完 `gobackend/.env.example` 顶部的 `⛔ PRE-FLIGHT CHECKLIST ⛔`，其中三个 `__REPLACE_ME__`（`JWT_SECRET`、`ADMIN_USERS`、`WEBHOOK_INTERNAL_TOKEN`）未替换会被 gateway `config.Load()` 拦下，log.Fatalf 拒绝启动（与 `ALLOW_INSECURE_DEFAULTS` 匹配才仅 WARNING）。
-进入 `gobackend/` 并把 `.env.example` 复制成 `.env`（与 `docker-compose.yml` 同目录，这样 Compose 才能读到）：
+> ⚠️ **Pre-flight: boilerplate 检查。** 进入 step 2 之前必须看完 `.env.example` 顶部的 `⛔ PRE-FLIGHT CHECKLIST ⛔`，其中三个 `__REPLACE_ME__`（`JWT_SECRET`、`ADMIN_USERS`、`WEBHOOK_INTERNAL_TOKEN`）未替换会被 gateway `config.Load()` 拦下，log.Fatalf 拒绝启动（与 `ALLOW_INSECURE_DEFAULTS` 匹配才仅 WARNING）。`docker-compose.yml`、`.env.example`、Dockerfiles 都在仓库根下，不需要再 cd 进子目录。
+
+把 `.env.example` 复制成 `.env`（与 `docker-compose.yml` 同目录，这样 Compose 才能读到）：
 ```bash
-cd gobackend
 cp .env.example .env
 # 然后编辑 .env，填入必填项
 ```
 `JWT_SECRET` 和 `ADMIN_USERS` 是必填（不设 / 设为占位符 → gateway 启动 Fail-closed 或登陆返回 401）；强烈推荐同时配置 `CORS_ALLOWED_ORIGINS`、`GRPC_USE_TLS`、`MUSIC_DIR`、`DATA_DIR`、`NGINX_PORT`。模板里每项都有详细注释。
-> 详细运维与安全默认值：见 `gobackend/SECURITY.md` 与 `gobackend/P1.5.md`。
+> 详细运维与安全默认值：见 `SECURITY.md` 与 `P1.5.md`。
 
 ### 2. Volume pre-flight + 构建并启动全栈
 `docker-compose.yml` 的默认值 `./music` 与 `./data` 是**相对 compose 文件路径**，首次运行必须存在；否则 `docker compose up` 会报 `volume source not found`。NAS 用户如果使用 SMB / NFS 挂载，先在宿主机准备好路径。
 
 ```bash
-cd gobackend
-mkdir -p ./music ./data         # 首次需要
+mkdir -p ./music ./data         # 首次需要（相对仓库根路径）
 docker compose up -d --build    # 后续只要不加 plugin / 不改 .env，重启即可跳过 --build
 ```
 首次启动会自动构建 gateway + worker + 7 个 gRPC 音乐源插件（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）+ redis + nginx。

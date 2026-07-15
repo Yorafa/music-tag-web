@@ -136,9 +136,9 @@ omission as "fan out to all registered tag sources".
 
 | File | Change | Lines (approx) |
 |---|---|---|
-| `gobackend/internal/gateway/handler/source.go` | **new file**: define `SourceInfo` struct + `ListSources(c)` handler that iterates `plugin.ListTagSources()` + `plugin.ListDownloadSources()` | +60 |
-| `gobackend/internal/gateway/router/router.go` | mount `authed.GET("/sources/", handler.ListSources)` | +1 |
-| `gobackend/internal/gateway/handler/tag.go` | delete `sourcesDefault` constant; `SearchMusic` accepts optional `sources []string` field; empty/missing → fan out to all registry entries | −15 / +10 |
+| `internal/gateway/handler/source.go` | **new file**: define `SourceInfo` struct + `ListSources(c)` handler that iterates `plugin.ListTagSources()` + `plugin.ListDownloadSources()` | +60 |
+| `internal/gateway/router/router.go` | mount `authed.GET("/sources/", handler.ListSources)` | +1 |
+| `internal/gateway/handler/tag.go` | delete `sourcesDefault` constant; `SearchMusic` accepts optional `sources []string` field; empty/missing → fan out to all registry entries | −15 / +10 |
 
 Total backend delta: ~75 lines, additive, no interface changes, no proto regen required.
 
@@ -159,8 +159,8 @@ Total frontend delta: ~200 lines (mostly bookkeeping).
 
 ```sh
 # Backend
-cd gobackend && go build ./...                           # should stay clean
-cd gobackend && go vet ./...                              # new endpoint type-checks
+go build ./...                             # should stay clean
+go vet ./...                               # new endpoint type-checks
 # Manual: curl http://localhost:8000/api/sources/  → list of 7 tag + 1 download plugin
 
 # Frontend
