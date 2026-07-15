@@ -1,5 +1,3 @@
-version: "3"
-
 # =============================================================================
 # Music Tag Web - Go backend (project root, gRPC plugin architecture)
 # Distributed layout: gateway + worker + 7 gRPC music-source plugins.

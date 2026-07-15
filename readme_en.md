@@ -23,26 +23,26 @@ It supports FLAC, APE, WAV, AIFF, WV, TTA, MP3, M4A, OGG, MPC, OPUS, WMA, DSF, M
 
 Why a web version? When using Navidrome, my music library is stored on a remote server. Desktop tools like MusicTag and mp3tag cannot satisfy remote editing needs. I need a sidecar app that can run on the server and edit online music tags directly.
 
-- View, edit, and modify metadata for most audio formats — `internal/tag/reader.go` + `writer.go` + `BatchUpdateID3` ✅
-- Batch auto-tagging (scraping) support — 7 gRPC sources fan out via `plugin.ListTagSources()` ✅
-- Acoustic fingerprint recognition (identify songs even without metadata) — `internal/plugin/acoustid/server.go` (fpcalc shell-out) ✅
-- Music file organization by artist/album or custom multi-level grouping — `FileBrowser.tsx` sort shipped; per-artist/album grouping UI + custom multi-level grouping not yet wired 🚧
-- File sorting by filename, size, and modified time — `FileBrowser.tsx` ✅
-- Batch conversion between Traditional Chinese and Simplified Chinese metadata — explicitly deferred (`internal/tasks/matchscore.go:2`); no `opencc` / `HanziConvert` in frontend ❌
-- Filename parsing/unpacking to fill missing metadata — `frontend parseFromFilename` exists; backend round-trip wiring pending 🚧
-- Batch text replacement for metadata cleanup — `TagEditor.tsx` modal only; backend has no bulk replace endpoint 🚧
-- Audio format conversion via ffmpeg — `Dockerfile.worker` installs `yt-dlp` only, no ffmpeg binary, no `ffmpeg.go` task ❌
-- Whole-track cutting/splitting support — zero hits for `cuesheet|splitCue|shntool|cuebreakpoints` across the repo; worker image has no shntool/cuetools ❌
-- Multiple metadata sources — `internal/plugin/registry.go` + 7 gRPC plugins ✅
-- Lyric translation support — zero callers across `internal/plugin/**` and `frontend/src/**`; aspirational ❌
-- Operation log display — `internal/db/models.go` has no `OperationLog` table; `frontend/**` has no operation-log UI; aspirational ❌
-- Export album cover files and upload custom album covers — single-file upload ✅ (`handler/file.go::UploadCover`); bulk zip export not wired 🚧
-- Mobile-friendly UI with phone access support — Tailwind responsive utilities on `AppShell` + `FileBrowser` ✅
-- Xiaomi XiaoAI local/NAS playback support — zero matches for `XiaoAI` / xiaomi / miio across frontend and backend; aspirational ❌
-- Cloud drive music playback — nginx serves `/media/{path}` directly from a host bind-mount; no application code required, just docker-compose volume config ✅
-- Playback statistics with bar/line chart visualization — `internal/db/models.go:89` has unused `AccessedDate` column (comment: "reserved for future"); zero matches for `BarChart` / `LineChart` / `recharts` in `frontend/**` ❌
+- View, edit, and modify metadata for most audio formats ✅
+- Batch auto-tagging (scraping) support ✅
+- Acoustic fingerprint recognition (identify songs even without metadata) ✅
+- Music file organization by artist/album or custom multi-level grouping 🚧 — sort done; artist/album grouping + multi-level library config not wired
+- File sorting by filename, size, and modified time ✅
+- Batch conversion between Traditional Chinese and Simplified Chinese metadata ❌ — explicit defer at `matchscore.go:2`
+- Filename parsing/unpacking to fill missing metadata 🚧 — frontend parser exists; backend round-trip missing
+- Batch text replacement for metadata cleanup 🚧 — frontend modal only; no backend bulk endpoint
+- Audio format conversion via ffmpeg ❌ — worker image has yt-dlp only, no ffmpeg binary, no ffmpeg.go task
+- Whole-track cutting/splitting support ❌ — repo-wide zero hits for `cuesheet|splitCue|shntool|cuebreakpoints`
+- Multiple metadata sources ✅
+- Lyric translation support ❌
+- Operation log display ❌
+- Export album cover files and upload custom album covers 🚧 — single-file upload ✅, batch zip ❌
+- Mobile-friendly UI with phone access support ✅
+- Xiaomi XiaoAI local/NAS playback support ❌ — `XiaoAI` / `xiaomi` / `miio` zero matches in code
+- Cloud drive music playback ✅ — pure nginx bind-mount, no application code
+- Playback statistics with bar/line chart visualization ❌ — `AccessedDate` column exists but unused; `BarChart` / `LineChart` zero matches
 
-Full status table with per-feature `path:line` references: [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md).
+➡️ Full status table + per-feature `path` references: [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md).
 
 # 🦀 Project Demo
 
