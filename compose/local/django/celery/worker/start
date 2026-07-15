@@ -1,7 +1,0 @@
-#!/bin/bash
-
-set -o errexit
-set -o nounset
-
-
-exec celery -A music_site.celery_app worker -l info -P gevent --concurrency 10
