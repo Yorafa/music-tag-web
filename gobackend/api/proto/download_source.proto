@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package tagplugin;
+
+option go_package = "go-music-tag/api/proto/tagplugin";
+
+// --- Download source plugin (YouTube, etc.) ---
+
+message DownloadSearchRequest {
+  string query = 1;
+  int32 max_results = 2;
+}
+
+message DownloadItem {
+  string id = 1;
+  string title = 2;
+  double duration = 3;
+  string url = 4;
+  string channel = 5;
+  string thumbnail = 6;
+}
+
+message DownloadSearchResponse {
+  repeated DownloadItem items = 1;
+}
+
+message DownloadRequest {
+  string video_id = 1;
+  string download_dir = 2; // optional override
+}
+
+message DownloadResponse {
+  bool success = 1;
+  string file_path = 2;
+  string file_name = 3;
+  string error = 4;
+}
+
+message DownloadPluginInfoRequest {}
+
+message DownloadPluginInfoResponse {
+  string name = 1;
+  string display_name = 2;
+}
+
+// DownloadSource handles search + download from platforms like YouTube.
+service DownloadSource {
+  rpc Search(DownloadSearchRequest) returns (DownloadSearchResponse);
+  rpc Download(DownloadRequest) returns (DownloadResponse);
+  rpc GetPluginInfo(DownloadPluginInfoRequest) returns (DownloadPluginInfoResponse);
+}
