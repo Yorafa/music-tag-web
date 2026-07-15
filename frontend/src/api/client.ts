@@ -9,20 +9,16 @@ const api = axios.create({
   },
 });
 
-// Request interceptor: attach JWT + CSRF tokens from cookies
+// Request interceptor: attach JWT from AUTHORIZATION cookie (Python/Go backend
+// compat). Note: there is NO CSRF cookie — the Go gateway uses JWT-only auth
+// (handler/auth.go::Login returns {access, refresh} in JSON), and its JWTAuth
+// middleware reads from Authorization header / AUTHORIZATION cookie only.
 api.interceptors.request.use((config) => {
   const match = document.cookie.match(/(?:^|;\s*)AUTHORIZATION=([^;]*)/);
   const token = match ? decodeURIComponent(match[1]) : null;
   if (token) {
     config.headers.Authorization = token;
   }
-
-  const csrfMatch = document.cookie.match(/(?:^|;\s*)music_site_csrftoken=([^;]*)/);
-  const csrf = csrfMatch ? decodeURIComponent(csrfMatch[1]) : null;
-  if (csrf) {
-    config.headers['X-CSRFToken'] = csrf;
-  }
-
   return config;
 });
 
@@ -98,11 +94,6 @@ export async function scanFolder() {
 
 export async function fullScanFolder() {
   const { data } = await api.get('full_scan_folder/');
-  return data;
-}
-
-export async function clearCelery() {
-  const { data } = await api.get('clear_celery/');
   return data;
 }
 

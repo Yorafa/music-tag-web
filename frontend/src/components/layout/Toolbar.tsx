@@ -10,13 +10,10 @@ import {
   Search,
   RefreshCw,
   FolderTree,
-  Trash2,
-  AlertTriangle,
 } from 'lucide-react';
 import {
   scanFolder,
   fullScanFolder,
-  clearCelery,
   tidyFolder,
 } from '@/api/client';
 import { useAppStore } from '@/store/useAppStore';
@@ -27,14 +24,18 @@ interface ToolDef {
   label: string;
   Icon: ComponentType<{ className?: string }>;
   /** 'none' = direct call; otherwise an inline dialog is opened first. */
-  dialog: 'tidy' | 'confirm-clear' | 'none';
+  dialog: 'tidy' | 'none';
 }
 
+// NOTE: a 'clear task queue' button used to live here that hit the Django
+// celery /clear_celery/ endpoint. That endpoint is gone (Go worker runs
+// asynq, no celery, no /clear_celery/ route); the entry was removed in
+// commit cleanup-f3. Add it back once a Go equivalent (e.g. POST /api/tasks/purge)
+// lands.
 const TOOLS: ToolDef[] = [
   { id: 'scan-full', label: '全盘扫描', Icon: Search, dialog: 'none' },
   { id: 'scan', label: '增量扫描', Icon: RefreshCw, dialog: 'none' },
   { id: 'tidy', label: '整理文件夹', Icon: FolderTree, dialog: 'tidy' },
-  { id: 'clear', label: '清空任务队列', Icon: Trash2, dialog: 'confirm-clear' },
 ];
 
 const COLLAPSED_WIDTH = 48;
@@ -98,17 +99,7 @@ export function Toolbar({ collapsed, onToggle }: Props) {
     }
   };
 
-  const handleClearConfirm = async () => {
-    setRunning('clear');
-    try {
-      await clearCelery();
-      setActiveDialog('none');
-    } catch {
-      /* ignore */
-    } finally {
-      setRunning(null);
-    }
-  };
+
 
   return (
     <>
@@ -202,28 +193,6 @@ export function Toolbar({ collapsed, onToggle }: Props) {
         </DialogContent>
       </Dialog>
 
-      {/* Confirm-clear celery dialog */}
-      <Dialog
-        open={activeDialog === 'confirm-clear'}
-        onOpenChange={(open) => setActiveDialog(open ? 'confirm-clear' : 'none')}
-      >
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-amber-500">
-              <AlertTriangle className="w-4 h-4" />
-              清空任务队列
-            </DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            确认要终止所有正在运行的扫描 / 刮削任务吗？此操作不可撤销。
-          </p>
-          <DialogFooter showCloseButton>
-            <Button variant="destructive" onClick={handleClearConfirm} disabled={running === 'clear'}>
-              {running === 'clear' ? '处理中…' : '确认清空'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }
