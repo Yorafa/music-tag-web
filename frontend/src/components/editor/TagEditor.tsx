@@ -21,6 +21,9 @@ import { toInitialChar, toTrimmedString } from '@/utils/string';
 // Read a text-shaped field off MusicTagInfo without falling back to `any`.
 // The discriminated-index dance keeps eslint's @typescript-eslint/no-explicit-any
 // happy while preserving the runtime semantics of `(m)[field] || ''`.
+// Six case branches below dispatch through this helper so the field-index
+// cast + null-coerce + input-coerce logic lives in one place. Inlining the
+// cast at each call would force a copy of this dance into every branch.
 function readStringField(m: Partial<MusicTagInfo>, field: string): string {
   const v = (m as Record<string, unknown>)[field];
   if (v == null) return '';
