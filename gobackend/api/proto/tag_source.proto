@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package tagplugin;
+
+option go_package = "go-music-tag/api/proto/tagplugin";
+
+// --- Tag source plugin (music metadata) ---
+
+// Song is the normalized music-metadata record returned by every tag source.
+message Song {
+  string id = 1;
+  string name = 2;
+  string artist = 3;
+  string artist_id = 4;
+  string album = 5;
+  string album_id = 6;
+  string album_img = 7;
+  string year = 8;
+  string source = 9; // populated by gateway handler, not the plugin itself
+  string genre = 10;
+  string mid = 11;
+  string cover = 12;
+  double score = 13; // populated by smart_tag aggregation
+}
+
+message SearchRequest {
+  string query = 1;
+  int32 page = 2;   // 1-indexed
+  int32 limit = 3;
+}
+
+message SearchResponse {
+  repeated Song songs = 1;
+  bool has_more = 2;
+}
+
+message FetchId3Request {
+  string title = 1;
+}
+
+message FetchId3Response {
+  repeated Song songs = 1;
+}
+
+message FetchLyricRequest {
+  string song_id = 1;
+}
+
+message FetchLyricResponse {
+  string lyric = 1;
+}
+
+message PluginInfoRequest {}
+
+message PluginInfoResponse {
+  string name = 1;
+  string display_name = 2;
+  bool supports_search = 3;
+  bool supports_lyric = 4;
+  bool supports_id3 = 5;
+}
+
+// TagSource handles metadata search + ID3 lookup + lyric fetch for a single
+// music platform. One process can register many tag sources (each with its
+// own gRPC server) and they all share this single interface.
+service TagSource {
+  rpc GetPluginInfo(PluginInfoRequest) returns (PluginInfoResponse);
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc FetchId3ByTitle(FetchId3Request) returns (FetchId3Response);
+  rpc FetchLyric(FetchLyricRequest) returns (FetchLyricResponse);
+}

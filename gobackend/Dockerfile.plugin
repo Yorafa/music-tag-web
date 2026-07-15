@@ -1,0 +1,25 @@
+# Multi-stage build for gRPC plugin servers.
+# Each plugin is built from the same codebase with a different entry point.
+# Build with: docker build --build-arg PLUGIN=netease -f Dockerfile.plugin -t music-tag-netease .
+
+FROM golang:1.23-alpine AS builder
+
+RUN apk add --no-cache git
+
+ARG PLUGIN=netease
+WORKDIR /build
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /plugin ./cmd/plugins/${PLUGIN}
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata
+ENV TZ=Asia/Shanghai
+
+COPY --from=builder /plugin /usr/local/bin/plugin
+
+EXPOSE 50051
+ENTRYPOINT ["plugin"]
