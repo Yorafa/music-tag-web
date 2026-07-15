@@ -82,6 +82,11 @@ const (
 // sentinel tokens shipped in .env.example. It also catches a handful of
 // common sloppy placeholders so a reviewer-only edit (CHANGEME / FIXME
 // / TODO / your-secret-here) still trips the guard.
+//
+// The match is exact (after trim + upper) — a real password containing
+// 'mytodopass' or 'inameitchangeme' will NOT trip the guard. This is
+// deliberate: substring matching would generate too many false positives
+// in production passwords.
 func isPlaceholderEnv(val string) bool {
 	v := strings.TrimSpace(val)
 	if v == "" {
@@ -94,6 +99,33 @@ func isPlaceholderEnv(val string) bool {
 	switch upper {
 	case "CHANGEME", "TODO", "FIXME", "REPLACE-ME", "REPLACE_ME", "YOUR-SECRET-HERE":
 		return true
+	}
+	return false
+}
+
+// containsPlaceholderAdminPair parses an ADMIN_USERS='user:pwd[,user:pwd...]'
+// value and returns true if ANY *password* component looks like the
+// example placeholder. The username half is never checked — only the
+// credential half — so a user literally named 'TODO' or 'CHANGEME' still
+// works.
+//
+// This is the guard that catches the previously-missing compound case:
+//   ADMIN_USERS='alice:__REPLACE_ME__,bob:realpwd'
+// where neither Load()'s whole-string check nor isPlaceholderEnv on the
+// joined string trips.
+func containsPlaceholderAdminPair(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	for _, pair := range strings.Split(raw, ",") {
+		parts := strings.SplitN(strings.TrimSpace(pair), ":", 2)
+		if len(parts) != 2 {
+			continue // malformed — login will fail later via crypt/Compare
+		}
+		pwd := strings.TrimSpace(parts[1])
+		if pwd == placeholderSentinel || isPlaceholderEnv(pwd) {
+			return true
+		}
 	}
 	return false
 }
@@ -120,16 +152,23 @@ func Load() *Config {
 	}
 
 	adminUsers := os.Getenv(envAdminUsers)
-	if !insecure && (adminUsers == "" || adminUsers == placeholderAdminUsers || isPlaceholderEnv(adminUsers)) {
+	adminUsersPlaceholder := adminUsers == "" ||
+		adminUsers == placeholderAdminUsers ||
+		isPlaceholderEnv(adminUsers) ||
+		containsPlaceholderAdminPair(adminUsers)
+	if !insecure && adminUsersPlaceholder {
 		// In non-dev mode, an unset/placeholder ADMIN_USERS must fail-closed
 		// SAME way as the JWT placeholder — nobody should be able to log in
-		// with a credential that ships in a public example file.
-		log.Fatalf("[config] FATAL: %s is unset or equal to the example placeholder "+
-			"(%q); refusing to start. Set %s to user:bcrypt_or_plain_password pairs or set "+
-			"%s=1 for explicit local dev.",
+		// with a credential that ships in a public example file. The
+		// containsPlaceholderAdminPair check guards against the compound
+		// case (alice:__REPLACE_ME__,bob:realpwd) where any single pair's
+		// password component still matches the example sentinel.
+		log.Fatalf("[config] FATAL: %s is unset, equal to the example placeholder "+
+			"(%q), or contains a pair whose password is a placeholder; refusing to start. "+
+			"Set %s to user:bcrypt_or_plain_password pairs or set %s=1 for explicit local dev.",
 			envAdminUsers, placeholderAdminUsers, envAdminUsers, envAllowInsecure)
 	}
-	if insecure && (adminUsers == "" || adminUsers == placeholderAdminUsers || isPlaceholderEnv(adminUsers)) {
+	if insecure && adminUsersPlaceholder {
 		log.Printf("[config] WARNING: %s is placeholder; this is only acceptable because %s=1",
 			envAdminUsers, envAllowInsecure)
 	}
