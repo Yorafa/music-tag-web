@@ -4,6 +4,8 @@
 **Audience**: self-hosted family media-center use, single trusted user
 **Date**: 2025-06-29
 
+> **Cross-ref**: This doc's Stage B (per-source YAML overrides), Stage C (sandboxed JS plugins via `dop251/goja`), and Stage D (runtime admin UI for plugin lifecycle) are **future-feature pitches** — they are NOT currently in any README claim set. Separately, [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md) § Deferred/aspirational lists README claims that exist *today* but are not implemented in code. The two sets are *conceptually adjacent* (both aspirational, both off the current roadmap) but **distinct**:
+
 ---
 
 ## 1. Goal & non-goals
