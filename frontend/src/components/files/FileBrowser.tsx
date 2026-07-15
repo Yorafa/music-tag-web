@@ -20,7 +20,6 @@ import {
 import type { FileNode, SortField } from '@/types';
 import { readString, writeString } from '@/utils/persist';
 import { makeCompareFn } from '@/utils/sortBy';
-import { isAudioFile } from '@/utils/audioTypes';
 
 interface Props {
   onLoadFiles: (path?: string) => void;
@@ -45,7 +44,6 @@ export function FileBrowser({ onLoadFiles }: Props) {
   const setSortDir = useAppStore((s) => s.setSortDir);
 
   const [searchWord, setSearchWord] = useState('');
-  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [sortOpen, setSortOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const sortRef = useRef<HTMLDivElement>(null);
@@ -60,9 +58,12 @@ export function FileBrowser({ onLoadFiles }: Props) {
     [sortField, sortDir],
   );
 
-  // Derive both lists INSIDE the memo so identity is stable when children
-  // doesn't change. Otherwise the Inline-derived `rawDirs` array would be a
-  // fresh reference each render and defeat the memo.
+  // These memos are keyed on `[children, ...]` so we can rely on the
+  // derived `hasDirs` (computed inline below) without adding it to the
+  // memo deps — adding it would invalidate the memo on every render of a
+  // ghost-row state change. The dependency set is intentionally a stable
+  // projection of the same inputs and matches the rule used by
+  // SearchResults so the two panes reorder in lockstep.
   const sortedDirs = useMemo(() => {
     const rawDirs = children.filter(c => c.icon === 'icon-folder');
     return [...rawDirs].sort(compareFn);
@@ -341,7 +342,6 @@ export function FileBrowser({ onLoadFiles }: Props) {
 
           {/* Files */}
           {sortedFiles.map(file => {
-            const isAudio = isAudioFile(file.name);
             const isChecked = checkedIds.includes(file.id);
             const isSelected = selectedFile === file.name;
 

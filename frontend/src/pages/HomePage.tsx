@@ -24,6 +24,10 @@ export function HomePage() {
     }
   };
 
+  // Mount-only: load the directory tree once on entry. The exhaustive-deps
+  // rule wants `loadFiles` listed, but listing it would re-fire the fetch
+  // every render because the function reads `filePath` from store at call
+  // time. Caller-driven refreshes happen through `AppShell`'s onLoadFiles.
   useEffect(() => {
     loadFiles();
   }, []);

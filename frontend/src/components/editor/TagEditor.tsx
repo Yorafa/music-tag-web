@@ -4,12 +4,10 @@ import { updateId3, fetchId3ByTitle, uploadImage } from '@/api/client';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Search, Save, Sparkles, Upload } from 'lucide-react';
 import type { MusicSource, MusicTagInfo } from '@/types';
 import {
@@ -19,6 +17,15 @@ import {
   stableIdFromString,
 } from '@/utils/cover';
 import { toInitialChar, toTrimmedString } from '@/utils/string';
+
+// Read a text-shaped field off MusicTagInfo without falling back to `any`.
+// The discriminated-index dance keeps eslint's @typescript-eslint/no-explicit-any
+// happy while preserving the runtime semantics of `(m)[field] || ''`.
+function readStringField(m: Partial<MusicTagInfo>, field: string): string {
+  const v = (m as Record<string, unknown>)[field];
+  if (v == null) return '';
+  return typeof v === 'string' ? v : String(v);
+}
 
 interface Props {
   onLoadFiles: (path?: string) => void;
@@ -163,8 +170,8 @@ function SongHeader({
 export function TagEditor({ onLoadFiles }: Props) {
   const {
     musicInfo, updateMusicInfo, fullPath, selectedFile, resource, setResource,
-    showFields, fadeShowDetail, setFadeShowDetail, setSongList,
-    songList, isLoading, setIsLoading,
+    showFields, setFadeShowDetail, setSongList,
+    isLoading, setIsLoading,
     checkedIds,
   } = useAppStore();
 
@@ -261,7 +268,7 @@ export function TagEditor({ onLoadFiles }: Props) {
           <div className="flex items-center gap-2">
             <Label className="w-20 shrink-0 text-xs text-muted-foreground">{FIELD_LABELS[field]}</Label>
             <Input
-              value={(musicInfo as any)[field] || ''}
+              value={readStringField(musicInfo, field)}
               onChange={e => updateMusicInfo(field, e.target.value)}
               className="h-8 text-sm flex-1"
             />
