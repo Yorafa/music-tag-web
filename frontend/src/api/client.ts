@@ -9,15 +9,21 @@ const api = axios.create({
   },
 });
 
-// Request interceptor: attach JWT from AUTHORIZATION cookie (Python/Go backend
-// compat). Note: there is NO CSRF cookie — the Go gateway uses JWT-only auth
-// (handler/auth.go::Login returns {access, refresh} in JSON), and its JWTAuth
-// middleware reads from Authorization header / AUTHORIZATION cookie only.
+// Request interceptor: pull the JWT access token from in-memory store and
+// emit it as 'Authorization: JWT <token>' — the prefix the Go gateway
+// middleware/auth.go::JWTAuth recognizes (alongside 'Bearer ').
+//
+// We deliberately do NOT read or write any cookie here. The Go Login
+// handler returns the token in JSON only (handler/auth.go::Login) and
+// never c.SetCookie(AUTHORIZATION,…), so a cookie-based flow would have
+// nothing to read. Holding the token in memory also narrows XSS
+// exposure vs. a long-lived document.cookie entry — page reload
+// re-prompts for login, which is acceptable for a self-hosted admin
+// tool.
 api.interceptors.request.use((config) => {
-  const match = document.cookie.match(/(?:^|;\s*)AUTHORIZATION=([^;]*)/);
-  const token = match ? decodeURIComponent(match[1]) : null;
+  const token = useAuthStore.getState().accessToken;
   if (token) {
-    config.headers.Authorization = token;
+    config.headers.Authorization = `JWT ${token}`;
   }
   return config;
 });

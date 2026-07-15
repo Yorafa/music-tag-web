@@ -8,12 +8,6 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 
 const API_BASE = '';
 
-function setCookie(name: string, value: string, days: number) {
-  const d = new Date();
-  d.setTime(d.getTime() + days * 24 * 60 * 60 * 1000);
-  document.cookie = `${name}=${value};expires=${d.toUTCString()};path=/`;
-}
-
 export function LoginPage() {
   const login = useAuthStore((s) => s.login);
   const [username, setUsername] = useState('');
@@ -35,10 +29,14 @@ export function LoginPage() {
         setError('用户名或密码错误');
         return;
       }
-      const data = await res.json();
-      // simplejwt: access token, prefix must be 'JWT ' (case-sensitive)
-      setCookie('AUTHORIZATION', 'JWT ' + data.access, 7);
-      login();
+      const data = (await res.json()) as { access?: string };
+      if (!data.access) {
+        setError('登录响应缺少 access token');
+        return;
+      }
+      // Hand the raw JWT to the in-memory store; api/client.ts attaches it
+      // as 'Authorization: JWT <access>' on every subsequent request.
+      login(data.access);
     } catch {
       setError('网络错误，请重试');
     } finally {
