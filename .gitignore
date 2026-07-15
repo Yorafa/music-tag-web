@@ -21,10 +21,10 @@ db.sqlite3
 /media/
 /build/
 
-# Go build artifacts (gobackend)
-gobackend/bin/
-gobackend/gateway
-gobackend/worker
+# Go build artifacts (project root)
+bin/
+gateway
+worker
 *.exe
 *.test
 *.out

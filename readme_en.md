@@ -17,7 +17,7 @@ It supports FLAC, APE, WAV, AIFF, WV, TTA, MP3, M4A, OGG, MPC, OPUS, WMA, DSF, M
   <img src="https://img.shields.io/badge/platform-amd64/arm64-pink?style=plastic" alt="docker-platform" />
 </div>
 
-> ⚠️ The source repo now tracks the **Go backend** (`gobackend/`, with seven music-source gRPC plugins). The Docker Hub image `xhongc/music_tag_web:latest` is the legacy **Python/Django build** — kept for existing users but no longer maintained. New deployments should use the V2 source-build flow below.
+> ⚠️ The source repo now tracks the **Go backend** (`cmd/` + `internal/` at project root, with seven music-source gRPC plugins). The Docker Hub image `xhongc/music_tag_web:latest` is the legacy **Python/Django build** — kept for existing users but no longer maintained. New deployments should use the V2 source-build flow below.
 
 # 🎉 Features
 
@@ -107,12 +107,12 @@ Default account/password: `admin/admin`. Change the default password after login
 
 ```bash
 git clone https://github.com/xhongc/music-tag-web.git
-cd music-tag-web/gobackend       # IMPORTANT: .env lives next to docker-compose.yml
+cd music-tag-web                 # .env + Makefile + Dockerfiles all live at the repo root
 cp .env.example .env             # copy next to the compose file
 # then edit .env and fill in the required values
 ```
 
-> ⚠️ **Pre-flight: read the boilerplate.** Before starting step 2, open `gobackend/.env.example` and read the `⛔ PRE-FLIGHT CHECKLIST ⛔` block at the top. The three `__REPLACE_ME__` sentinels (`JWT_SECRET`, `ADMIN_USERS`, `WEBHOOK_INTERNAL_TOKEN`) will be rejected at startup by `config.Load()` with a `log.Fatalf` unless `ALLOW_INSECURE_DEFAULTS=1` is set (in which case it only logs a WARNING).
+> ⚠️ **Pre-flight: read the boilerplate.** Before starting step 2, open `.env.example` and read the `⛔ PRE-FLIGHT CHECKLIST ⛔` block at the top. The three `__REPLACE_ME__` sentinels (`JWT_SECRET`, `ADMIN_USERS`, `WEBHOOK_INTERNAL_TOKEN`) will be rejected at startup by `config.Load()` with a `log.Fatalf` unless `ALLOW_INSECURE_DEFAULTS=1` is set (in which case it only logs a WARNING).
 
 `JWT_SECRET` and `ADMIN_USERS` are **required** (the gateway either fails
 to start or refuses every login without them). Recommended:
@@ -120,15 +120,14 @@ to start or refuses every login without them). Recommended:
 `MUSIC_DIR`, `DATA_DIR`, `NGINX_PORT`.
 
 > Each variable in `.env.example` has an inline comment; full operator
-> guidance lives in `gobackend/SECURITY.md` and `gobackend/P1.5.md`.
+> guidance lives in `SECURITY.md` and `P1.5.md`.
 
 ### 2. Volume pre-flight + bring up the full stack
 
 The compose defaults `./music` and `./data` are **relative to the compose file**, so the host directories must exist before `docker compose up`; otherwise you get `volume source not found`. NAS operators with SMB/NFS mounts — prepare the host paths first.
 
 ```bash
-cd gobackend
-mkdir -p ./music ./data         # first run only
+mkdir -p ./music ./data         # first run only (relative to the repo root)
 docker compose up -d --build    # --build only when plugins or env change
 ```
 

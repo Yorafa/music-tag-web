@@ -1,15 +1,14 @@
 version: "3"
 
 # =============================================================================
-# Music Tag Web - Go Backend (gobackend)
-# Distributed architecture with gRPC plugin services.
+# Music Tag Web - Go backend (project root, gRPC plugin architecture)
+# Distributed layout: gateway + worker + 7 gRPC music-source plugins.
 #
 # Services:
 #   gateway      - gin-gonic REST API server (port 8001)
 #   worker       - asynq background task processor
 #   redis        - message broker for asynq
-#   netease      - NetEase Cloud Music gRPC plugin
-#   kugou        - KuGou Music gRPC plugin
+#   netease/kugou/kuwo/migu/qmusic/musicbrainz/acoustid - gRPC plugin servers
 #   nginx        - reverse proxy (port 9150)
 # =============================================================================
 
@@ -177,7 +176,7 @@ services:
         condition: service_healthy
     volumes:
       - ${MUSIC_DIR:-./music}:/app/media:ro
-      - ${STATIC_DIR:-../static}:/app/static:ro
+      - ${STATIC_DIR:-./static}:/app/static:ro
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     restart: unless-stopped
 
