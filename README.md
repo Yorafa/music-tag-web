@@ -98,6 +98,24 @@ services:
 
 > V1 镜像现在跟仓库源码不一致（镜像还是 Django，代码已经迁到 Go）。所有新部署请走源码构建。
 
+> 🪜 **从老版本升级的只走这一步**：如果你之前按老 README 部署过，已经在 NAS 上存在 `gobackend/.env`、`gobackend/data/` (sqlite + 上传封面)、`gobackend/music/`（或挂载点）、`docker-compose.yml` 以 `gobackend/` 为工作目录，新 compose 默认改成了仓库根路径，必须手动迁一下（不会动你现有数据）：
+> ```bash
+> mv gobackend/.env  ./.env
+> mv gobackend/data  ./data
+> mv gobackend/music ./music    # 或跟你的外部挂载点拼接后的实际路径
+> rmdir gobackend               # 确认是空后才删
+> ```
+> 之后旧 `gobackend/` 目录可以删。`docker-compose.yml` 的 `${MUSIC_DIR}`、`${DATA_DIR}` 默认仍是 `./music` / `./data`，搬完后语义不变。
+
+> 🪜 **从老版本升级的只走这一步**：如果你之前按老 README 部署过，已经在 NAS 上存在 `gobackend/.env`、`gobackend/data/` (sqlite + 上传封面)、`gobackend/music/`（或挂载点）—— 新 compose 的默认路径已经改到仓库根，`git pull && docker compose up -d` 会让 sqlite 变空。手动迁一下（不会动现有数据）：
+> ```bash
+> mv gobackend/.env  ./.env
+> mv gobackend/data  ./data
+> mv gobackend/music ./music    # 或你的外部挂载点拼接后的实际路径
+> rmdir gobackend               # 确认是空后才删
+> ```
+> 之后旧 `gobackend/` 目录可以删。`${MUSIC_DIR}` / `${DATA_DIR}` 默认仍是 `./music` / `./data`,搬完后语义不变。
+
 ### 1. 克隆并准备环境变量
 ```bash
 git clone https://github.com/xhongc/music-tag-web.git
