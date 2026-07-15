@@ -417,7 +417,7 @@ export function TagEditor({ onLoadFiles }: Props) {
 
   return (
     <ScrollArea className="h-full">
-      <div className="p-4 space-y-3">
+      <div className="py-4 space-y-3">
         {/* Song-detail header. Shown only in single-file mode so the cover
             reflects the actual selected song rather than the batch aggregate. */}
         {selectedFile && checkedIds.length === 0 && (

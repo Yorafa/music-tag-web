@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { useAuthStore } from '@/store/useAuthStore';
+import type { SourceInfo } from '@/types';
 
 const api = axios.create({
   baseURL: '/api/',
@@ -102,5 +103,28 @@ export async function fullScanFolder() {
 
 export async function clearCelery() {
   const { data } = await api.get('clear_celery/');
+  return data;
+}
+
+export async function searchMusic(params: {
+  query: string;
+  sources: string[];
+  pages?: Record<string, number>;
+  limit?: number;
+}) {
+  const { data } = await api.post('search_music/', params);
+  return data;
+}
+
+/** GET /api/sources/ — Stage A of docs/plugable-plugins.md. Reads the
+ *  server's registered plugin map and returns each entry's capability
+ *  flags. The frontend's useSourceStore hydrates from this once on mount. */
+export async function getSources(): Promise<{
+  result: boolean;
+  data: SourceInfo[];
+  code: string;
+  message: string;
+}> {
+  const { data } = await api.get('sources/');
   return data;
 }

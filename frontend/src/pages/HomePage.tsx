@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { AppShell } from '@/components/layout/AppShell';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { SettingsButton } from '@/components/settings/SettingsModal';
 import { useAppStore } from '@/store/useAppStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { getFileList } from '@/api/client';
@@ -37,6 +38,7 @@ export function HomePage() {
           {checkedIds.length > 0 ? `已选 ${checkedIds.length} 个文件` : ''}
         </span>
         <div className="ml-auto flex items-center gap-1">
+          <SettingsButton />
           <ThemeToggle />
           <button
             type="button"
