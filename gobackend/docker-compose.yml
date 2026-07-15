@@ -36,17 +36,27 @@ services:
       # Read via os.Getenv() by plugin/grpc_adapter.go::DialOptions.
       GRPC_USE_TLS: ${GRPC_USE_TLS:-0}
       GRPC_TLS_CA_FILE: ${GRPC_TLS_CA_FILE:-}
+      # Read via os.Getenv() by middleware/webhook_auth.go. Workers use this
+      # in the X-Internal-Token header when POSTing to /api/webhooks/*.
+      # Empty = fail-closed (403) unless ALLOW_INSECURE_DEFAULTS=1.
+      WEBHOOK_INTERNAL_TOKEN: ${WEBHOOK_INTERNAL_TOKEN:-}
+      # Read via os.Getenv() by config.Load(). Set to 1 only for explicit
+      # local dev to opt out of placeholder JWT / admin/admin fallbacks.
+      ALLOW_INSECURE_DEFAULTS: ${ALLOW_INSECURE_DEFAULTS:-}
       MUSIC_DIR: /app/media
       DATA_DIR: /app/data
       DB_DSN: /app/data/db.sqlite3
+      DB_DRIVER: ${DB_DRIVER:-sqlite3}
       REDIS_ADDR: redis:6379
-      PLUGIN_NETEASE_ADDR: netease:50051
-      PLUGIN_KUGOU_ADDR: kugou:50052
-      PLUGIN_KUWO_ADDR: kuwo:50053
-      PLUGIN_MIGU_ADDR: migu:50054
-      PLUGIN_QMUSIC_ADDR: qmusic:50055
-      PLUGIN_MUSICBRAINZ_ADDR: musicbrainz:50056
-      PLUGIN_ACOUSTID_ADDR: acoustid:50057
+      # Per-plugin gRPC addresses. The server reads these via parsePluginAddrs()
+      # at startup. Adjust if running plugins out-of-process or on different hosts.
+      PLUGIN_NETEASE_ADDR: ${PLUGIN_NETEASE_ADDR:-netease:50051}
+      PLUGIN_KUGOU_ADDR: ${PLUGIN_KUGOU_ADDR:-kugou:50052}
+      PLUGIN_KUWO_ADDR: ${PLUGIN_KUWO_ADDR:-kuwo:50053}
+      PLUGIN_MIGU_ADDR: ${PLUGIN_MIGU_ADDR:-migu:50054}
+      PLUGIN_QMUSIC_ADDR: ${PLUGIN_QMUSIC_ADDR:-qmusic:50055}
+      PLUGIN_MUSICBRAINZ_ADDR: ${PLUGIN_MUSICBRAINZ_ADDR:-musicbrainz:50056}
+      PLUGIN_ACOUSTID_ADDR: ${PLUGIN_ACOUSTID_ADDR:-acoustid:50057}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8001/admin/login/"]

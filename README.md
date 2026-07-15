@@ -115,6 +115,8 @@ cp .env.example .env
 ### 2. 构建并启动全栈
 ```bash
 cd gobackend
+# 首次确保本机音乐 / 数据目录存在（compose 默认 ./music 与 ./data 相对 compose 文件）：
+mkdir -p ./music ./data
 docker compose up -d --build
 ```
 首次启动会自动构建 gateway + worker + 7 个 gRPC 音乐源插件（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）+ redis + nginx。
