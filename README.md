@@ -43,13 +43,11 @@ Music Tag Web 采用 Docker 容器一键部署，作为影音服务配套边车�
 - 兼容各类私人网盘挂载曲库在线播放与标签编辑
 - 播放数据统计，柱形图、折线图可视化曲库播放记录
 
-
 # 🦀 项目演示 Demo
 在线演示地址（体验批量修改音乐标签、自托管Web端操作效果）
 DEMO 地址账号密码为：admin/admin
 
 [【音乐标签Web｜Music Tag Web 自托管Docker音乐元数据工具演示】](http://117.72.222.188:8002/#/)
-
 
 # 💯 使用部署指南 How to Use
 完整图文教程文档：
@@ -98,23 +96,18 @@ services:
 
 > V1 镜像现在跟仓库源码不一致（镜像还是 Django，代码已经迁到 Go）。所有新部署请走源码构建。
 
-> 🪜 **从老版本升级的只走这一步**：如果你之前按老 README 部署过，已经在 NAS 上存在 `gobackend/.env`、`gobackend/data/` (sqlite + 上传封面)、`gobackend/music/`（或挂载点）、`docker-compose.yml` 以 `gobackend/` 为工作目录，新 compose 默认改成了仓库根路径，必须手动迁一下（不会动你现有数据）：
+> 🪜 **从老版本升级才看这一步**（全新部署跳过）：新 compose 默认路径已改到仓库根，裸 `git pull && docker compose up -d` 会让 sqlite 重建、`./music` 与 `./data` 目录不存在而启动失败。这 4 行 mv 在任何时机都会成功 — `gobackend/{.env,data,music}` 即使在 git 不再跟踪的情况下依然写在 NAS 上。
+>
+> 如果你的老 `.env` 把 `MUSIC_DIR` 指向外部挂载（Synology `/volume1/music`、SMB `/mnt/nas/music`、NFS 等）——**跳过第 3 行 `mv gobackend/music`**；只要新 `./env` 里 `MUSIC_DIR=` 还指同一个外部路径即可。
+>
+> 如果根下已经存在 `./.env`（来自 `cp .env.example .env`）或 `./data` / `./music`（之前的空 `mkdir`）——先 `cp -r ./.env ./.env.bak` 备份再 mv，避免静默覆盖。
 > ```bash
-> mv gobackend/.env  ./.env
-> mv gobackend/data  ./data
-> mv gobackend/music ./music    # 或跟你的外部挂载点拼接后的实际路径
-> rmdir gobackend               # 确认是空后才删
+> mv gobackend/.env  ./.env   # 老 .env 迁过来；若 ./.env 已存在先备份
+> mv gobackend/data  ./data   # sqlite + 上传封面；若 ./data 已存在先备份
+> mv gobackend/music ./music  # 仅当你之前用 ./gobackend/music 当本地 bind 时才需要；外部挂载跳过
+> rmdir gobackend             # 仅在确认为空时才删（rmdir 本身会护栏，非空会拒绝）
 > ```
-> 之后旧 `gobackend/` 目录可以删。`docker-compose.yml` 的 `${MUSIC_DIR}`、`${DATA_DIR}` 默认仍是 `./music` / `./data`，搬完后语义不变。
-
-> 🪜 **从老版本升级的只走这一步**：如果你之前按老 README 部署过，已经在 NAS 上存在 `gobackend/.env`、`gobackend/data/` (sqlite + 上传封面)、`gobackend/music/`（或挂载点）—— 新 compose 的默认路径已经改到仓库根，`git pull && docker compose up -d` 会让 sqlite 变空。手动迁一下（不会动现有数据）：
-> ```bash
-> mv gobackend/.env  ./.env
-> mv gobackend/data  ./data
-> mv gobackend/music ./music    # 或你的外部挂载点拼接后的实际路径
-> rmdir gobackend               # 确认是空后才删
-> ```
-> 之后旧 `gobackend/` 目录可以删。`${MUSIC_DIR}` / `${DATA_DIR}` 默认仍是 `./music` / `./data`,搬完后语义不变。
+> 之后 `docker compose up -d --build`。`${MUSIC_DIR}` / `${DATA_DIR}` 默认仍是 `./music` / `./data`，搬完后语义不变。
 
 ### 1. 克隆并准备环境变量
 ```bash
@@ -146,7 +139,6 @@ docker compose up -d --build    # 后续只要不加 plugin / 不改 .env，重�
 `http://localhost:9150/admin`（外层 nginx 暴露在 `NGINX_PORT`，gateway 监听 8001）。
 
 > 默认账号由 `ADMIN_USERS` 决定。如果你看到 "admin/admin" 是在 `ALLOW_INSECURE_DEFAULTS=1` 仅调试模式下，真正上线 前必删该环境变量并设置真实密码。
-
 
 # 📷 V2 版本操作界面 User Interface
 远程浏览器批量管理NAS音乐标签、刮削元数据、整理曲库完整界面展示
