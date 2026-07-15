@@ -103,6 +103,19 @@ Default account/password: `admin/admin`. Change the default password after login
 
 > The V1 Docker Hub image no longer matches this repository (the image is still Django; the repo source has moved to Go). All new deployments should build from source.
 
+> 🪜 **Upgrading from a previous revision? Skip this if you are fresh-installing.** The new compose defaults resolve relative to the repo root, so a bare `git pull && docker compose up -d` rebuilds an empty sqlite and points nginx at a non-existent directory. The four lines below work at any point — `gobackend/{.env,data,music}` still exist on disk even after the new layout goes live; they are just no longer git-tracked.
+>
+> Skip line 3 (`mv gobackend/music`) if your *old* `.env` set `MUSIC_DIR=` to an external bind mount (Synology `/volume1/music`, SMB/NFS at `/mnt/nas/music`, etc.) — in that case edit `./env` so `MUSIC_DIR=` continues to point at the same external path.
+>
+> If `./env`, `./data`, or `./music` already exist at the root (because something already ran `cp .env.example .env` first, or `docker compose up` provisioned an empty bind), back them up before `mv` to avoid silent overwrite:
+> ```bash
+> mv gobackend/.env  ./.env   # back up first if ./.env already exists
+> mv gobackend/data  ./data   # back up first if ./data already exists
+> mv gobackend/music ./music  # only if you were using ./gobackend/music as a local bind; skip for NAS mounts
+> rmdir gobackend             # safe: rmdir itself refuses non-empty
+> ```
+> Then `docker compose up -d --build`. `${MUSIC_DIR}` and `${DATA_DIR}` are still `./music` / `./data` so semantics don't change.
+
 ### 1. Clone and prepare env
 
 ```bash
