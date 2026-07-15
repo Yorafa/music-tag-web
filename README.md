@@ -103,6 +103,8 @@ services:
 git clone https://github.com/xhongc/music-tag-web.git
 cd music-tag-web
 ```
+
+> ⚠️ **Pre-flight: boilerplate 检查。** 进入 step 2 之前必须看完 `gobackend/.env.example` 顶部的 `⛔ PRE-FLIGHT CHECKLIST ⛔`，其中三个 `__REPLACE_ME__`（`JWT_SECRET`、`ADMIN_USERS`、`WEBHOOK_INTERNAL_TOKEN`）未替换会被 gateway `config.Load()` 拦下，log.Fatalf 拒绝启动（与 `ALLOW_INSECURE_DEFAULTS` 匹配才仅 WARNING）。
 进入 `gobackend/` 并把 `.env.example` 复制成 `.env`（与 `docker-compose.yml` 同目录，这样 Compose 才能读到）：
 ```bash
 cd gobackend
@@ -112,12 +114,13 @@ cp .env.example .env
 `JWT_SECRET` 和 `ADMIN_USERS` 是必填（不设 / 设为占位符 → gateway 启动 Fail-closed 或登陆返回 401）；强烈推荐同时配置 `CORS_ALLOWED_ORIGINS`、`GRPC_USE_TLS`、`MUSIC_DIR`、`DATA_DIR`、`NGINX_PORT`。模板里每项都有详细注释。
 > 详细运维与安全默认值：见 `gobackend/SECURITY.md` 与 `gobackend/P1.5.md`。
 
-### 2. 构建并启动全栈
+### 2. Volume pre-flight + 构建并启动全栈
+`docker-compose.yml` 的默认值 `./music` 与 `./data` 是**相对 compose 文件路径**，首次运行必须存在；否则 `docker compose up` 会报 `volume source not found`。NAS 用户如果使用 SMB / NFS 挂载，先在宿主机准备好路径。
+
 ```bash
 cd gobackend
-# 首次确保本机音乐 / 数据目录存在（compose 默认 ./music 与 ./data 相对 compose 文件）：
-mkdir -p ./music ./data
-docker compose up -d --build
+mkdir -p ./music ./data         # 首次需要
+docker compose up -d --build    # 后续只要不加 plugin / 不改 .env，重启即可跳过 --build
 ```
 首次启动会自动构建 gateway + worker + 7 个 gRPC 音乐源插件（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）+ redis + nginx。
 

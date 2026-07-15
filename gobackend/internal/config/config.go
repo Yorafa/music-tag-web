@@ -59,6 +59,16 @@ type Config struct {
 
 const (
 	defaultJWTSecret     = "change-me-in-production"
+	// placeholderAdminUsers / placeholderWebhookToken are the obvious
+	// sentinel tokens shipped in gobackend/.env.example. When any of
+	// these (or the equivalent string "__REPLACE_ME__") is detected,
+	// config.Load() refuses to start outside dev mode — siloed the same
+	// way as defaultJWTSecret so an operator who copies the example
+	// without editing can't accidentally boot the gateway with a public
+	// placeholder credential.
+	placeholderAdminUsers    = "admin:__REPLACE_ME__"
+	placeholderWebhookToken  = "__REPLACE_ME__"
+	placeholderSentinel      = "__REPLACE_ME__"
 	envAllowInsecure     = "ALLOW_INSECURE_DEFAULTS"
 	envCORSAllowed       = "CORS_ALLOWED_ORIGINS"
 	envGRPCUseTLS        = "GRPC_USE_TLS"
@@ -67,6 +77,26 @@ const (
 	envAdminUsers           = "ADMIN_USERS"
 	envWebhookInternalToken = "WEBHOOK_INTERNAL_TOKEN"
 )
+
+// isPlaceholderEnv returns true when val looks like one of the obvious
+// sentinel tokens shipped in .env.example. It also catches a handful of
+// common sloppy placeholders so a reviewer-only edit (CHANGEME / FIXME
+// / TODO / your-secret-here) still trips the guard.
+func isPlaceholderEnv(val string) bool {
+	v := strings.TrimSpace(val)
+	if v == "" {
+		return false
+	}
+	if v == placeholderSentinel {
+		return true
+	}
+	upper := strings.ToUpper(v)
+	switch upper {
+	case "CHANGEME", "TODO", "FIXME", "REPLACE-ME", "REPLACE_ME", "YOUR-SECRET-HERE":
+		return true
+	}
+	return false
+}
 
 // Load reads config from environment variables. In secure mode (the
 // default) it refuses to start with the placeholder JWT_SECRET; ops must
@@ -78,22 +108,45 @@ func Load() *Config {
 	insecure := isTruthyEnv(envAllowInsecure)
 
 	jwtSecret := os.Getenv(envJWTSecret)
-	if !insecure && (jwtSecret == "" || strings.EqualFold(jwtSecret, defaultJWTSecret)) {
-		log.Fatalf("[config] FATAL: %s is unset or equal to the placeholder; refusing to start. "+
-			"Set %s to a strong value (e.g. `openssl rand -base64 48`) or set %s=1 for explicit local dev.",
+	if !insecure && (jwtSecret == "" || strings.EqualFold(jwtSecret, defaultJWTSecret) || isPlaceholderEnv(jwtSecret)) {
+		log.Fatalf("[config] FATAL: %s is unset, equal to the placeholder, or equal to a sentinel "+
+			"like __REPLACE_ME__; refusing to start. Set %s to a strong value (e.g. `openssl rand "+
+			"-base64 48`) or set %s=1 for explicit local dev.",
 			envJWTSecret, envJWTSecret, envAllowInsecure)
 	}
-	if insecure && (jwtSecret == "" || strings.EqualFold(jwtSecret, defaultJWTSecret)) {
+	if insecure && (jwtSecret == "" || strings.EqualFold(jwtSecret, defaultJWTSecret) || isPlaceholderEnv(jwtSecret)) {
 		log.Printf("[config] WARNING: %s is placeholder; this is only acceptable because %s=1",
 			envJWTSecret, envAllowInsecure)
 	}
 
-	if !insecure && os.Getenv(envAdminUsers) == "" {
-		log.Printf("[config] WARNING: %s unset; /api/token/ Login will refuse all credentials", envAdminUsers)
+	adminUsers := os.Getenv(envAdminUsers)
+	if !insecure && (adminUsers == "" || adminUsers == placeholderAdminUsers || isPlaceholderEnv(adminUsers)) {
+		// In non-dev mode, an unset/placeholder ADMIN_USERS must fail-closed
+		// SAME way as the JWT placeholder — nobody should be able to log in
+		// with a credential that ships in a public example file.
+		log.Fatalf("[config] FATAL: %s is unset or equal to the example placeholder "+
+			"(%q); refusing to start. Set %s to user:bcrypt_or_plain_password pairs or set "+
+			"%s=1 for explicit local dev.",
+			envAdminUsers, placeholderAdminUsers, envAdminUsers, envAllowInsecure)
 	}
-	if insecure && os.Getenv(envAdminUsers) == "" {
-		log.Printf("[config] WARNING: %s unset; falling back to dev admin/admin "+
-			"(acceptable only because %s=1)", envAdminUsers, envAllowInsecure)
+	if insecure && (adminUsers == "" || adminUsers == placeholderAdminUsers || isPlaceholderEnv(adminUsers)) {
+		log.Printf("[config] WARNING: %s is placeholder; this is only acceptable because %s=1",
+			envAdminUsers, envAllowInsecure)
+	}
+
+	webhookToken := os.Getenv(envWebhookInternalToken)
+	if !insecure && (webhookToken != "" && isPlaceholderEnv(webhookToken)) {
+		// Unlike JWT_SECRET / ADMIN_USERS, webhook token may legitimately be
+		// empty in single-host dev (no workers exist). But if it IS set,
+		// refuse placeholders so a forgotten edit doesn't silently match a
+		// downstream worker that happens to send the same literal.
+		log.Fatalf("[config] FATAL: %s is set to the example placeholder (%q); refusing to start. "+
+			"Either unset it (single-host) or set %s=openssl rand -hex 32.",
+			envWebhookInternalToken, placeholderWebhookToken, envWebhookInternalToken)
+	}
+	if insecure && isPlaceholderEnv(webhookToken) {
+		log.Printf("[config] WARNING: %s is placeholder; this is only acceptable because %s=1",
+			envWebhookInternalToken, envAllowInsecure)
 	}
 
 	if insecure && !isTruthyEnv(envGRPCUseTLS) {

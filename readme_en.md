@@ -112,6 +112,8 @@ cp .env.example .env             # copy next to the compose file
 # then edit .env and fill in the required values
 ```
 
+> ⚠️ **Pre-flight: read the boilerplate.** Before starting step 2, open `gobackend/.env.example` and read the `⛔ PRE-FLIGHT CHECKLIST ⛔` block at the top. The three `__REPLACE_ME__` sentinels (`JWT_SECRET`, `ADMIN_USERS`, `WEBHOOK_INTERNAL_TOKEN`) will be rejected at startup by `config.Load()` with a `log.Fatalf` unless `ALLOW_INSECURE_DEFAULTS=1` is set (in which case it only logs a WARNING).
+
 `JWT_SECRET` and `ADMIN_USERS` are **required** (the gateway either fails
 to start or refuses every login without them). Recommended:
 `CORS_ALLOWED_ORIGINS`, `GRPC_USE_TLS`, and the volume/port variables
@@ -120,14 +122,14 @@ to start or refuses every login without them). Recommended:
 > Each variable in `.env.example` has an inline comment; full operator
 > guidance lives in `gobackend/SECURITY.md` and `gobackend/P1.5.md`.
 
-### 2. Build and bring up the full stack
+### 2. Volume pre-flight + bring up the full stack
+
+The compose defaults `./music` and `./data` are **relative to the compose file**, so the host directories must exist before `docker compose up`; otherwise you get `volume source not found`. NAS operators with SMB/NFS mounts — prepare the host paths first.
 
 ```bash
 cd gobackend
-# First run only — make sure the local music / data dirs exist (defaults
-# ./music and ./data are RELATIVE TO THE COMPOSE FILE):
-mkdir -p ./music ./data
-docker compose up -d --build
+mkdir -p ./music ./data         # first run only
+docker compose up -d --build    # --build only when plugins or env change
 ```
 
 The first run compiles: gateway + worker + 7 gRPC music-source plugins (netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid) + redis + nginx.
