@@ -98,16 +98,16 @@ services:
 
 > 🪜 **从老版本升级再看这一步**（全新部署跳过）。新 compose 默认路径已改到仓库根，裸 `git pull && docker compose up -d` 会让 sqlite 重建、`./music` / `./data` 目录不存在而启动失败。这 4 行 mv 在任何时机都会成功 — `gobackend/{.env,data,music}` 即使在 git 不再跟踪的情况下也仍写在 NAS 上。
 >
-> 若你的老 `.env` 把 `MUSIC_DIR` 指向 NAS 外部 mount（Synology `/volume1/music`、SMB `/mnt/nas/music`、NFS 等），或你之前用了其他宿主机 bind mount、或者直接 `ln -s /volume1/music /path/gobackend/music` 的软链 —— 跳过第 3 行；只要新 `./env` 里 `MUSIC_DIR=` 还指同一个外部路径即可。
+> 若你的老 `.env` 把 `MUSIC_DIR` 指向 NAS 外部 mount（Synology `/volume1/music`、SMB `/mnt/nas/music`、NFS 等），或你之前用了其他宿主机 bind mount、或直接 `ln -s /volume1/music /path/gobackend/music` 软链 —— 跳过第 3 行；只要新 `./env` 里 `MUSIC_DIR=` 还指同一个外部路径即可。
 >
-> 下面 bash 块用 `[ -X ] && mv -n X X.bak` 护栏（`mv -n` 拒绝覆盖已有 backup，重跑不会丢第一次的 `.env.bak`）；空目录/不存在则直接走 mv。`rmdir` 本身非空拒绝。
+> 下面 bash 块前后两段都用 `mv -n`（POSIX no-clobber，Alpine/BusyBox 1.21+ 都支持）：第一段拒绝覆盖已有 backup，第二段拒绝覆盖已有 root 文件；re-run 时（ `./env.bak` 和 `./env` 同时存在）两次 mv 都 no-op，状态可观察而不是静默覆盖。`rmdir` 本身非空拒绝。
 > ```bash
-> [ -f ./.env ] && mv -n ./.env ./.env.bak; mv gobackend/.env ./.env
-> [ -d ./data ] && mv -n ./data ./data.bak; mv gobackend/data ./data
-> [ -d ./music ] && mv -n ./music ./music.bak; mv gobackend/music ./music   # 仅当你之前用 ./gobackend/music 当本地 bind 时才需要；外部 bind 或软链跳过
+> [ -f ./.env ] && mv -n ./.env ./.env.bak; mv -n gobackend/.env ./.env
+> [ -d ./data ] && mv -n ./data ./data.bak; mv -n gobackend/data ./data
+> [ -d ./music ] && mv -n ./music ./music.bak; mv -n gobackend/music ./music   # 仅当你之前用 ./gobackend/music 当本地 bind 时才需要；外部 mount / 软链 / FUSE 跳过
 > rmdir gobackend   # 非空拒绝
 > ```
-> 之后 `docker compose up -d --build`。`${MUSIC_DIR}` / `${DATA_DIR}` 默认仍是 `./music` / `./data`，搬完后语义不变。
+> 之后 `docker compose up -d --build`。`${MUSIC_DIR}` / `${DATA_DIR}` 默认仍是 `./music` / `./data`,搬完后语义不变。
 
 ### 1. 克隆并准备环境变量
 ```bash

@@ -107,11 +107,11 @@ Default account/password: `admin/admin`. Change the default password after login
 >
 > If your *old* `.env` set `MUSIC_DIR=` to a NAS external mount (Synology `/volume1/music`, SMB/NFS at `/mnt/nas/music`, etc.) — or you used any other host bind mount, or directly `ln -s /volume1/music /path/gobackend/music` symlink — skip line 3 entirely; just make sure your new `./env` `MUSIC_DIR=` still points at the same external path.
 >
-> The bash block below uses `[ -X ] && mv -n X X.bak` (rename-then-mv via `mv -n`, which refuses to clobber an existing `.bak` so re-running the block doesn't lose the previous backup); empty / missing paths fall through to the plain `mv`. `rmdir` is built-in safe (refuses non-empty).
+> The bash block below applies `mv -n` (POSIX no-clobber, available on GNU mv / BSD mv / Alpine-BusyBox 1.21+) to BOTH halves of each line: the first refuses to clobber an existing backup, the second refuses to clobber an existing root file. On re-run (where `./env.bak` and `./env` already both exist) both mvs become observable no-ops instead of silent overwrite. `rmdir` is built-in safe (refuses non-empty).
 > ```bash
-> [ -f ./.env ] && mv -n ./.env ./.env.bak; mv gobackend/.env ./.env
-> [ -d ./data ] && mv -n ./data ./data.bak; mv gobackend/data ./data
-> [ -d ./music ] && mv -n ./music ./music.bak; mv gobackend/music ./music   # only if ./gobackend/music was a local bind; skip for NAS mounts or symlinks
+> [ -f ./.env ] && mv -n ./.env ./.env.bak; mv -n gobackend/.env ./.env
+> [ -d ./data ] && mv -n ./data ./data.bak; mv -n gobackend/data ./data
+> [ -d ./music ] && mv -n ./music ./music.bak; mv -n gobackend/music ./music   # only if ./gobackend/music was a local bind; skip for NAS mounts, symlinks, or FUSE (gvfs / davfs2 / sshfs)
 > rmdir gobackend   # refuses if non-empty
 > ```
 > Then `docker compose up -d --build`. `${MUSIC_DIR}` and `${DATA_DIR}` are still `./music` / `./data` so semantics don't change.
