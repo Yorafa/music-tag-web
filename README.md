@@ -11,11 +11,13 @@ Music Tag Web 是一款**开源 self-hosted 自托管 Docker 音乐标签编辑�
 
 支持 FLAC, APE, WAV, AIFF, WV, TTA, MP3, M4A, OGG, MPC, OPUS, WMA, DSF, MP4 全格式音频 ID3 标签批量编辑、刮削、修复整理，所有曲库文件本地存储不上传第三方，隐私安全，适配群晖、威联通、Linux 小主机 Docker 部署。
 <div class="column" align="middle">
-    <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.9-blue.svg" alt=""></a>
+    <a href="https://go.dev/dl/"><img src="https://img.shields.io/badge/Go-1.23-00ADD8.svg" alt=""></a>
    <img src="https://img.shields.io/github/stars/xhongc/music-tag-web?color=informational&label=Stars">
-  <img src="https://img.shields.io/docker/pulls/xhongc/music_tag_web" alt="docker-pull-count" />
+  <img src="https://img.shields.io/badge/V2-backend-Go%20%2B%20gRPC-blueviolet?style=plastic" alt="V2 stack" />
   <img src="https://img.shields.io/badge/platform-amd64/arm64-pink?style=plastic" alt="docker-platform" />
 </div>
+
+> ⚠️ **仓库源码现为 Go 后端**（`gobackend/`，含 7 个 gRPC 音乐源插件），Docker Hub 上的 `xhongc/music_tag_web:latest` 是 **Python/Django 老镜像**，仅供历史用户使用，不再维护，请改走下面的 V2 源码构建。
 
 # 🎉 核心功能 Feature（Self-hosted Docker 专属优势）
 为什么开发 Web 自托管版本？
@@ -92,36 +94,42 @@ services:
 3. 访问地址：127.0.0.1:8001/admin，默认账号密码 admin/admin，首次登录务必修改默认密码
 ![img_7.png](img_7.png)
 
-## V2 新版推荐部署方式（主流 self-hosted 用户首选）
-> V2 与 V1部署区别：容器内部服务端口调整为 8002，Docker Compose 部署移除 `command: /start` 配置，兼容性更好，适配绝大多数NAS系统
+## V2 推荐部署（当前主线 · Go + gRPC 插件架构）
 
-### 1. 拉取最新Docker镜像
+> V1 镜像现在跟仓库源码不一致（镜像还是 Django，代码已经迁到 Go）。所有新部署请走源码构建。
+
+### 1. 克隆并准备环境变量
 ```bash
-docker pull xhongc/music_tag_web:latest
+git clone https://github.com/xhongc/music-tag-web.git
+cd music-tag-web
 ```
+在仓库根目录新建 `.env`（或使用官方 docker secrets）：
+```env
+# 必填 —— 不设这两个，gateway 启动会 Fail-closed 或登陆返回 401
+JWT_SECRET=$(openssl rand -base64 48)
+ADMIN_USERS='admin:$(openssl rand -base64 32)'
+CORS_ALLOWED_ORIGINS='http://localhost:9150'
+GRPC_USE_TLS=0                           # 生产环境设为 1 并提供 GRPC_TLS_CA_FILE
 
-### 2. 一键运行容器命令
+# 可选 / 卷挂载用
+MUSIC_DIR=/path/to/your/music            # macOS/Windows 示例见 .env.example
+DATA_DIR=/path/to/your/data
+NGINX_PORT=9150
+```
+> 详细运维与安全默认值：见 `gobackend/SECURITY.md` 与 `gobackend/P1.5.md`。
+
+### 2. 构建并启动全栈
 ```bash
-docker run -d -p 8002:8002 -v /path/to/your/music:/app/media -v /path/to/your/config:/app/data --restart=always xhongc/music_tag_web:latest
+cd gobackend
+docker compose up -d --build
 ```
-docker-compose.yml 完整配置（Portainer/群晖容器管理器直接复制使用）：
-```yaml
-version: '3'
+首次启动会自动构建 gateway + worker + 7 个 gRPC 音乐源插件（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）+ redis + nginx。
 
-services:
-  music-tag:
-    image: xhongc/music_tag_web:latest
-    container_name: music-tag-web
-    ports:
-      - "8002:8002"
-    volumes:
-      - /path/to/your/music:/app/media:rw
-      - /path/to/your/config:/app/data
-    restart: unless-stopped
-```
-> 提示：`/path/to/your/music` 替换NAS本地无损曲库目录；`/path/to/your/config` 自定义配置持久化目录！
+### 3. 浏览器访问
 
-3. 本地访问地址：127.0.0.1:8002/admin，默认账号密码 admin/admin，上线前修改管理员密码
+`http://localhost:9150/admin`（外层 nginx 暴露在 `NGINX_PORT`，gateway 监听 8001）。
+
+> 默认账号由 `ADMIN_USERS` 决定。如果你看到 "admin/admin" 是在 `ALLOW_INSECURE_DEFAULTS=1` 仅调试模式下，真正上线 前必删该环境变量并设置真实密码。
 
 
 # 📷 V2 版本操作界面 User Interface

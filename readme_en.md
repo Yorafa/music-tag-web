@@ -11,11 +11,13 @@ Music Tag Web is a web-based music metadata editor that can edit song title, alb
 It supports FLAC, APE, WAV, AIFF, WV, TTA, MP3, M4A, OGG, MPC, OPUS, WMA, DSF, MP4 and other audio formats.
 
 <div class="column" align="middle">
-    <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.9-blue.svg" alt=""></a>
+    <a href="https://go.dev/dl/"><img src="https://img.shields.io/badge/Go-1.23-00ADD8.svg" alt=""></a>
    <img src="https://img.shields.io/github/stars/xhongc/music-tag-web?color=informational&label=Stars">
-  <img src="https://img.shields.io/docker/pulls/xhongc/music_tag_web" alt="docker-pull-count" />
+  <img src="https://img.shields.io/badge/V2-backend-Go%20%2B%20gRPC-blueviolet?style=plastic" alt="V2 stack" />
   <img src="https://img.shields.io/badge/platform-amd64/arm64-pink?style=plastic" alt="docker-platform" />
 </div>
+
+> ⚠️ The source repo now tracks the **Go backend** (`gobackend/`, with seven music-source gRPC plugins). The Docker Hub image `xhongc/music_tag_web:latest` is the legacy **Python/Django build** — kept for existing users but no longer maintained. New deployments should use the V2 source-build flow below.
 
 # 🎉 Features
 
@@ -97,43 +99,49 @@ Default account/password: `admin/admin`. Change the default password after login
 
 ![img_7.png](img_7.png)
 
-## V2 Deployment
+## V2 Deployment (recommended — Go + gRPC plugins)
 
-> Compared with V1, V2 changes container port to `8002` and removes `command: /start` in Docker Compose.
+> The V1 Docker Hub image no longer matches this repository (the image is still Django; the repo source has moved to Go). All new deployments should build from source.
 
-### 1. Pull image
-
-```bash
-docker pull xhongc/music_tag_web:latest
-```
-
-### 2. Run container
+### 1. Clone and prepare env
 
 ```bash
-docker run -d -p 8002:8002 -v /path/to/your/music:/app/media -v /path/to/your/config:/app/data --restart=always xhongc/music_tag_web:latest
+git clone https://github.com/xhongc/music-tag-web.git
+cd music-tag-web
 ```
 
-Or:
+Create `.env` at the repo root (or your secrets manager):
 
-```yaml
-version: '3'
+```env
+# REQUIRED — without these the gateway either fails to start (Fail-closed)
+# or every Login returns 401.
+JWT_SECRET=$(openssl rand -base64 48)
+ADMIN_USERS='admin:$(openssl rand -base64 32)'
+CORS_ALLOWED_ORIGINS='http://localhost:9150'
+GRPC_USE_TLS=0                           # set to 1 in production, plus GRPC_TLS_CA_FILE
 
-services:
-  music-tag:
-    image: xhongc/music_tag_web:latest
-    container_name: music-tag-web
-    ports:
-      - "8002:8002"
-    volumes:
-      - /path/to/your/music:/app/media:rw
-      - /path/to/your/config:/app/data
-    restart: unless-stopped
+# Optional / for volume mounts
+MUSIC_DIR=/path/to/your/music
+DATA_DIR=/path/to/your/data
+NGINX_PORT=9150
 ```
 
-Set `/path/to/your/music` to your music directory and `/path/to/your/config` to your config directory.
+> See `gobackend/SECURITY.md` and `gobackend/P1.5.md` for the full operator guide.
 
-3. Visit `127.0.0.1:8002/admin`.
-Default account/password: `admin/admin`. Change the default password after login.
+### 2. Build and bring up the full stack
+
+```bash
+cd gobackend
+docker compose up -d --build
+```
+
+The first run compiles: gateway + worker + 7 gRPC music-source plugins (netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid) + redis + nginx.
+
+### 3. Open the UI
+
+`http://localhost:9150/admin` — the outer nginx listens on `NGINX_PORT`; the gateway itself listens on `8001`.
+
+> Login credentials come from `ADMIN_USERS`. The `admin/admin` fallback only applies when `ALLOW_INSECURE_DEFAULTS=1` (dev only). Production deployments must remove that env var and set a real password.
 
 # 📷 User Interface (V2)
 
