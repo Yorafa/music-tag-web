@@ -24,26 +24,26 @@ Music Tag Web 是一款**开源 self-hosted 自托管 Docker 音乐标签编辑�
 很多自建 Navidrome / Jellyfin 的用户音乐文件存放在远程 NAS、Linux 服务器，本地 MP3Tag、MusicBrainz Picard 仅能操作本机文件，无法远程修改服务器无损曲库元数据。
 Music Tag Web 采用 Docker 容器一键部署，作为影音服务配套边车应用，浏览器远程管理本地私有曲库，是 Homelab 影音爱好者刚需自托管音乐元数据工具。
 
-- 全格式音频文件本地元数据查看、单条/批量编辑、修复 ID3 标签 — `internal/tag/reader.go` + `writer.go` + `handler.BatchUpdateID3` ✅
-- 批量自动刮削音乐标签，自动匹配专辑信息、艺术家、歌词、封面 — 7 个 gRPC 源 fan-out，多 plugin `FetchId3ByTitle` ✅
-- 内置音乐指纹识别，无标签、文件名混乱歌曲自动识别匹配元数据 — `internal/plugin/acoustid/server.go` (fpcalc shell-out) ✅
-- 智能整理本地音乐文件，按艺术家、专辑自动分组，支持自定义多级曲库分类 — `FileBrowser.tsx` sort 已实现；per-artist/album grouping 仅有 sort，UI grouping 与自定义 multi-level 库分类尚未完成 🚧
-- 多维度文件排序：文件名、文件大小、文件更新时间 — `FileBrowser.tsx` sort selector ✅
-- 批量繁简转换，一键转换歌曲、专辑、艺术家标签简体/繁体 — `internal/tasks/matchscore.go:2` 显式 defer：P1 未引入 zhconv。`frontend/src/**` 无 opencc / HanziConvert 调用 ❌
-- 文件名拆分解包，自动从文件名提取缺失歌曲、歌手、专辑信息补全标签 — `frontend/src/api/client.ts::parseFromFilename` 解析在前端；后端 batch write 回写通路未串 🚧
-- 批量文本替换，清理曲库脏标签、乱码、多余特殊字符 — `TagEditor.tsx` 有 Replace 模态框（前端）；后端无对应的 bulk text-replace endpoint 🚧
-- 集成 ffmpeg，支持无损音乐格式批量转换 — `Dockerfile.worker` 仅装 `yt-dlp`，无 ffmpeg 二进制；`internal/tasks/` 无 ffmpeg.go 任务 ❌
-- 整轨 APE/FLAC/CUE 文件自动切割分轨并补全独立标签 — 全仓 grep `cuesheet|splitCue|shntool|cuebreakpoints` 零命中；worker 镜像无 shntool/cuetools ❌
-- 多源音乐元数据接口，多渠道兜底刮削曲库信息 — `internal/plugin/registry.go` + 7 个 gRPC plugin ✅
-- 内嵌歌词翻译，批量双语歌词写入音频文件 — 全部 `internal/plugin/**` + `frontend/src/**` 零翻译/双语调用；aspirational only ❌
-- 完整操作日志记录，追溯标签修改记录 — `internal/db/models.go` 无 OperationLog 表，`frontend/**` 无 operationLog UI 表面；aspirational ❌
-- 批量导出/自定义上传替换专辑封面 — 单条 cover 上传 ✅（`handler/file.go::UploadCover`）；批量 zip 导出未实现 🚧
-- 全响应式移动端 UI，手机浏览器远程访问 NAS 曲库改标签 — `AppShell` + tailwind responsive utilities (`sm:` / `md:`) ✅
-- 适配小爱同学本地曲库播放，直接读取 NAS 无损音乐文件 — `frontend/**` + `internal/**` 全仓 zero hits for `XiaoAI` / 小爱 / 米家 ❌
-- 兼容各类私人网盘挂载曲库在线播放与标签编辑 — nginx 直出 `/media/{path}`，纯 bind-mount；应用代码无需逻辑（只是部署侧 volume 配置）✅
-- 播放数据统计，柱形图、折线图可视化曲库播放记录 — `internal/db/models.go:89` 有 `AccessedDate` 列但 unused (注释 `// reserved for future playback tracking`)；`frontend/src/**` 0 hits for `BarChart` / `LineChart` / `recharts` ❌
+- 全格式音频文件本地元数据查看、单条/批量编辑、修复 ID3 标签 ✅
+- 批量自动刮削音乐标签，自动匹配专辑信息、艺术家、歌词、封面 ✅
+- 内置音乐指纹识别，无标签、文件名混乱歌曲自动识别匹配元数据 ✅
+- 智能整理本地音乐文件，按艺术家、专辑自动分组，支持自定义多级曲库分类 🚧 — `FileBrowser.tsx` 有 sort，但 artist/album grouping UI 与"自定义多级曲库分类"还没串
+- 多维度文件排序：文件名、文件大小、文件更新时间 ✅
+- 批量繁简转换，一键转换歌曲、专辑、艺术家标签简体/繁体 ❌ — `matchscore.go:2` 显式 defer
+- 文件名拆分解包，自动从文件名提取缺失歌曲、歌手、专辑信息补全标签 🚧 — 前端有 `parseFromFilename`，后端 batch 回写未串
+- 批量文本替换，清理曲库脏标签、乱码、多余特殊字符 🚧 — 仅有前端 Replace 模态框，无后端 bulk endpoint
+- 集成 ffmpeg，支持无损音乐格式批量转换 ❌ — worker 镜像只有 yt-dlp，无 ffmpeg binary，无 ffmpeg.go 任务
+- 整轨 APE/FLAC/CUE 文件自动切割分轨并补全独立标签 ❌ — 全仓 zero hits for `cuesheet|splitCue|shntool|cuebreakpoints`
+- 多源音乐元数据接口，多渠道兜底刮削曲库信息 ✅
+- 内嵌歌词翻译，批量双语歌词写入音频文件 ❌
+- 完整操作日志记录，追溯标签修改记录 ❌
+- 批量导出/自定义上传替换专辑封面 🚧 — 单条上传 ✅，批量 zip ❌
+- 全响应式移动端 UI，手机浏览器远程访问 NAS 曲库改标签 ✅
+- 适配小爱同学本地曲库播放，直接读取 NAS 无损音乐文件 ❌ — `XiaoAI` / `小爱` / `米家` 全仓 zero matches
+- 兼容各类私人网盘挂载曲库在线播放与标签编辑 ✅ — 纯 nginx bind-mount，无应用代码
+- 播放数据统计，柱形图、折线图可视化曲库播放记录 ❌ — `AccessedDate` 列 unused，`BarChart` / `LineChart` zero matches
 
-完整状态表 + 每个 feature path:line 引用，见 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md)。
+➡️ 完整 status 表 + 每个 feature 的 `path` 引用见 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md)。
 
 # 🦀 项目演示 Demo
 在线演示地址（体验批量修改音乐标签、自托管Web端操作效果）

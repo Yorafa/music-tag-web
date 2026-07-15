@@ -4,7 +4,7 @@
 **Audience**: self-hosted family media-center use, single trusted user
 **Date**: 2025-06-29
 
-> **Cross-ref**: This doc's Stage B (per-source YAML overrides), Stage C (sandboxed JS plugins via `dop251/goja`), and Stage D (runtime admin UI for plugin lifecycle) are **future-feature pitches** — they are NOT currently in any README claim set. Separately, [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md) § Deferred/aspirational lists README claims that exist *today* but are not implemented in code. The two sets are *conceptually adjacent* (both aspirational, both off the current roadmap) but **distinct**:
+> **Cross-ref**: This doc evaluates the **whole L×P matrix**; only Stage A ships today (its plumbing — `GET /api/sources/`, `useSourceStore`, `SettingsModal`, plugin registry fan-out — is marked ✅ in [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md) §2). Stage B (per-source YAML overrides), Stage C (sandboxed JS plugins via `dop251/goja`), and Stage D (runtime admin UI) are **future-feature pitches** — NOT in any current README claim set. The matrix ❌ set is a separate list of README claims today that aren't built. Pick whichever set matches the question being asked; don't conflate the two when filing issues. § Deferred/aspirational lists README claims that exist *today* but are not implemented in code. The two sets are *conceptually adjacent* (both aspirational, both off the current roadmap) but **distinct**:
 
 ---
 
