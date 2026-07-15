@@ -107,26 +107,18 @@ Default account/password: `admin/admin`. Change the default password after login
 
 ```bash
 git clone https://github.com/xhongc/music-tag-web.git
-cd music-tag-web
+cd music-tag-web/gobackend       # IMPORTANT: .env lives next to docker-compose.yml
+cp .env.example .env             # copy next to the compose file
+# then edit .env and fill in the required values
 ```
 
-Create `.env` at the repo root (or your secrets manager):
+`JWT_SECRET` and `ADMIN_USERS` are **required** (the gateway either fails
+to start or refuses every login without them). Recommended:
+`CORS_ALLOWED_ORIGINS`, `GRPC_USE_TLS`, and the volume/port variables
+`MUSIC_DIR`, `DATA_DIR`, `NGINX_PORT`.
 
-```env
-# REQUIRED — without these the gateway either fails to start (Fail-closed)
-# or every Login returns 401.
-JWT_SECRET=$(openssl rand -base64 48)
-ADMIN_USERS='admin:$(openssl rand -base64 32)'
-CORS_ALLOWED_ORIGINS='http://localhost:9150'
-GRPC_USE_TLS=0                           # set to 1 in production, plus GRPC_TLS_CA_FILE
-
-# Optional / for volume mounts
-MUSIC_DIR=/path/to/your/music
-DATA_DIR=/path/to/your/data
-NGINX_PORT=9150
-```
-
-> See `gobackend/SECURITY.md` and `gobackend/P1.5.md` for the full operator guide.
+> Each variable in `.env.example` has an inline comment; full operator
+> guidance lives in `gobackend/SECURITY.md` and `gobackend/P1.5.md`.
 
 ### 2. Build and bring up the full stack
 

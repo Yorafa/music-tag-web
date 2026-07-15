@@ -27,6 +27,15 @@ services:
     environment:
       GATEWAY_PORT: "8001"
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      # Read via os.Getenv() by handler/auth.go::loadUsers.
+      # Format: user:pass[,user:pass...] (use bcrypt hashes for prod).
+      ADMIN_USERS: ${ADMIN_USERS:-}
+      # Read via os.Getenv() by middleware/cors.go.
+      # Empty list blocks cross-origin requests entirely.
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      # Read via os.Getenv() by plugin/grpc_adapter.go::DialOptions.
+      GRPC_USE_TLS: ${GRPC_USE_TLS:-0}
+      GRPC_TLS_CA_FILE: ${GRPC_TLS_CA_FILE:-}
       MUSIC_DIR: /app/media
       DATA_DIR: /app/data
       DB_DSN: /app/data/db.sqlite3

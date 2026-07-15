@@ -103,19 +103,13 @@ services:
 git clone https://github.com/xhongc/music-tag-web.git
 cd music-tag-web
 ```
-在仓库根目录新建 `.env`（或使用官方 docker secrets）：
-```env
-# 必填 —— 不设这两个，gateway 启动会 Fail-closed 或登陆返回 401
-JWT_SECRET=$(openssl rand -base64 48)
-ADMIN_USERS='admin:$(openssl rand -base64 32)'
-CORS_ALLOWED_ORIGINS='http://localhost:9150'
-GRPC_USE_TLS=0                           # 生产环境设为 1 并提供 GRPC_TLS_CA_FILE
-
-# 可选 / 卷挂载用
-MUSIC_DIR=/path/to/your/music            # macOS/Windows 示例见 .env.example
-DATA_DIR=/path/to/your/data
-NGINX_PORT=9150
+进入 `gobackend/` 并把 `.env.example` 复制成 `.env`（与 `docker-compose.yml` 同目录，这样 Compose 才能读到）：
+```bash
+cd gobackend
+cp .env.example .env
+# 然后编辑 .env，填入必填项
 ```
+`JWT_SECRET` 和 `ADMIN_USERS` 是必填（不设 / 设为占位符 → gateway 启动 Fail-closed 或登陆返回 401）；强烈推荐同时配置 `CORS_ALLOWED_ORIGINS`、`GRPC_USE_TLS`、`MUSIC_DIR`、`DATA_DIR`、`NGINX_PORT`。模板里每项都有详细注释。
 > 详细运维与安全默认值：见 `gobackend/SECURITY.md` 与 `gobackend/P1.5.md`。
 
 ### 2. 构建并启动全栈
