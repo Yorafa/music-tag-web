@@ -28,3 +28,10 @@ worker
 *.exe
 *.test
 *.out
+
+# Django-era static assets (defensive). The Go backend never serves
+# from /admin/ or /rest_framework/. Earlier commits deleted their
+# contents; these lines stop a future `git add -A` from re-pulling
+# them in if a Django-era toolchain is run on the host.
+static/admin/
+static/rest_framework/
