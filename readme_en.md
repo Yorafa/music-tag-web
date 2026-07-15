@@ -124,6 +124,9 @@ to start or refuses every login without them). Recommended:
 
 ```bash
 cd gobackend
+# First run only — make sure the local music / data dirs exist (defaults
+# ./music and ./data are RELATIVE TO THE COMPOSE FILE):
+mkdir -p ./music ./data
 docker compose up -d --build
 ```
 
