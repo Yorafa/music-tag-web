@@ -20,3 +20,11 @@ local_settings.py
 db.sqlite3
 /media/
 /build/
+
+# Go build artifacts (gobackend)
+gobackend/bin/
+gobackend/gateway
+gobackend/worker
+*.exe
+*.test
+*.out
