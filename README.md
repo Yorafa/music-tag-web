@@ -96,16 +96,16 @@ services:
 
 > V1 镜像现在跟仓库源码不一致（镜像还是 Django，代码已经迁到 Go）。所有新部署请走源码构建。
 
-> 🪜 **从老版本升级才看这一步**（全新部署跳过）：新 compose 默认路径已改到仓库根，裸 `git pull && docker compose up -d` 会让 sqlite 重建、`./music` 与 `./data` 目录不存在而启动失败。这 4 行 mv 在任何时机都会成功 — `gobackend/{.env,data,music}` 即使在 git 不再跟踪的情况下依然写在 NAS 上。
+> 🪜 **从老版本升级再看这一步**（全新部署跳过）。新 compose 默认路径已改到仓库根，裸 `git pull && docker compose up -d` 会让 sqlite 重建、`./music` / `./data` 目录不存在而启动失败。这 4 行 mv 在任何时机都会成功 — `gobackend/{.env,data,music}` 即使在 git 不再跟踪的情况下也仍写在 NAS 上。
 >
-> 如果你的老 `.env` 把 `MUSIC_DIR` 指向外部挂载（Synology `/volume1/music`、SMB `/mnt/nas/music`、NFS 等）——**跳过第 3 行 `mv gobackend/music`**；只要新 `./env` 里 `MUSIC_DIR=` 还指同一个外部路径即可。
+> 若你的老 `.env` 把 `MUSIC_DIR` 指向 NAS 外部 mount（Synology `/volume1/music`、SMB `/mnt/nas/music`、NFS 等），或你之前用了其他宿主机 bind mount 穿进 `gobackend/music` —— 跳过第 3 行；只要新 `./env` 里 `MUSIC_DIR=` 还指同一个外部路径即可。
 >
-> 如果根下已经存在 `./.env`（来自 `cp .env.example .env`）或 `./data` / `./music`（之前的空 `mkdir`）——先 `cp -r ./.env ./.env.bak` 备份再 mv，避免静默覆盖。
+> 下面 bash 块先用 `[ -f X ] && cp -r X X.bak` 护栏备份，再 mv；这样即使根下已有 `.env.example`-derived `.env` 或空 `./data` 也不会静默覆盖。`rmdir` 本身非空拒绝，天然护栏。
 > ```bash
-> mv gobackend/.env  ./.env   # 老 .env 迁过来；若 ./.env 已存在先备份
-> mv gobackend/data  ./data   # sqlite + 上传封面；若 ./data 已存在先备份
-> mv gobackend/music ./music  # 仅当你之前用 ./gobackend/music 当本地 bind 时才需要；外部挂载跳过
-> rmdir gobackend             # 仅在确认为空时才删（rmdir 本身会护栏，非空会拒绝）
+> [ -f ./.env  ] && cp -r ./.env  ./.env.bak;  mv gobackend/.env  ./.env
+> [ -d ./data  ] && cp -r ./data  ./data.bak;  mv gobackend/data  ./data
+> [ -d ./music ] && cp -r ./music ./music.bak; mv gobackend/music ./music   # 仅当你之前用 ./gobackend/music 当本地 bind 时才需要；外部 mount 跳过
+> rmdir gobackend   # 非空拒绝
 > ```
 > 之后 `docker compose up -d --build`。`${MUSIC_DIR}` / `${DATA_DIR}` 默认仍是 `./music` / `./data`，搬完后语义不变。
 
