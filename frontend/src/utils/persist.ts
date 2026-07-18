@@ -18,6 +18,18 @@ export function writeString(key: string, value: string): void {
   }
 }
 
+/** Remove a key entirely (vs. writeString(key, '') which leaves a tombstone).
+ *  Pair with readString's `null`-on-absent return so logout/init round-trip
+ *  is symmetric: empty key ⟶ `null`, set ⟶ value, remove ⟶ `null`. */
+export function removeString(key: string): void {
+  if (!isBrowser()) return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    /* storage unavailable — ignore */
+  }
+}
+
 export function readJson<T>(key: string): T | null {
   const raw = readString(key);
   if (raw === null) return null;

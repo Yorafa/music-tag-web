@@ -9,17 +9,19 @@ const api = axios.create({
   },
 });
 
-// Request interceptor: pull the JWT access token from in-memory store and
+// Request interceptor: pull the JWT access token from the auth store and
 // emit it as 'Authorization: JWT <token>' — the prefix the Go gateway
 // middleware/auth.go::JWTAuth recognizes (alongside 'Bearer ').
 //
 // We deliberately do NOT read or write any cookie here. The Go Login
 // handler returns the token in JSON only (handler/auth.go::Login) and
 // never c.SetCookie(AUTHORIZATION,…), so a cookie-based flow would have
-// nothing to read. Holding the token in memory also narrows XSS
-// exposure vs. a long-lived document.cookie entry — page reload
-// re-prompts for login, which is acceptable for a self-hosted admin
-// tool.
+// nothing to read. The token is instead persisted to localStorage by
+// useAuthStore (see store/useAuthStore.ts) so a page reload keeps the
+// session. JWT TTL is 7 days server-side (handler/auth.go::generateJWT),
+// so storage exposure is bounded to that window — acceptable for a
+// self-hosted admin tool. The HttpOnly-cookie alternative is a backend
+// change left out of this scope.
 api.interceptors.request.use((config) => {
   const token = useAuthStore.getState().accessToken;
   if (token) {
@@ -41,11 +43,6 @@ api.interceptors.response.use(
 
 export async function getFileList(filePath: string, sortedFields: string[] = []) {
   const { data } = await api.post('file_list/', { file_path: filePath, sorted_fields: sortedFields });
-  return data;
-}
-
-export async function getMusicId3(filePath: string, fileName: string) {
-  const { data } = await api.post('music_id3/', { file_path: filePath, file_name: fileName });
   return data;
 }
 

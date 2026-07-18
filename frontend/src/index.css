@@ -39,6 +39,19 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* surface-* — explicit layering tokens (DESIGN.md §Visual).
+     Replaces the bg-card/40·30·20 opacity stack with three distinct
+     surfaces. layer-1 = main work area; layer-2 = cards / row hover;
+     layer-3 = dialog / popover / top-most surface.
+     Light theme: warmer off-white base instead of clinical pure white. */
+  --surface-1: oklch(0.99 0.001 60);
+  --surface-1-foreground: oklch(0.145 0 0);
+  --surface-2: oklch(0.972 0.002 60);
+  --surface-2-foreground: oklch(0.165 0 0);
+  --surface-3: oklch(0.995 0 0);
+  --surface-3-foreground: oklch(0.125 0 0);
+  --surface-border: oklch(0.902 0.003 60);
 }
 
 * {
@@ -106,6 +119,13 @@ body {
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
+  --color-surface-1: var(--surface-1);
+  --color-surface-1-foreground: var(--surface-1-foreground);
+  --color-surface-2: var(--surface-2);
+  --color-surface-2-foreground: var(--surface-2-foreground);
+  --color-surface-3: var(--surface-3);
+  --color-surface-3-foreground: var(--surface-3-foreground);
+  --color-surface-border: var(--surface-border);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -147,6 +167,18 @@ body {
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  /* surface-* — dark theme: deeper near-black base; structured layering
+     visible against the deeper base. layer-1 (main area) is the darkest;
+     each upward layer adds a touch of lightness so borders and hover
+     surfaces read distinctly. */
+  --surface-1: oklch(0.165 0.004 265);
+  --surface-1-foreground: oklch(0.985 0 0);
+  --surface-2: oklch(0.215 0.005 265);
+  --surface-2-foreground: oklch(0.985 0 0);
+  --surface-3: oklch(0.255 0.006 265);
+  --surface-3-foreground: oklch(0.985 0 0);
+  --surface-border: oklch(1 0 0 / 10%);
 }
 
 @layer base {
