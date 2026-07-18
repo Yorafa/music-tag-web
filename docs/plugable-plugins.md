@@ -1,245 +1,217 @@
-# Pluggable Plugin Architecture — Design Doc
+# Pluggable Plugin Architecture — 设计文档
 
-**Status**: Design (Stage A pending implementation)
-**Audience**: self-hosted family media-center use, single trusted user
-**Date**: 2025-06-29
+**Status**：Design（Stage A 待实施）
+**Audience**：self-hosted 家庭影音中心用例，单一可信用户
+**Date**：2025-06-29
 
-> **Cross-ref**: This doc evaluates the **whole L×P matrix**; only Stage A ships today (its plumbing — `GET /api/sources/`, `useSourceStore`, `SettingsModal`, plugin registry fan-out — is marked ✅ in [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md) §2). Stage B (per-source YAML overrides), Stage C (sandboxed JS plugins via `dop251/goja`), and Stage D (runtime admin UI) are **future-feature pitches** — NOT in any current README claim set. The matrix ❌ set is a separate list of README claims today that aren't built. Pick whichever set matches the question being asked; don't conflate the two when filing issues. § Deferred/aspirational lists README claims that exist *today* but are not implemented in code. The two sets are *conceptually adjacent* (both aspirational, both off the current roadmap) but **distinct**:
+> **Cross-ref**：本文评估的是**整张 L × P 矩阵**；目前真正落地的只有 Stage A（其 plumbing——`GET /api/sources/`、`useSourceStore`、`SettingsModal`、插件注册表 fan-out——在 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md) §2 中标为 ✅）。Stage B（per-source YAML 覆写）、Stage C（通过 `dop251/goja` 跑沙箱 JS plugin）、Stage D（runtime admin UI）属于 **future-feature pitches**——不在任何当前 README claim 集合内。`FEATURE-COVERAGE.md` 里 ❌ 的集合是另一份列表（README 今日宣称但代码里没做的项），与本表的 aspirational 项**概念上相邻**但**集合上不同**：本表讲"插件粒度未来长什么样"，矩阵讲"README 今天的宣称哪些没做"。按你问的问题选对应的文档，不要把两者混在一起 filing issue。§ Deferred/aspirational 列出的是**今天** README 已宣称但没实现的项。两者都 aspirational、都脱离当前 roadmap，但**集合层面是不同的**：
 
 ---
 
-## 1. Goal & non-goals
+## 1. 目标与非目标
 
-**Goal**: A pluggable plugin system for "music sources" (search + preview + lookup) and
-"tag sources" (metadata + lyrics) that allows adding a new source **without touching frontend
-code**, and ultimately without requiring a Go toolchain.
+**目标**：让"music sources"（搜索 + 预览 + 查找）和"tag sources"（元数据 + 歌词）一套可插拔插件体系，新增一个 source 时**不动前端代码**；最终的目标是让用户根本不需要装 Go toolchain 也能写插件。
 
-**Non-goals**:
-- Public plugin marketplace or hosted registry
-- Sandboxing arbitrary untrusted third-party code (user is trusted, single-tenant)
-- Replacing backend — pure-frontend is infeasible for the major CN music platforms
+**非目标**：
+- 公开 plugin marketplace 或托管 registry
+- 对不可信第三方代码做严格 sandboxing（用户可信、单租户）
+- 取代后端——对国内主流音乐平台来说纯前端不可行
 
-## 2. Hard facts that shape this design
+## 2. 决定本设计方向的硬事实
 
-Web research (2025-06) confirms:
+2025-06 的 web 调研确认：
 
-| Source | CORS open? | Stable browser-only lib? | Verdict |
+| Source | CORS 开放？ | 浏览器侧是否有可用稳定 lib？ | 结论 |
 |---|---|---|---|
-| NetEase | ❌ | ❌ (WEAPI AES obfuscation) | Backend required |
-| QQ Music | ❌ | ❌ (g_tk signed cookies) | Backend required |
-| Kugou | ❌ | ❌ | Backend required |
-| Kuwo | ❌ | ❌ | Backend required |
-| Migu | ❌ | ❌ | Backend required |
-| MusicBrainz | ✅ | ✅ | Could be browser-only |
-| AcoustID | ✅ | ✅ | Could be browser-only |
-| YouTube | n/a | n/a | iframe-only playback |
+| 网易云 | ❌ | ❌（WEAPI AES 混淆） | 需要后端 |
+| QQ 音乐 | ❌ | ❌（g_tk 签名 cookie） | 需要后端 |
+| 酷狗 | ❌ | ❌ | 需要后端 |
+| 酷我 | ❌ | ❌ | 需要后端 |
+| 咪咕 | ❌ | ❌ | 需要后端 |
+| MusicBrainz | ✅ | ✅ | 浏览器侧可行 |
+| AcoustID | ✅ | ✅ | 浏览器侧可行 |
+| YouTube | — | — | 仅 iframe 播放 |
 
-**Implication**: Pure-frontend plugin architecture is structurally blocked for 5 of 7 sources.
-A backend component is non-negotiable; the design axis is **how pluggable the backend exposes
-its plugins to the frontend**.
+**推论**：5 / 7 的 source 从结构上就阻断了"纯前端插件"路线。后端是**不可妥协**的；设计轴就从"插件化"变成"后端把它已经有的 plugins 暴露给前端时，到底多可插拔"。
 
-## 3. The customizability spectrum
+## 3. 可定制性的 2 维空间
 
-We evaluated a 2-axis space:
+我们沿着两条轴评估：
 
-- **L** = customizability level (what can user change)
-- **P** = platform shape (where does plugin code live / run)
+- **L** = customizability level（用户能改什么）
+- **P** = platform shape（插件代码住在哪里 / 在哪里跑）
 
-|             | P1 pure-frontend | P2 backend signing-proxy | P3 compile-time go plugin | P4 Go `.so` plugin                     | P5 WASM serverless          |
+|             | P1 纯前端 | P2 后端 signing-proxy | P3 编译期 go plugin | P4 Go `.so` plugin                     | P5 WASM serverless          |
 | ----------- | ---------------- | ------------------------ | ------------------------ | ------------------------------------- | --------------------------- |
-| **L0** built-in only | 🚫 CORS | ✅ baseline | ✅ current | ✅ | ✅ |
-| **L1** per-source API key / URL override | 🚫 | ✅ trivial | ✅ | ✅ | ✅ |
-| **L2** JSON URL-template extractor | 🚫 | 🚫 5 encrypted sources fail | ✅ | ✅ | ✅ |
-| **L3** user-authored JS plugin | 🚫 | ✅ sandbox via goja | ✅ | ✅ | ✅ |
-| **L4** user-authored Go plugin | 🚫 | ✅ | ✅ | ⚠️ Linux-only dep hell | ✅ |
-| **L5** user-authored WASM plugin | 🚫 | ✅ | ✅ | ✅ | ⚠️ asks WASM toolchain |
+| **L0** 仅内置 | 🚫 CORS | ✅  baseline | ✅ 当前 | ✅ | ✅ |
+| **L1** per-source API key / URL 覆写 | 🚫 | ✅ trivial | ✅ | ✅ | ✅ |
+| **L2** JSON URL-template extractor | 🚫 | 🚫 5 个加密 source 失败 | ✅ | ✅ | ✅ |
+| **L3** 用户自写 JS plugin | 🚫 | ✅ goja sandbox | ✅ | ✅ | ✅ |
+| **L4** 用户自写 Go plugin | 🚫 | ✅ | ✅ | ⚠️ 仅 Linux 且依赖链噩梦 | ✅ |
+| **L5** 用户自写 WASM plugin | 🚫 | ✅ | ✅ | ✅ | ⚠️ 需要 WASM 工具链 |
 
-🚫 = blocked.  ✅ = viable.  ⚠️ = fragility / heavy lift.
+🚫 = 阻塞。✅ = 可行。⚠️ = 易碎 / 工程量大。
 
-**Recommended path**: L3 × P2 (sandboxed JS plugins executing inside the Go backend), reached
-through:
+**建议路径**：L3 × P2（在 Go 后端里跑沙箱化 JS plugin），分阶段实现：
 
-- **Stage A** (today): L0 + P2 — expose existing built-in plugins to the frontend with a
-  capability-aware dynamic source list.
-- **Stage B** (later): L1 — per-source config override file (`data/sources/*.yaml`).
-- **Stage C** (later): L3 — user-authored JS plugins executed in `dop251/goja` runtime.
+- **Stage A**（今日）：L0 + P2——给前端暴露现有的内置 plugins，使用 capability-aware 的动态 source 列表
+- **Stage B**（后续）：L1——每 source 一份 config override 文件（`data/sources/*.yaml`）
+- **Stage C**（后续）：L3——用户自写 JS plugin，在 `dop251/goja` runtime 里跑
 
-This doc covers **Stage A** in full detail. Stages B/C sketched at the end.
+本文档对 **Stage A** 做了完整描述。B / C 在末尾勾勒。
 
 ---
 
-## 4. Scope of Stage A
+## 4. Stage A 的范围
 
-### 4.1 Why Stage A and not larger steps
+### 4.1 为什么停在 Stage A
 
-Stage A intentionally stops at *"expose existing built-in plugins to the frontend"*:
+Stage A 故意停在"把内置 plugins 暴露给前端"这一步：
 
-1. Stage A severs the hardcoded coupling between frontend (hardcoded source strings in
-   `SearchPanel.tsx`, `SourcePickerModal.tsx`) and backend (hardcoded `sourcesDefault` slice in
-   `handler/tag.go`).
-2. Once Stage A is in, *adding any new source* still requires Go code, but **requires zero
-   frontend changes** — the new source will appear automatically because the frontend renders
-   whatever list the backend returns.
-3. Stage A is **infrastructure** for both Stage B (per-source config) and Stage C (user-defined
-   JS plugins), so it earns its keep even if we stop here.
+1. Stage A 切断前端（`SearchPanel.tsx`、`SourcePickerModal.tsx` 里硬编码的 source 字符串）和后端（`handler/tag.go` 里硬编码的 `sourcesDefault` 切片）之间的强耦合。
+2. 一旦 Stage A 上线，**新增任何 source 仍然要写 Go 代码**，但**不再需要任何前端改动**——新 source 会自动出现，因为前端只渲染后端返回的那份列表。
+3. Stage A 是 **Stage B**（per-source config）和 **Stage C**（用户自写 JS plugins）的底座，所以独立停在 Stage A 也已经回本。
 
-### 4.2 Storage policy (locked)
+### 4.2 存储策略（已锁定）
 
-Layering of source-of-truth (single trusted user, self-host):
+单一可信用户、self-host 下"源真相"的层次：
 
-| Layer                   | Stores                                                              | Lifetime             |
-| ----------------------- | ------------------------------------------------------------------- | -------------------- |
-| Backend registry        | registered `TagSource` + `DownloadSource` instances                 | process, init-time   |
-| Backend `GET /sources` | union of registry metadata                                          | per request          |
-| Frontend localstorage  | `app.enabledSources: string[]` (set of currently-enabled source keys) | browser-local        |
-| Frontend search request | `enabled_sources: string[]` in body; `null` = all-on                | per request          |
-| Backend persistence     | **none**                                                            | —                    |
+| 层 | 内容 | 生命周期 |
+| --- | --- | --- |
+| 后端注册表 | 已注册的 `TagSource` + `DownloadSource` 实例 | 进程，启动期 |
+| 后端 `GET /sources` | 注册表的元信息并集 | 每次请求 |
+| 前端 localstorage | `app.enabledSources: string[]`（当前启用的 source key 集合） | 浏览器本地 |
+| 前端搜索请求 | 请求体内 `enabled_sources: string[]`；为 `null` 表示全部启用 | 每次请求 |
+| 后端持久化 | **无** | — |
 
-**Default behavior** when `localStorage["app.enabledSources"]` is missing or empty:
-- Treat as **all-on** (no filter sent in search body).
-- Backend `SearchMusic` fans out across **every** registered `TagSource`, overriding the hardcoded
-  legacy `sourcesDefault`.
-- This replaces the current hardcoded preference for `qmusic,netease,kugou,migu,musicbrainz`.
+当 `localStorage["app.enabledSources"]` 缺失或为空时的**默认行为**：
+- 视为**全部启用**（请求体不携带 filter）
+- 后端 `SearchMusic` 对**每一个**注册的 `TagSource` 都 fan-out，覆盖掉 legacy 里硬编码的 `qmusic,netease,kugou,migu,musicbrainz`
+- 这一步取代当前 `sourcesDefault` 的硬编码默认序
 
-### 4.3 API contract
+### 4.3 API 契约
 
-**Endpoint**: `GET /api/sources/`
+**Endpoint**：`GET /api/sources/`
 
-**Auth**: behind the existing `authed` Gin router group (same as other endpoints).
+**鉴权**：放在既有的 `authed` Gin router group 下（与其他 endpoint 一致）
 
-**Response**: JSON array, ordered. Each element:
+**Response**：JSON 数组，按顺序。每个元素：
 
 ```jsonc
 {
-  "name":         "netease",                       // plugin key (used as identifier)
-  "displayName":  "网易云音乐",                     // human label, may contain CJK
+  "name":         "netease",                       // plugin key（作为 identifier）
+  "displayName":  "网易云音乐",                     // 人类可读 label，可含 CJK
   "kind":         "tag",                          // "tag" | "download"
   "searchable":   true,                           // SupportsSearch()
   "lyric":        true,                           // SupportsLyric()
   "preview":      false,                          // future: SupportsPreview()
-  "defaultOn":    true                            // server advisory; frontend honors user toggle
+  "defaultOn":    true                            // server advisory；前端尊重用户 toggle
 }
 ```
 
-**Search request**: existing `POST /api/search_music/` body gains one optional field:
+**Search request**：既有的 `POST /api/search_music/` 请求体多了一个可选字段：
 
 ```
-"sources": ["netease", "qmusic"]   // optional; absent = all-on
+"sources": ["netease", "qmusic"]   // 可选；缺失 = 全部启用
 ```
 
-**Backward compatibility**: existing callers that omit `sources` keep working; backend interprets
-omission as "fan out to all registered tag sources".
+**向后兼容**：省略 `sources` 的旧调用方不变；后端把省略视为"fan-out 到所有已注册 tag sources"。
 
 ---
 
-## 5. Concrete file-level change list
+## 5. 文件级变更清单
 
-### 5.1 Backend
+### 5.1 后端
 
-| File | Change | Lines (approx) |
+| 文件 | 变更 | 行数（约） |
 |---|---|---|
-| `internal/gateway/handler/source.go` | **new file**: define `SourceInfo` struct + `ListSources(c)` handler that iterates `plugin.ListTagSources()` + `plugin.ListDownloadSources()` | +60 |
-| `internal/gateway/router/router.go` | mount `authed.GET("/sources/", handler.ListSources)` | +1 |
-| `internal/gateway/handler/tag.go` | delete `sourcesDefault` constant; `SearchMusic` accepts optional `sources []string` field; empty/missing → fan out to all registry entries | −15 / +10 |
+| `internal/gateway/handler/source.go` | **新增文件**：定义 `SourceInfo` 结构 + `ListSources(c)` handler，遍历 `plugin.ListTagSources()` + `plugin.ListDownloadSources()` | +60 |
+| `internal/gateway/router/router.go` | 挂载 `authed.GET("/sources/", handler.ListSources)` | +1 |
+| `internal/gateway/handler/tag.go` | 删除 `sourcesDefault` 常量；`SearchMusic` 接受可选 `sources []string` 字段；空 / 缺失 → fan-out 到所有注册项 | −15 / +10 |
 
-Total backend delta: ~75 lines, additive, no interface changes, no proto regen required.
+后端总增量：约 75 行，**加法**，不改动 interface，不需要重生成 proto。
 
-### 5.2 Frontend
+### 5.2 前端
 
-| File | Change | Lines (approx) |
+| 文件 | 变更 | 行数（约） |
 |---|---|---|
-| `frontend/src/types/index.ts` | add `SourceInfo` TypeScript type | +12 |
-| `frontend/src/api/client.ts` | add `getSources(): Promise<SourceInfo[]>` API call | +8 |
-| `frontend/src/store/useSourceStore.ts` | **new file**: Zustand store; `sources`, `enabled: Set<string>`, `loadSources()`, `toggle(name)`, `persist` writes to `localStorage["app.enabledSources"]` | +60 |
-| `frontend/src/components/search/SearchPanel.tsx` | delete hardcoded `SEARCH_SOURCES` / `SOURCE_COLORS` / `VALID_SOURCES`; mount `useSourceStore.loadSources()`; thread `enabled` set into `searchMusic()` request body | −40 / +30 |
-| `frontend/src/components/search/SourcePickerModal.tsx` | replace hardcoded chip list with sources read from store; respect `kind` field to render tag vs download rows | −20 / +20 |
-| `frontend/src/components/settings/` (new folder) | new minimal page: per-source toggle row with `searchable` / `lyric` badges | +50 |
+| `frontend/src/types/index.ts` | 新增 `SourceInfo` TypeScript 类型 | +12 |
+| `frontend/src/api/client.ts` | 新增 `getSources(): Promise<SourceInfo[]>` API 调用 | +8 |
+| `frontend/src/store/useSourceStore.ts` | **新增文件**：Zustand store，含 `sources`、`enabled: Set<string>`、`loadSources()`、`toggle(name)`；`persist` 写到 `localStorage["app.enabledSources"]` | +60 |
+| `frontend/src/components/search/SearchPanel.tsx` | 删除硬编码 `SEARCH_SOURCES` / `SOURCE_COLORS` / `VALID_SOURCES`；挂 `useSourceStore.loadSources()`；把 `enabled` 集合透传进 `searchMusic()` 请求体 | −40 / +30 |
+| `frontend/src/components/search/SourcePickerModal.tsx` | 硬编码 chip 列表换成从 store 读取；按 `kind` 字段分别渲染 tag 行 / download 行 | −20 / +20 |
+| `frontend/src/components/settings/` （新建目录） | 一个极简的新页面：per-source toggle 行 + `searchable` / `lyric` 角标 | +50 |
 
-Total frontend delta: ~200 lines (mostly bookkeeping).
+前端总增量：约 200 行（大多数是表单记账）。
 
-### 5.3 Verification commands
+### 5.3 验证命令
 
 ```sh
-# Backend
-go build ./...                             # should stay clean
-go vet ./...                               # new endpoint type-checks
-# Manual: curl http://localhost:8000/api/sources/  → list of 7 tag + 1 download plugin
+# 后端
+go build ./...                             # 应保持 clean
+go vet ./...                               # 新 endpoint 校验通过
+# 手动：curl http://localhost:8000/api/sources/ → 7 个 tag + 1 个 download plugin
 
-# Frontend
-cd frontend && npx tsc --noEmit -p tsconfig.app.json      # should stay clean
-cd frontend && npx eslint src/                           # new code passes lint
-# Manual: open browser, mount SourcePickerModal, see chip count == backend source count
+# 前端
+cd frontend && npx tsc --noEmit -p tsconfig.app.json      # 应保持 clean
+cd frontend && npx eslint src/                           # 新代码过 lint
+# 手动：浏览器打开，`SourcePickerModal` 挂载后 chip 数 == 后端 source 数
 ```
 
 ---
 
-## 6. Acceptance criteria
+## 6. 验收标准
 
-After Stage A ships:
+Stage A 落地后：
 
-1. ✅ GET /api/sources returns ≥7 entries (5 tag sources + acoustics + 1 download source).
-2. ✅ Removing `netease` from localStorage `app.enabledSources` and refreshing the page
-   hides the "网易云音乐" chip in `SourcePickerModal`.
-3. ✅ With empty `app.enabledSources`, search fans out to **all** registered plugins (no
-   `sources` field in request, backend default = full fan-out).
-4. ✅ Hardcoded `sourcesDefault` constant is gone from `handler/tag.go`.
-5. ⚠️ Adding a new built-in plugin (e.g., writing `internal/plugin/example/server.go` and
-   registering it via `init()`) appears automatically in `SourcePickerModal` after a gateway
-   restart — confirming "add-source = frontend-zero-edit" goal.
+1. ✅ `GET /api/sources` 返回 ≥ 7 个 entry（5 个 tag source + acoustics + 1 个 download source）
+2. ✅ 从 `localStorage` 的 `app.enabledSources` 删掉 `netease`，刷新后 `SourcePickerModal` 看不到"网易云音乐" chip
+3. ✅ `app.enabledSources` 为空时，search fan-out 到**所有**注册 plugin（请求体不带 `sources`，后端默认 = 全 fan-out）
+4. ✅ 硬编码 `sourcesDefault` 常量已从 `handler/tag.go` 中消失
+5. ⚠️ 新增一个内置 plugin（如写 `internal/plugin/example/server.go` 并通过 `init()` 注册），重启 gateway 后**自动**出现在 `SourcePickerModal`——证明"加 source = frontend 零改动"目标成立
 
 ---
 
-## 7. Failure modes & mitigations
+## 7. 失败模式与缓解
 
-| Failure | Mitigation |
+| 失败 | 缓解 |
 |---|---|
-| Plugin gRPC client cold-starts → first multi-source search is slow (~5s) | Document; warm pool deferred to Stage C |
-| User disables all sources → search returns empty | UX: empty state with "all sources disabled" hint linking to Settings |
-| localStorage cleared → all sources re-enabled (back to default) | Acceptable (self-host, single user); document in Settings UI |
-| Future plugin adds a third `kind` ("album-art", "playlist") | Backend `kind` is `string`, not enum — wire-compatible |
+| Plugin gRPC client 冷启动 → 第一次多源 search 慢（~5s） | 文档里写明；warm pool 推迟到 Stage C |
+| 用户禁用了所有 source → search 返回空 | UX：空 state + "all sources disabled" 提示，跳到 Settings |
+| localStorage 被清 → 所有 source 恢复默认（全启） | 可接受（self-host、单一用户）；在 Settings UI 文档化 |
+| 未来 plugin 引入第三种 `kind`（"album-art"、"playlist"） | 后端 `kind` 是 `string`、不是枚举——wire-compatible |
 
 ---
 
-## 8. Future stages
+## 8. 后续 stage
 
-### Stage B — per-source config override (L1)
+### Stage B — per-source config 覆写（L1）
 
-`data/sources/<name>.yaml` per source: API key overrides, region URL overrides, default-on flag.
-Loaded by gateway at startup, **overrides** plugin constructor values. Self-host users edit
-these by hand. ~½ day.
+`data/sources/<name>.yaml`：API key 覆写、region URL 覆写、default-on 标志。gateway 启动时加载，**覆盖** plugin 构造方法的值。self-host 用户手编辑。约 ½ 天工作量。
 
-### Stage C — user-authored JS plugins (L3)
+### Stage C — 用户自写 JS plugin（L3）
 
-`data/source_plugins/<name>.js` per user source. JS exports `meta`, `search(ctx, q, page, limit)`,
-`fetchId3ByTitle(ctx, title)`, `fetchLyric(ctx, id)`. Backend uses `github.com/dop251/goja`
-runtime + injected `fetch` / `crypto` / `console` / `setTimeout` bridge → calls user code
-through Go's http.Client (CORS handled at gateway boundary). 5s per-call timeout. ~1-2 weeks.
+`data/source_plugins/<name>.js`，每个 user source 一份。JS 导出 `meta`、`search(ctx, q, page, limit)`、`fetchId3ByTitle(ctx, title)`、`fetchLyric(ctx, id)`。后端用 `github.com/dop251/goja` runtime + 注入的 `fetch` / `crypto` / `console` / `setTimeout` bridge → 通过 Go 的 http.Client 调用户代码（CORS 在 gateway 边界统一处理）。每调用 5s timeout。约 1-2 周工作量。
 
 ### Stage D — runtime admin UI for plugin lifecycle
 
-Web UI to enable/disable/edit/test plugins without restart. ~½ day.
+Web UI 来启 / 停 / 改 / 测 plugin，无需重启。约 ½ 天工作量。
 
 ---
 
-## 9. Open questions (decide later)
+## 9. 未决问题（稍后再决定）
 
-- **Stage C security budget**: trusted family user → no restrictive sandbox needed; but should
-  we still timeout / cap memory per plugin? Lean: yes, 5s + 256MB cap.
-- **Per-source logging**: should Stage A expose per-source health stats in `GET /api/sources`?
-  Lean: defer to Stage D.
-- **MusicBrainz / AcoustID browser-only path**: since CORS is open, could we run them in the
-  frontend at the registry level and skip the backend for those two specifically? Lean: no
-  — keeps the architecture uniform; revisit later.
+- **Stage C 安全预算**：可信家庭用户 → 无需严格沙箱；但我们仍然每个 plugin 加 5s timeout + 256MB 内存上限吗？倾向：是。
+- **per-source logging**：Stage A 是否在 `GET /api/sources` 中暴露每个 source 的健康状态？倾向：推迟到 Stage D。
+- **MusicBrainz / AcoustID 浏览器侧直达**：既然 CORS 开放，能否让它们在注册表层直接走前端、跳过这两个 source 的后端路径？倾向：否——保持架构一致性；之后再说。
 
 ---
 
-## 10. Definition of Done for Stage A
+## 10. Stage A 的 Definition of Done
 
-- [x] This doc written + reviewed.
-- [ ] `docs/plugable-plugins.md` committed.
-- [ ] Backend `handler/source.go` + router + tag.go edits merged → `go build` clean.
-- [ ] Frontend `useSourceStore.ts` + `SourcePickerModal` + `SearchPanel` + Settings page merged
-      → `tsc` clean.
-- [ ] Manual e2e: add `sources/netease.js` placeholder (Stage C scaffolding) appears as disabled
-      chip in UI without frontend rebuild.
-- [ ] `sourcesDefault` constant deleted.
+- [x] 本文档编写 + review
+- [ ] `docs/plugable-plugins.md` 已提交
+- [ ] 后端 `handler/source.go` + router + tag.go 改动合并 → `go build` clean
+- [ ] 前端 `useSourceStore.ts` + `SourcePickerModal` + `SearchPanel` + Settings 页面合并 → `tsc` clean
+- [ ] Manual e2e：放一个 `sources/netease.js` 占位（Stage C 脚手架）后，前端**无需 rebuild**就在 UI 上显现为 disabled chip
+- [ ] `sourcesDefault` 常量已删除

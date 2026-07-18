@@ -2,12 +2,12 @@
 
 ### Issue tracker
 
-Issues live as markdown files under `.scratch/<feature-slug>/`. PRs are not a request surface for this repo. See [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
+Issue 通过 markdown 文件落在 `.scratch/<feature-slug>/` 下。PR 不作为本仓库的请求面，详见 [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md)。
 
 ### Triage labels
 
-The five canonical roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) appear as `Status:` lines in each issue file. See [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md).
+五种 canonical 角色（`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`）以 `Status:` 行出现在每个 issue 文件中。详见 [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md)。
 
 ### Domain docs
 
-This is a multi-context repo — a `CONTEXT-MAP.md` at the root points at per-context `CONTEXT.md` files (the breakdown is decided by `/domain-modeling` once terms get resolved). See [`docs/agents/domain.md`](docs/agents/domain.md).
+本仓库跨多个 context，根目录的 `CONTEXT-MAP.md` 指向 per-context `CONTEXT.md`（一旦术语对齐，由 `/domain-modeling` 决定如何拆分）。详见 [`docs/agents/domain.md`](docs/agents/domain.md)。

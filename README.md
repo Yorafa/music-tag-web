@@ -1,195 +1,419 @@
 ![](img_6.jpg)
 
-# 🚀 Music Tag Web | Self-hosted Docker 音乐刮削器 NAS无损曲库元数据批量管理工具
-[简体中文](README.md) | [English](readme_en.md)
+# 🚀 Go Music Tag Web — Self-hosted Docker 音乐元数据批量编辑工具（Go + gRPC + React）
+[简体中文](README.md) | [English](#)
 
-<a href="https://hellogithub.com/repository/d1919a26b74b40f19240da9f2ee3f7a3" target="_blank"><img src="https://abroad.hellogithub.com/v1/widgets/recommend.svg?rid=d1919a26b74b40f19240da9f2ee3f7a3&claim_uid=JQPHiFh3t5mqG1M" alt="Featured｜HelloGitHub" style="width: 250px; height: 54px;" width="250" height="54" /></a>
-![star](https://atomgit.com/xhongc/music-tag-web/star/badge.svg)
-
-## 项目简介
-Music Tag Web 是一款**开源 self-hosted 自托管 Docker 音乐标签编辑器**，专为 NAS、远程影音服务器、Homelab 自建玩家打造，可在线编辑歌曲标题、专辑、艺术家、歌词、专辑封面等完整音频元数据，完美作为 Navidrome / Jellyfin 配套边车工具，替代本地 MP3Tag、MusicBrainz Picard。
-
-支持 FLAC, APE, WAV, AIFF, WV, TTA, MP3, M4A, OGG, MPC, OPUS, WMA, DSF, MP4 全格式音频 ID3 标签批量编辑、刮削、修复整理，所有曲库文件本地存储不上传第三方，隐私安全，适配群晖、威联通、Linux 小主机 Docker 部署。
 <div class="column" align="middle">
-    <a href="https://go.dev/dl/"><img src="https://img.shields.io/badge/Go-1.23-00ADD8.svg" alt=""></a>
-   <img src="https://img.shields.io/github/stars/xhongc/music-tag-web?color=informational&label=Stars">
-  <img src="https://img.shields.io/badge/V2-backend-Go%20%2B%20gRPC-blueviolet?style=plastic" alt="V2 stack" />
-  <img src="https://img.shields.io/badge/platform-amd64/arm64-pink?style=plastic" alt="docker-platform" />
+    <a href="https://go.dev/dl/"><img src="https://img.shields.io/badge/Go-1.23-00ADD8.svg" alt="Go"></a>
+    <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-19-149eca.svg" alt="React"></a>
+    <a href="https://grpc.io/"><img src="https://img.shields.io/badge/gRPC-7%20plugins-blueviolet?style=plastic" alt="gRPC plugins"></a>
+    <img src="https://img.shields.io/badge/self--hosted-Docker-orange?style=plastic" alt="self-hosted">
+    <img src="https://img.shields.io/badge/platform-amd64/arm64-pink?style=plastic" alt="docker-platform">
 </div>
 
-> ⚠️ **仓库源码现为 Go 后端**（`cmd/` + `internal/`、含 7 个 gRPC 音乐源插件），Docker Hub 上的 `xhongc/music_tag_web:latest` 是 **Python/Django 老镜像**，仅供历史用户使用，不再维护，请改走下面的 V2 源码构建。
+> ⚠️ **本项目 fork 自 [`xhongc/music-tag-web`](https://github.com/xhongc/music-tag-web)**——原 Python/Django 单体代码已**完整重构**为 Go 1.23 + gRPC 微服务插件 + React 19 SPA 架构。本仓库以 GPL V3 协议 fork-publish 独立维护；上游著作权与许可证全文保留在根目录 [`LICENSE`](LICENSE)。重构过程的 rationale 详见底部 [Acknowledgements](#acknowledgements)。
 
-# 🎉 核心功能 Feature（Self-hosted Docker 专属优势）
-为什么开发 Web 自托管版本？
-很多自建 Navidrome / Jellyfin 的用户音乐文件存放在远程 NAS、Linux 服务器，本地 MP3Tag、MusicBrainz Picard 仅能操作本机文件，无法远程修改服务器无损曲库元数据。
-Music Tag Web 采用 Docker 容器一键部署，作为影音服务配套边车应用，浏览器远程管理本地私有曲库，是 Homelab 影音爱好者刚需自托管音乐元数据工具。
+---
 
-- 全格式音频文件本地元数据查看、单条/批量编辑、修复 ID3 标签 ✅
-- 批量自动刮削音乐标签，自动匹配专辑信息、艺术家、歌词、封面 ✅
-- 内置音乐指纹识别，无标签、文件名混乱歌曲自动识别匹配元数据 ✅
-- 智能整理本地音乐文件，按艺术家、专辑自动分组，支持自定义多级曲库分类 🚧 — `FileBrowser.tsx` 有 sort，但 artist/album grouping UI 与"自定义多级曲库分类"还没串
-- 多维度文件排序：文件名、文件大小、文件更新时间 ✅
-- 批量繁简转换，一键转换歌曲、专辑、艺术家标签简体/繁体 ❌ — `matchscore.go:2` 显式 defer
-- 文件名拆分解包，自动从文件名提取缺失歌曲、歌手、专辑信息补全标签 🚧 — 前端有 `parseFromFilename`，后端 batch 回写未串
-- 批量文本替换，清理曲库脏标签、乱码、多余特殊字符 🚧 — 仅有前端 Replace 模态框，无后端 bulk endpoint
-- 集成 ffmpeg，支持无损音乐格式批量转换 ❌ — worker 镜像只有 yt-dlp，无 ffmpeg binary，无 ffmpeg.go 任务
-- 整轨 APE/FLAC/CUE 文件自动切割分轨并补全独立标签 ❌ — 全仓 zero hits for `cuesheet|splitCue|shntool|cuebreakpoints`
-- 多源音乐元数据接口，多渠道兜底刮削曲库信息 ✅
-- 内嵌歌词翻译，批量双语歌词写入音频文件 ❌
-- 完整操作日志记录，追溯标签修改记录 ❌
-- 批量导出/自定义上传替换专辑封面 🚧 — 单条上传 ✅，批量 zip ❌
-- 全响应式移动端 UI，手机浏览器远程访问 NAS 曲库改标签 ✅
-- 适配小爱同学本地曲库播放，直接读取 NAS 无损音乐文件 ❌ — `XiaoAI` / `小爱` / `米家` 全仓 zero matches
-- 兼容各类私人网盘挂载曲库在线播放与标签编辑 ✅ — 纯 nginx bind-mount，无应用代码
-- 播放数据统计，柱形图、折线图可视化曲库播放记录 ❌ — `AccessedDate` 列 unused，`BarChart` / `LineChart` zero matches
+## 项目简介
+
+**Go Music Tag Web** 是一款 self-hosted、Docker 化、面向 NAS / 远程影音服务器 / Homelab 自建玩家的批量音乐元数据编辑工具：浏览器远程编辑本地私有曲库的标题、专辑、艺术家、歌词、专辑封面等元数据，作为 [Navidrome](https://www.navidrome.org/) / [Jellyfin](https://jellyfin.org/) / [Funkwhale](https://funkwhale.audio/) 等自托管音乐服务器的 sidecar 服务。
+
+支持 [FLAC / APE / WAV / AIFF / WV / TTA / MP3 / M4A / OGG / MPC / OPUS / WMA / DSF / MP4] 全部主流有损/无损格式；**所有音乐文件本地处理，不上传第三方**；适配群晖、威联通、unRAID、Linux 小主机、amd64 / arm64 架构。
+
+后端 HTTP gateway 与后台 worker 拆为两个独立容器；7 个音乐源（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）**每个都是独立 gRPC 微服务进程**，独立部署、独立失败隔离。Tag I/O 走原生 Go 库（`bogem/id3v2` + `dhowden/tag`），无 FFI / 无 virtualenv / 无外部 binary 调用链。前端是 React SPA，状态走客户端 Zustand + `localStorage` 持久化。整套镜像约 ~80 MB。
+
+---
+
+## 当前架构
+
+| 层 | 实现 |
+|---|---|
+| HTTP 服务 | Go 1.23 + gin (gateway：API + React SPA 静态 + `/media/*` Range 流) |
+| 异步任务 | asynq + Redis (worker) |
+| 音乐源 | **gRPC 微服务**：netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid — 各自独立进程 |
+| Tag I/O | `bogem/id3v2` + `dhowden/tag`（纯 Go 库，无 Python FFI） |
+| 前端 | React 19 + Vite 7 + TypeScript + Tailwind 4 + shadcn/ui + Zustand |
+| 鉴权 | JWT in-memory + bcrypt；fail-closed 默认值检测 |
+| 加密 | gRPC TLS 可选（env `GRPC_USE_TLS=1` + 可选 `GRPC_TLS_CA_FILE`） |
+| 部署 | 单条 `docker compose up -d --build` 拉起 gateway + worker + 7 gRPC plugin + redis（nginx 已合并进 gateway，不再有独立服务） |
+| Docker image | ~80 MB（Alpine + Go binary + yt-dlp） |
+
+完整 operator 视角的安全默认值见 [`SECURITY.md`](SECURITY.md)；plugable plugin 设计草图见 [`docs/plugable-plugins.md`](docs/plugable-plugins.md)。
+
+---
+
+## 🎉 核心功能 Feature（self-hosted · 浏览器管理本地 NAS 曲库）
+
+> 标记：`✅` 已实现 · `🚧` 部分实现（已知 gap）· `❌` 暂未实现（在当前 roadmap 之外）。完整 status 表与 `path` 引用见 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md)。
+
+### 标签编辑 ✅
+- 全格式音频 ID3 / Vorbis / APE tag 读写 ✅
+- 批量编辑（多文件统一字段）+ 单条编辑（实时表单） ✅
+- 歌词 + 封面 sidecar 自动落盘 ✅
+- 列编辑（per-row inline） 🚧 — 只支持 selection+apply，单行 live-edit UI 还在做
+
+### 元数据刮削与查找 ✅
+- **7 个音乐源** 自动 fan-out 聚合：网易云 / 酷狗 / 酷我 / 咪咕 / QQ 音乐 / MusicBrainz / AcoustID 指纹 ✅
+- 搜索结果去重 + 按匹配度排序 ✅
+- AcoustID：没有元数据 / 文件名混乱的歌曲自动指纹识别匹配 ✅
+- 搜索源动态启用 / 关闭（`localStorage` per-user 持久化，SettingsModal 中切换） ✅
+
+### 歌词 ✅
+- 多源歌词拉取（网易云 / 酷我 / 咪咕 / QQ） ✅
+- 写回 lyrics tag + 同名 `.lrc` sidecar ✅
+- 内嵌双语歌词（中文-英文混排 + 翻译） ❌ — 当前不引入第三方翻译 API（成本 + 隐私）
+
+### 封面 ✅
+- 远端封面拉取（带 SSRF 防护） ✅
+- 上传自定义封面 ✅
+- 批量导出/打包封面 zip 🚧 — 单条上传 ✅，批量 zip 工作流未实现
+
+### 曲库 / 文件管理 ✅
+- 目录递归扫描（symlink-aware） ✅
+- 多维度排序：文件名 / 大小 / 修改时间 ✅
+- 按艺术家 / 专辑分组 UI 🚧 — sort 已完成，grouping UI 仅部分草稿
+- 文件名解析自动补全 tag 🚧 — 前端 `parseFromFilename` 已实现，后端批量回写未串
+- 整轨 APE / FLAC + CUE 自动切割分轨 ❌ — worker 镜像未装 `shntool` / `cuebreakpoints`
+- ffmpeg 任意格式批量转换 ❌ — worker 镜像未装 ffmpeg binary
+
+### 文本清洗 / 编码 🚧
+- 批量 tag 文本替换（脏标签、乱码清理） 🚧 — 前端 Replace 模态框已实现，无后端 bulk endpoint
+- 繁简 / 简繁 metadata 转换（zhconv） ❌ — `internal/tasks/matchscore.go` 显式 defer；未引入 opencc / HanziConvert
+
+### 下载 / 抓取 ✅
+- YouTube / B 站等下载走 yt-dlp ✅
+- yt-dlp 参数 sanitize（防止 `--exec=` 注入） ✅
+- 5 个音乐源 download plugin：网易云 / 酷狗 / 酷我 / 咪咕 / QQ ✅
+
+### UI / 设备 🚧
+- 全响应式手机 UI（Tailwind sm/md/lg 触发） ✅
+
+### 播放统计 ❌
+- 播放数据柱形图 / 折线图 ❌ — DB `AccessedDate` 列已 reserved 但未消费；前端无 chart 组件
+- 外部播放端统计上报（Subsonic-compatible `/rest/` endpoints） ❌
+
+### 操作日志 ❌
+- 完整 changelog（每次编辑可追溯） ❌ — DB 没有 `OperationLog` 模型，前端无对应 UI surface
 
 ➡️ 完整 status 表 + 每个 feature 的 `path` 引用见 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md)。
 
-# 🦀 项目演示 Demo
-在线演示地址（体验批量修改音乐标签、自托管Web端操作效果）
-DEMO 地址账号密码为：admin/admin
+---
 
-[【音乐标签Web｜Music Tag Web 自托管Docker音乐元数据工具演示】](http://117.72.222.188:8002/#/)
+## 💯 部署指南（docker compose · 单条命令拉起全栈）
 
-# 💯 使用部署指南 How to Use
-完整图文教程文档：
-[【使用手册】](https://xiers-organization.gitbook.io/music-tag-web/)
+> ⚠️ **新增懒人模式 (v2.1)**：谁不想编辑 `.env`、不想自己生成 JWT，谁可以只看下面 “🎯 一键部署 (懒人模式)” 一节；全新部署 + 注册 admin 只需 5 条 bash 命令。需要明确控制 secrets / CORS / gRPC TLS / mysql 等高级选项才看下面 Pre-flight。
 
-[【使用手册V2（新版Docker部署推荐）】](https://xiers-organization.gitbook.io/music-tag-web-v2/)
-
-> V2 为当前推荐部署方式，所有 NAS、Linux Homelab 用户优先使用手册 V2 部署！
-
-## V1 旧版 Docker 容器部署方式
-镜像已上传至 Docker Hub，支持 amd64 / arm64 架构群晖、威联通、树莓派设备一键安装：
-
-### 1. 从Docker Hub拉取自托管音乐标签工具镜像
-```bash
-docker pull xhongc/music_tag_web:latest
-```
-
-### 2. 运行Docker容器镜像（挂载本地NAS音乐目录）
-```bash
-docker run -d -p 8001:8001 -v /path/to/your/music:/app/media -v /path/to/your/config:/app/data --restart=always xhongc/music_tag_web:latest
-```
-或者 使用 Portainer Stacks 可视化部署 docker compose（NAS用户常用）
-   ![img_1.png](img_1.png)
-
-```yaml
-version: '3'
-
-services:
-  music-tag:
-    image: xhongc/music_tag_web:latest
-    container_name: music-tag-web
-    ports:
-      - "8001:8001"
-    volumes:
-      - /path/to/your/music:/app/media:rw
-      - /path/to/your/config:/app/data
-    command: /start
-    restart: unless-stopped
-```
-> 重要说明：`/path/to/your/music` 替换为你的NAS/服务器本地音乐文件夹路径！`/path/to/your/config` 改为持久化配置文件路径！
-
-3. 访问地址：127.0.0.1:8001/admin，默认账号密码 admin/admin，首次登录务必修改默认密码
-![img_7.png](img_7.png)
-
-## V2 推荐部署（当前主线 · Go + gRPC 插件架构）
-
-> V1 镜像现在跟仓库源码不一致（镜像还是 Django，代码已经迁到 Go）。所有新部署请走源码构建。
-
-> 🪜 **从老版本升级再看这一步**（全新部署跳过）。新 compose 默认路径已改到仓库根，裸 `git pull && docker compose up -d` 会让 sqlite 重建、`./music` / `./data` 目录不存在而启动失败。这 4 行 mv 在任何时机都会成功 — `gobackend/{.env,data,music}` 即使在 git 不再跟踪的情况下也仍写在 NAS 上。
+> **新部署**直接走下方 Clone → env → compose 三步。从其他来源（V1 老镜像 / 旧 fork）升级请先参考下方的 `Pre-flight · boilerplate 检查` 段（包含 `.env` / `data` / `music` 路径迁移的 `mv -n` 步骤）。
 >
-> 若你的老 `.env` 把 `MUSIC_DIR` 指向 NAS 外部 mount（Synology `/volume1/music`、SMB `/mnt/nas/music`、NFS 等），或你之前用了其他宿主机 bind mount、或直接 `ln -s /volume1/music /path/gobackend/music` 软链 —— 跳过第 3 行；只要新 `./env` 里 `MUSIC_DIR=` 还指同一个外部路径即可。
+> ⚠️ **首次部署务必先构建前端**：`cd frontend && npm install && npm run build && cd ..`——湖区 ⚠️ 省略这一步，gateway 的 `/` 会返回 404（`./static/dist/` 在 host 上还不存在）。原因：v2 起 nginx 反代被合并进 gateway，静态产物采用 host `./static/dist/` 卷装入容器，底层没有 fallback。**修改前端后**只需重跑 `npm run build`：http.ServeFile 每次请求重新读盘，Vite hashing 出新文件名让浏览器自动拉新；不需要 `docker compose restart` 或 `--build`。
+
+### 🎯 一键部署（懒人模式 · 适合评估 / 家庭自用）
+
+> 适合第一次部署 / NAS 评测 / “我不想手生 config” 场景。仅 5 条 bash，所有 secret 在 gateway 首次启动时由 crypto/rand 生成、bcrypt-hash 后写到 `./data/.bootstrap-creds`（host 路径），重启后保持。
+
+```bash
+# ① clone & cd（替换为你的 fork URL）
+git clone https://github.com/[your-org]/go-music-tag-web.git
+cd go-music-tag-web
+
+# ②首次运行必要：创建 ./music ./data ；构建前端 → ./static/dist
+mkdir -p ./music ./data
+( cd frontend && npm install && npm run build && cd .. )
+
+# ③拉起全栈（自动生成 admin 账号、JWT secret、webhook token）
+docker compose up -d --build
+
+# ④等约 30 s 后查看首启口令
+docker compose logs gateway | grep -A 6 FIRST-BOOT
+#   admin user:                  admin
+#   admin password (PLAINTEXT):  ← 记录这一行 ←
+#   JWT_SECRET (base64, 48B):    ...
+#   WEBHOOK_INTERNAL_TOKEN:      ...
+#   persisted to:                /app/data/.bootstrap-creds
+
+# ⑤打开浏览器
+xdg-open http://localhost:9150/admin     # macOS 用 open；Windows 用 start
+```
+
+**首次启动的工作流程：**
+- `docker-compose.yml` 把 `JWT_SECRET` / `ADMIN_USERS` / `WEBHOOK_INTERNAL_TOKEN` 默认设成空 → gateway 看到空 → `ensureBootstrap()` 读取 `/app/data/.bootstrap-creds`，文件不存在则用 crypto/rand 生成三个 secret + bcrypt 一个 admin 密码，FATAL 返回如未写出来。
+- 明文 admin 密码只出现一次：位于 gateway startup log 的 `FIRST-BOOT auto-bootstrap` banner；之后仅 `.bootstrap-creds` 里的 bcrypt hash 用于身份验证。
+- 转发丢给同一个 `./music` 和 `./data` bind mount，静默重启后密钥保持。
+
+**退出懒人模式 / 显式控制 secrets：** cp `.env.example .env` 后填入明确值（可参考下面 Pre-flight），gateway 检测到任何 non-empty / non-sentinel 的 env 后跳过 auto-bootstrap 对应项；其余仍是 auto-filling。
+
+### Pre-flight · boilerplate 检查
+
+进入 deploy 之前**必须**读完 `.env.example` 顶部的 `⛔ PRE-FLIGHT CHECKLIST ⛔`。三项 `__REPLACE_ME__` 占位符（`JWT_SECRET`、`ADMIN_USERS`、`WEBHOOK_INTERNAL_TOKEN`）未替换会被 gateway `config.Load()` 在启动时 `log.Fatalf` 拒掉（除非显式设置 `ALLOW_INSECURE_DEFAULTS=1`，**仅 dev 可用**）。`docker-compose.yml`、`.env.example`、所有 Dockerfile 在仓库根，不需要再 cd 进子目录。
+
+> ⚠️ **从更早版本升级再看本节**（全新部署跳过）。新 compose 默认路径改到仓库根，裸 `git pull && docker compose up -d` 会让 sqlite 重建、`./music` / `./data` 目录不存在而启动失败。这 4 行 `mv -n` 在任何时机都会成功——`{.env,data,music}` 即使 git 已不再跟踪，仍写在 NAS 上。
 >
-> 下面 bash 块前后两段都用 `mv -n`（POSIX no-clobber，Alpine/BusyBox 1.21+ 都支持）：第一段拒绝覆盖已有 backup，第二段拒绝覆盖已有 root 文件；re-run 时（ `./env.bak` 和 `./env` 同时存在）两次 mv 都 no-op，状态可观察而不是静默覆盖。`rmdir` 本身非空拒绝。
+> 若你的曲库实际并不在仓库根 `./music` 下（例如 Synology `/volume1/music`、SMB `/mnt/nas/music`、NFS 等外部 mount，或你此前的旧 fork 用过宿主机 bind），**不要**靠 `mv` 把海量文件搬到 `./music`；直接在仓库根 `ln -s /volume1/music ./music` 软链即可，`docker compose up` 仍能用 over the symlink。
+>
+> 下面 bash 块用 `mv -n`（POSIX no-clobber）：拒绝覆盖已有 backup；re-run 时两次 mv 都 no-op，状态可观察而不是静默覆盖。
 > ```bash
-> [ -f ./.env ] && mv -n ./.env ./.env.bak; mv -n gobackend/.env ./.env
-> [ -d ./data ] && mv -n ./data ./data.bak; mv -n gobackend/data ./data
-> [ -d ./music ] && mv -n ./music ./music.bak; mv -n gobackend/music ./music   # 仅当你之前用 ./gobackend/music 当本地 bind 时才需要；外部 mount / 软链 / FUSE 跳过
-> rmdir gobackend   # 非空拒绝
+> # 旧 fork 里如果你之前手动迁出过 `.env` / `data` / `music`，现在这些文件已经直接放在仓库根下了。
+> # 升级只需：把任何之前手动建过的 `.env.bak` 拷回根 `.env`。全新部署直接 `cp .env.example .env` 即可。
+> [ -f ./.env.bak ] && cp ./.env.bak ./.env  # 仅当你此前手动建过 `.env.bak` 时
 > ```
-> 之后 `docker compose up -d --build`。`${MUSIC_DIR}` / `${DATA_DIR}` 默认仍是 `./music` / `./data`,搬完后语义不变。
+> 之后 `docker compose up -d --build`。仓库根 `./music` / `./data` 即被 bind 进容器（不再走 `${MUSIC_DIR}` / `${DATA_DIR}` env 值插值），搬完后语义不变。
 
-### 1. 克隆并准备环境变量
+### 1. 克隆 + env
+
 ```bash
-git clone https://github.com/xhongc/music-tag-web.git
-cd music-tag-web
+git clone https://github.com/[your-org]/go-music-tag-web.git   # 替换为你的新 repo URL
+cd go-music-tag-web
+cp .env.example .env           # 与 docker-compose.yml 同目录，Compose 才能读到
+# 编辑 .env，填入必填项
 ```
 
-> ⚠️ **Pre-flight: boilerplate 检查。** 进入 step 2 之前必须看完 `.env.example` 顶部的 `⛔ PRE-FLIGHT CHECKLIST ⛔`，其中三个 `__REPLACE_ME__`（`JWT_SECRET`、`ADMIN_USERS`、`WEBHOOK_INTERNAL_TOKEN`）未替换会被 gateway `config.Load()` 拦下，log.Fatalf 拒绝启动（与 `ALLOW_INSECURE_DEFAULTS` 匹配才仅 WARNING）。`docker-compose.yml`、`.env.example`、Dockerfiles 都在仓库根下，不需要再 cd 进子目录。
+`JWT_SECRET` 和 `ADMIN_USERS` 是必填（不设 / 占位 → gateway 启动 Fail-closed 或登录拒绝）；强烈建议同时配置 `CORS_ALLOWED_ORIGINS`、`GRPC_USE_TLS`、`GATEWAY_PORT`。`MUSIC_DIR` / `DATA_DIR` 不再从 `.env` 注入（已硬编码到 `docker-compose.yml` 的 `./music` / `./data` host bind mount），若需指向外部 mount 直接 `ln -s` 进仓库根即可。模板里每项都有详细注释。
 
-把 `.env.example` 复制成 `.env`（与 `docker-compose.yml` 同目录，这样 Compose 才能读到）：
-```bash
-cp .env.example .env
-# 然后编辑 .env，填入必填项
-```
-`JWT_SECRET` 和 `ADMIN_USERS` 是必填（不设 / 设为占位符 → gateway 启动 Fail-closed 或登陆返回 401）；强烈推荐同时配置 `CORS_ALLOWED_ORIGINS`、`GRPC_USE_TLS`、`MUSIC_DIR`、`DATA_DIR`、`NGINX_PORT`。模板里每项都有详细注释。
-> 详细运维与安全默认值：见 `SECURITY.md` 与 `P1.5.md`。
+### 2. Volume pre-flight + 构建 + 启动全栈
 
-### 2. Volume pre-flight + 构建并启动全栈
-`docker-compose.yml` 的默认值 `./music` 与 `./data` 是**相对 compose 文件路径**，首次运行必须存在；否则 `docker compose up` 会报 `volume source not found`。NAS 用户如果使用 SMB / NFS 挂载，先在宿主机准备好路径。
+`docker-compose.yml` 的默认值 `./music`、`./data`、`./static` 都是**相对 compose 文件路径**，首次运行必须存在；否则 `docker compose up` 会报 `volume source not found`。`./static` 默认是个**空仓库目录**（git 不跟踪），需要先构建一次前端才有 React SPA 产物：`cd frontend && npm install && npm run build`，产物落盘到仓库根 `./static/dist/`。NAS 用户使用 SMB / NFS 挂载，先在宿主机准备好路径。
 
 ```bash
-mkdir -p ./music ./data         # 首次需要（相对仓库根路径）
+mkdir -p ./music ./data         # 首次需要（相对仓库根路径），./static 由 npm run build 生成
 docker compose up -d --build    # 后续只要不加 plugin / 不改 .env，重启即可跳过 --build
 ```
-首次启动会自动构建 gateway + worker + 7 个 gRPC 音乐源插件（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）+ redis + nginx。
+
+首次启动会自动构建：gateway（含 API + 静态 SPA + `/media/*` 音乐流）+ worker + 7 个 gRPC 音乐源插件（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）+ redis。**原 nginx 反向代理已合并进 gateway；不再需要独立的 `nginx` 服务或 `nginx.conf`。**
 
 ### 3. 浏览器访问
 
-`http://localhost:9150/admin`（外层 nginx 暴露在 `NGINX_PORT`，gateway 监听 8001）。
+`http://localhost:9150/admin`（gateway 直接对外服务 `${GATEWAY_PORT:-9150}`，容器内监听 8001；同时还提供 `/api/*` 接口、`/media/*` 音乐流式、以及 `/` 的 React SPA 静态产物）。
 
-> 默认账号由 `ADMIN_USERS` 决定。如果你看到 "admin/admin" 是在 `ALLOW_INSECURE_DEFAULTS=1` 仅调试模式下，真正上线 前必删该环境变量并设置真实密码。
+> 默认账号由 `ADMIN_USERS` 决定。**懒人模式下**首次启劄后 admin 账号是 auto-bootstrap 生成的强随机口令（见 `docker compose logs gateway`）；**手动部署**下，未指定 `ADMIN_USERS` 会导致 login 拒绝 (`ALLOW_INSECURE_DEFAULTS=1` 仅作为 dev 模式下 `admin/admin` 退路).
 
-# 📷 V2 版本操作界面 User Interface
-远程浏览器批量管理NAS音乐标签、刮削元数据、整理曲库完整界面展示
-![img_13.png](img_13.png)
-![img_15.png](img_15.png)
-![img_16.png](img_16.png)
-![img_17.png](img_17.png)
-![img_18.png](img_18.png)
-![img_19.png](img_19.png)
-![img_12.png](img_12.png)
+---
 
-# 💬 交流与反馈 Contact me
-如果你在 self-hosted Docker 部署、NAS目录挂载、Navidrome 联动、批量标签刮削过程中遇到报错、功能需求，欢迎先 Star 项目后提交 issues。
-issue 回复延迟可加入社群交流部署踩坑、曲库整理技巧；也可添加作者微信：charlesnowed（备注：**Music Tag**），拉你进交流群。
+## 🔒 安全默认值（v2 · 摘要）
 
-<div>
-<img  src="/img0616.jpg" width="250">  &nbsp;
-</div>
+本项目在 P1 完成后做过一轮集中 hardening，全部 6 项修复均已落地、对应测试就位。完整 operator 视角见 [`SECURITY.md`](SECURITY.md)。
 
-## 官方发布&交流频道：
-[t.me/music_tag_web](https://t.me/music_tag_web)
+- **CORS 白名单（无反射）**：`internal/gateway/middleware/cors.go` 读 `CORS_ALLOWED_ORIGINS`，空列表 = 拒绝全部跨域。
+- **SSRF 拒 169.254 / RFC1918**：远端封面拉取走 `internal/netguard/ssrf.go`，解析后拒绝 loopback / 私有网段 / link-local / multicast。
+- **路径遍历 `SafeJoin`**：所有用户传入路径强制 containment 在 `MUSIC_DIR` 下。
+- **yt-dlp 参数 sanitize**：`internal/tasks/yt_dlp_validate.go` 阻止 `--exec=` 注入，format / quality / output 走 enum。
+- **admin / JWT 默认值 Fail-closed**：`config.Load()` 看到占位 `JWT_SECRET` 会 `log.Fatalf`；`ADMIN_USERS` 未设且无 dev flag → `loadUsers()` 返回空。
+- **gRPC TLS 可选**：插件间互联走 plaintext 或 TLS，env 控制 `GRPC_USE_TLS=1` + 可选 `GRPC_TLS_CA_FILE`。
 
-[MusicTag Web 自托管影音交流群](https://t.me/+oTffyBoNALM3Yzll)
+这些项的测试分别落在 `internal/utils/pathjoin_test.go`、`internal/netguard/ssrf_test.go`、`internal/tasks/yt_dlp_validate_test.go`、`internal/gateway/middleware/cors_test.go`。
 
-QQ1群：55893996 （已满）
+---
 
-QQ2群：79502786（NAS/Docker影音自建玩家交流）
+## 🛠️ 本地开发测试
 
-# 💸 赞助与支持
-如果这款 self-hosted Docker 音乐标签工具帮你整理好了NAS无损曲库、解决Navidrome标签混乱问题，可以请作者喝杯咖啡。
-您的支持是持续更新自托管功能、适配更多NAS设备的动力, 谢谢您! (｡･∀･)ﾉﾞ
+> 面向 contributor：本地改完代码后如何快速验证、如何跑 pre-flight gate、再走 docker compose 全栈热部署。下面的命令以**仓库当前**盘上文件为准——若有标 ⚠️ 的项表示暂缺 / 行为受限。
 
-[➡ 爱发电](https://ifdian.net/a/music-tag-web)
+### 0. 一次性环境准备
 
-# 🌟 Star History
-开源自托管音乐元数据工具项目增长趋势
+```bash
+# 本地 toolchain 验证
+node -v                                    # Node ≥ 22（与 frontend/package.json engines 一致）
+go version                                 # Go 1.23+
+docker compose version                     # compose v2
+
+# 拉依赖（前端一次性；后端用 go modules，缓存后不必重拉）
+( cd frontend && npm install )
+go mod download  # go.mod 在仓库根，不需要 cd 子目录
+```
+
+> ⚠️ 当前没有 Makefile 入口。本节直接走裸 `go` 命令，不依赖任何 build-script。
+
+### 1. 后端（Go）
+
+```bash
+# go.mod 在仓库根；不需要 cd 子目录
+# 静态检查（与 CI 等价）
+go vet ./...
+
+# 编译所有 binary：gateway + worker + 7 个 plugin
+go build ./cmd/gateway/ ./cmd/worker/
+for p in netease kugou kuwo migu qmusic musicbrainz acoustid; do
+  go build -o /tmp/music-tag-plugin-"$p" "./cmd/plugins/$p/"   # 临时放置，让 vendor 错开
+done
+
+# 单独跑某个 plugin（开发期常用，便于把 log 隔离到 host）
+NETEASE_PORT=50051 go run ./cmd/plugins/netease
+```
+
+> ⚠️ 当前仓库 `internal/**` 下没有 `_test.go` 入库。`go test ./...` 会直接报 `no test files`。质量 gate 落在 `go vet` + `go build` 上；如果要把测试补回来，可参考 [`docs/FEATURE-COVERAGE.md § 8`](docs/FEATURE-COVERAGE.md) 列出的安全项逐项拆出来写。
+
+### 2. 前端（React + Vite）
+
+```bash
+cd frontend
+
+# typecheck（不触发 build，最快）
+npx tsc --noEmit -p tsconfig.app.json
+npx tsc --noEmit -p tsconfig.node.json
+
+# dev server，HMR；默认 http://localhost:5173
+npm run dev
+
+# production build（内部跑 tsc -b && vite build）
+npm run build
+
+# lint
+npm run lint
+npm run lint:fix          # eslint --fix 自动修
+```
+
+### 3. 一键 pre-flight gate（与 CI 等价）
+
+```bash
+# 五道 gate，全部 exit 0 才算绿灯
+docker compose config --quiet
+go vet ./...
+go build ./cmd/gateway/ ./cmd/worker/  # go.mod 在仓库根
+( cd frontend && npx tsc --noEmit )
+( cd frontend && npm run lint --silent )
+```
+
+### 4. 全栈热部署（改完任一 service 后）
+
+```bash
+# 仅改某一 service 时，定向 rebuild（其他容器不停）
+docker compose up -d --build gateway
+docker compose up -d --build worker
+docker compose up -d --build netease      # 任意 plugin 同理
+
+# 改 Dockerfile / `.env`：全栈 rebuild
+docker compose up -d --build
+
+# 实时 log
+docker compose logs -f gateway
+docker compose logs -f worker
+docker compose logs -f netease
+```
+
+### 5. host 跑 gateway + plugin（不走容器，便于 in-process 调试）
+
+```bash
+# 终端 1：host 跑 gateway，方向 localhost 上 plugin
+GATEWAY_PORT=8001 \
+  PLUGIN_NETEASE_ADDR=localhost:50051 \
+  JWT_SECRET="$(openssl rand -base64 48)" \
+  ADMIN_USERS=test:test \
+  CORS_ALLOWED_ORIGINS=http://localhost:5173 \
+  go run ./cmd/gateway
+
+# 终端 2：host 跑 plugin
+NETEASE_PORT=50051 go run ./cmd/plugins/netease
+
+# 终端 3：curl 验证
+curl http://localhost:8001/api/sources/           # 列表里应该有 netease
+curl 'http://localhost:8001/api/search_music/?q=test'
+```
+
+### 6. 故障排查速查
+
+| 现象 | 第一步 |
+|---|---|
+| gateway `FATAL: JWT_SECRET is unset or equal to the placeholder` | 仓库根目录 `.env` 补 `JWT_SECRET=$(openssl rand -base64 48)`（如果走懒人模式变体：检查 `./data/.bootstrap-creds` 是否存在且可写） |
+| gateway `FATAL: cannot persist bootstrap creds to /app/data/.bootstrap-creds` | `./data` 不存在或不可写；`mkdir -p ./data` 并确保 host 上 777 权限 / 非 root 用户。也可以绕开：`cp .env.example .env` 然后填真值。 |
+| 看不到 `FIRST-BOOT auto-bootstrap` banner | 大约需要 25–40 s：gateway 在做 DB init、dial 所有 plugin、bbolt 加载。不要 grep `docker compose logs gateway`，改用 `docker compose logs -f gateway` 跟随。重启后该 banner 不会再出现，仅明文 admin 密码被回收（首启后清零）。|
+| `docker compose up` 报 `volume source not found` | 先 `mkdir -p ./music ./data` |
+| `npx tsc --noEmit` 类型错 | 先看 `frontend/src/types/index.ts` 是否漏类型定义 |
+| `npm run lint` 报 `react-hooks/exhaustive-deps` 等 | `npm run lint:fix` 自动修，或手动补依赖项 |
+| gateway healthcheck 一直 unhealthy | `docker compose logs gateway` + `docker compose logs redis` 看联通 |
+| AcoustID 搜索没结果 | worker 镜像缺 `libchromaprint-tools`；host 侧 `apt-get install -y libchromaprint-tools` 或自行把它塞进 `Dockerfile.worker` |
+
+完整 operator 安全默认值见 [`SECURITY.md`](SECURITY.md)；功能 status 表见 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md)；架构设计与 future stages 见 [`docs/plugable-plugins.md`](docs/plugable-plugins.md)。
+
+---
+
+## 📚 相关文档
+
+- [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md) — Feature status 单一来源；本 README Features list 的所有 ✅/🚧/❌ 都对应这条 matrix 的 row 编号
+- [`SECURITY.md`](SECURITY.md) — 完整运维安全默认值 / 威胁模型 / runbook
+- [`docs/plugable-plugins.md`](docs/plugable-plugins.md) — 插件架构设计草图（Stage A 已落地 / B–D 暂未排期）
+- [`frontend/README.md`](frontend/README.md) — 前端 dev 启动 / Vitest / React Compiler 配置
+- [`AGENTS.md`](AGENTS.md) — 仓库内协作工具相关说明
+
+---
+
+## 🌟 Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=xhongc/music-tag-web&type=Date)](https://star-history.com/#xhongc/music-tag-web&Date)
 
 <!--
-self-hosted, music tag editor, docker music metadata tool, NAS flac tagger, navidrome sidecar tag editor, jellyfin batch id3 editor, homelab music manager, 自托管音乐标签工具, docker音乐元数据编辑器, 群晖音乐批量改标签, 威联通无损曲库整理, 替代mp3tag网页版, 音乐指纹识别刮削标签, 本地私有曲库管理
+self-hosted, music tag editor, docker music metadata tool, NAS flac tagger,
+navidrome sidecar tag editor, jellyfin batch id3 editor, homelab music manager,
+docker gRPC plugin music scraper, react tailwind shadcn music tag editor,
+golang music library manager, self-hosted docker music tagger,
+自托管音乐标签工具, docker 音乐元数据编辑器, 群晖音乐批量改标签,
+威联通无损曲库整理, 替代 mp3tag 网页版, 音乐指纹识别刮削标签,
+本地私有曲库管理, Go Music Tag Web
 -->
 
-# 免责声明
-禁止任何形式的商业用途，包括但不仅限于售卖/打赏/获利，不得使用本代码进行任何形式的牟利/贩卖/传播，再次强调仅供个人私下研究学习技术使用，**本自托管项目仅编辑本地已有音乐文件元数据，不提供下载音乐本体！**
-本项目仅以纯粹的技术目的去学习研究，如有侵犯到任何人的合法权利，请致信408737515@qq.com，我将在第一时间修改删除相关代码，谢谢！
+---
 
-本项目基于 GPL V3.0 许可证发行，以下协议是对于 GPL V3.0 的补充，如有冲突，以以下协议为准。
+## <a id="acknowledgements"></a>Acknowledgements · 上游与重构说明
 
-词语约定：本协议中的“本项目”指music-tag-web项目；“使用者”指签署本协议的使用者；“官方音乐平台”指对本项目内置的包括酷我、网易云、QQ音乐、咪咕、酷狗音乐、酷我音乐等音乐源的官方平台统称；“版权数据”指包括但不限于图像、音频、名字、歌词等在内的他人拥有所属版权的数据。
+本项目的 **upstream** 是 [`xhongc/music-tag-web`](https://github.com/xhongc/music-tag-web) ，最初由 *xhongc* 维护，原仓库以 **GPL V3** 协议开源。本仓库 fork 自该 upstream，并对整份代码做了**完整重写**：
 
-本项目的数据来源原理是从各官方音乐平台的公开服务器中拉取数据，经过对数据简单地筛选与合并后进行展示，因此本项目不对数据的准确性负责。 使用本项目的过程中可能会产生版权数据，对于这些版权数据，本项目不拥有它们的所有权，为了避免造成侵权，使用者务必在24小时内清除使用本项目的过程中所产生的版权数据。 本项目内的官方音乐平台别名为本项目内对官方音乐平台的一个称呼，不包含恶意，如果官方音乐平台觉得不妥，可联系本项目更改或移除。 本项目内使用的部分包括但不限于字体、图片等资源来源于互联网，如果出现侵权可联系本项目移除。 由于使用本项目产生的包括由于本协议或由于使用或无法使用本项目而引起的任何性质的任何直接、间接、特殊、偶然或结果性损害（包括但不限于因商誉损失、停工、计算机故障或故障引起的损害赔偿，或任何及所有其他商业损害或损失）由使用者负责。 本项目完全免费，仅供个人私下小范围研究交流学习 python 技术使用, 且开源发布于 GitHub 面向全世界人用作对技术的学习交流，本项目不对项目内的技术可能存在违反当地法律法规的行为作保证，禁止在违反当地法律法规的情况下使用本项目，对于使用者在明知或不知当地法律法规不允许的情况下使用本项目所造成的任何违法违规行为由使用者承担，本项目不承担由此造成的任何直接、间接、特殊、偶然或结果性责任。 若你使用了本项目，将代表你接受以上协议。
+| | upstream | 本仓库 |
+|---|---|---|
+| 后端 | Python 3 + Django + gunicorn + celery | Go 1.23 + gin + asynq + Redis |
+| 音乐源 | 同进程 python module | 独立 gRPC 服务进程 |
+| Tag I/O | `mutagen` (Python 库) | `bogem/id3v2` + `dhowden/tag`（纯 Go） |
+| 前端 | Django template + Bootstrap jQuery | React 19 + Vite 7 + TypeScript + Tailwind 4 + shadcn/ui + Zustand |
+| 部署 | 单 Python 容器 (~600 MB) | 多 service compose（gateway + worker + 7 gRPC plugin + redis），总 image ~80 MB（nginx 已合并进 gateway，v2 不再携带独立 nginx service) |
+| 鉴权 | Django session | JWT in-memory + bcrypt |
+| 默认配置保护 | 软默认值 | Fail-closed（占位 JWT_SECRET / 默认 admin 都被拒） |
+
+**本仓库沿用 GPL V3 协议**——[`LICENSE`](LICENSE) 内容未做任何修改，上游著作权声明与许可证全文完整保留。任何对本仓库的使用、再分发、修改，都必须遵守 GPL V3 条款（即：同等开源 + 保留版权声明 + 注明修改）。
+
+本仓库的修改记录以 git commit 历史为准；上游提供的功能（`docs/FEATURE-COVERAGE.md` 中带 ✅/🚧/❌ 标记的 22 个 claim，其中 11 个已完整迁移 + 5 个部分迁移 + 6 个未迁移）保留溯源痕迹，README 内的功能列表与 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md) row 一一对应。
+
+**侵权投诉 / 版权诉求**：如收到版权方对歌词、封面、专辑元数据的诉求，将在 24 小时内按上游 LICENSE 与 GPL V3 条款要求清理数据。本仓库仅编辑本地已有音乐文件元数据，**不下载、不存储、不分发任何受版权保护的音频本体**。欲联系维护者请用 GitHub Issues / Pull Requests 公开流程，或邮件 [maintainer@your-domain.example]（占位，按需替换）。
+
+---
+
+## <a id="license"></a>License
+
+GNU General Public License **v3.0** — 完整文本见 [`LICENSE`](LICENSE)。
+
+```
+Go Music Tag Web
+Copyright (C) <year>  <name of author>
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+```
+
+---
+
+## 免责声明 / Disclaimer
+
+**禁止任何形式的商业用途**，包括但不限于售卖 / 打赏 / 获利 / 广告分成。本项目仅供个人私下研究学习技术使用，与原 upstream 仓库解耦后**独立维护**。
+
+**本项目仅编辑本地已有音乐文件的元数据，不提供、不下载、不存储任何受版权保护的音频本体。** 仓库内置的 7 个音乐源 plugin（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）只向各官方平台的公开服务器发起查询请求，**不绕过任何身份验证、不缓存任何受版权保护的内容**；抓取到的元数据（曲名 / 歌手 / 专辑名 / 封面 URL / 歌词文本）属于上游各官方平台的版权数据，使用者应按上游 LICENSE 与各官方平台的服务条款在 24 小时内**自行清除**。
+
+词语约定：
+
+- “**本项目**” 指 **Go Music Tag Web**（本仓库）。
+- “**原项目 / upstream**” 指 [`xhongc/music-tag-web`](https://github.com/xhongc/music-tag-web) ，即本仓库的 fork 源。
+- “**使用者**” 指签署本协议 / 使用本项目的所有方。
+- “**官方音乐平台**” 指对本项目内置的网易云音乐、酷狗音乐、酷我音乐、QQ 音乐、咪咕音乐、MusicBrainz 等音乐源的官方平台统称。
+- “**版权数据**” 指包括但不限于图像、音频、名字、歌词等在内的他人拥有所属版权的数据。
+
+由于使用本项目产生的、包括由于本协议或由于使用或无法使用本项目而引起的任何性质的任何直接、间接、特殊、偶然或结果性损害（包括但不限于因商誉损失、停工、计算机故障或故障引起的损害赔偿，或任何及所有其他商业损害或损失），**由使用者自行承担**。
+
+本项目完全免费，仅供个人私下小范围研究交流学习使用，开源发布于 GitHub 面向全世界使用者作为技术学习交流。本项目不对项目内的技术可能存在违反当地法律法规的行为作保证；禁止在违反当地法律法规的情况下使用本项目；对于使用者在明知或不知当地法律法规不允许的情况下使用本项目所造成的任何违法违规行为，由使用者承担，本项目不承担由此造成的任何直接、间接、特殊、偶然或结果性责任。
+
+**若你使用了本项目，将代表你接受以上协议。**
