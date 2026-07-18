@@ -4,14 +4,17 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { SourcePickerModal } from '@/components/search/SourcePickerModal';
+import { PlayButton } from '@/components/player/PlayButton';
 import { Search, Settings2, Loader2, Music, Download, ChevronDown } from 'lucide-react';
 import type { SearchResult, SearchPagination } from '@/types';
 import { useSourceStore } from '@/store/useSourceStore';
 
 // Static color map preserves visual consistency across restarts for the
-// seven sources we ship today. Unknown sources (Stage B/C plugin slots)
-// fall through to a deterministic hash-derived color so the row chip
-// still has a stable identity.
+// search-eligible sources we ship today (YouTube is intentionally
+// omitted \u2014 it registers as a DownloadSource on the backend, not a
+// TagSource, so it cannot appear in /api/search_music/ results).
+// Unknown sources (Stage B/C plugin slots) fall through to a deterministic
+// hash-derived color so the row chip still has a stable identity.
 const SOURCE_COLORS: Record<string, string> = {
   netease: 'bg-red-500/15 text-red-600 dark:text-red-400',
   qmusic: 'bg-green-500/15 text-green-600 dark:text-green-400',
@@ -19,7 +22,6 @@ const SOURCE_COLORS: Record<string, string> = {
   kuwo: 'bg-orange-500/15 text-orange-600 dark:text-orange-400',
   migu: 'bg-pink-500/15 text-pink-600 dark:text-pink-400',
   musicbrainz: 'bg-purple-500/15 text-purple-600 dark:text-purple-400',
-  youtube: 'bg-rose-500/15 text-rose-600 dark:text-rose-400',
   acoustid: 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400',
 };
 
@@ -215,7 +217,6 @@ export function SearchPanel() {
         ) : (
           <div className="p-3 space-y-2">
             {results.map((song, idx) => {
-              const isYoutube = song.source === 'youtube';
               return (
                 <div
                   key={`${song.source}-${song.id}-${idx}`}
@@ -253,31 +254,62 @@ export function SearchPanel() {
                         </Badge>
                       </div>
                       <div className="text-xs text-muted-foreground truncate">
-                        {isYoutube ? (
-                          <>
-                            {song.channel || song.artist || '未知作者'}
-                            {song.duration ? ` · ${formatDuration(song.duration)}` : ''}
-                          </>
-                        ) : (
-                          <>
-                            {song.artist || '未知艺术家'}
-                            {song.album ? ` · ${song.album}` : ''}
-                            {song.duration ? ` · ${formatDuration(song.duration)}` : ''}
-                          </>
-                        )}
+                        {song.artist || '未知艺术家'}
+                        {song.album ? ` · ${song.album}` : ''}
+                        {song.duration ? ` · ${formatDuration(song.duration)}` : ''}
                       </div>
                     </div>
 
-                    {/* Download button (placeholder) */}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 shrink-0"
-                      title="下载"
-                      disabled
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                    </Button>
+                    {/* Play preview — driven by usePlayerStore so a play here
+                        routes to the bottom PlayerBar. Rendered unconditionally;
+                        PlayButton internally decides playability (track.url set
+                        → direct; empty + source.supports_audio_url=true → /api/stream
+                        fallback; metadata-only source → disabled with toast on click).
+                        Keeping the row layout stable means we don't need a spacer. */}
+                    <PlayButton
+                      track={{
+                        id: `${song.source}-${song.id}`,
+                        url: song.url || '',
+                        title: song.title || song.name,
+                        artist: song.artist || '',
+                        cover: song.cover,
+                        durationSec:
+                          typeof song.duration === 'number'
+                            ? song.duration
+                            : song.duration
+                              ? Number(song.duration)
+                              : undefined,
+                        source: { kind: 'plugin', source: song.source, songId: song.id },
+                      }}
+                    />
+
+                    {/* Download — wire to song.url when the plugin populated one;
+                        render an info-only "browser will follow cross-origin
+                        link" affordance when the URL is empty (the gateway
+                        /api/stream proxy is a follow-up — when it lands, the
+                        empty-url branch will become a true native download
+                        against the same /api/stream endpoint the PlayButton
+                        fallback hits). Same-size spacer-preserved for now. */}
+                    {song.url ? (
+                      <a
+                        href={song.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={`下载 ${song.title || song.name}`}
+                        aria-label={`下载 ${song.title || song.name}`}
+                        className="inline-flex items-center justify-center w-7 h-7 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </a>
+                    ) : (
+                      <div
+                        className="w-7 h-7 shrink-0 flex items-center justify-center text-muted-foreground/60"
+                        title="即将支持：网关 /api/stream 代理下载"
+                        aria-label="暂未提供下载链接"
+                      >
+                        <Download className="w-3.5 h-3.5 opacity-40" />
+                      </div>
+                    )}
                   </div>
                 </div>
               );

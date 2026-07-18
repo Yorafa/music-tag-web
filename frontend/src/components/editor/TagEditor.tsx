@@ -1,5 +1,22 @@
+// Song-detail editor. Migrated off useAppStore to useEditorStore — the
+// slice of state this component reads (musicInfo, selectedFile,
+// fullPath, resource, etc.) lives in useEditorStore today.
+//
+// Batch-mode is gone: the old "no selectedFile + ≥1 checkedIds in
+// FileBrowser checkbox list" branch has been removed because
+// FileBrowser's checkbox list doesn't exist in the post-refactor layout.
+// The editor now always operates on a single file. The placeholder
+// guard drops to a single condition (`!selectedFile`) — when no row is
+// open, the editor shows "选择文件以编辑标签" and nothing else.
+//
+// Per-row id3 hydrate path: when a Worklist row is clicked, the
+// WorklistRowView's openEditor() handler sets selectedFile + fullPath +
+// musicInfo from the row's lazy cache, then sets editorOpen=true.
+// TagEditor mounts on that signal.
+
 import { useState, type CSSProperties } from 'react';
-import { useAppStore } from '@/store/useAppStore';
+import { useEditorStore, editorActions } from '@/store/useEditorStore';
+import { useWorklistStore } from '@/store/useWorklistStore';
 import { updateId3, fetchId3ByTitle, uploadImage } from '@/api/client';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -18,20 +35,17 @@ import {
 } from '@/utils/cover';
 import { toInitialChar, toTrimmedString } from '@/utils/string';
 
-// Read a text-shaped field off MusicTagInfo without falling back to `any`.
-// The discriminated-index dance keeps eslint's @typescript-eslint/no-explicit-any
-// happy while preserving the runtime semantics of `(m)[field] || ''`.
-// Six case branches below dispatch through this helper so the field-index
-// cast + null-coerce + input-coerce logic lives in one place. Inlining the
-// cast at each call would force a copy of this dance into every branch.
+// Read a text-shaped field off MusicTagInfo without falling back to
+// `any`. The discriminated-index dance keeps the @typescript-eslint/
+// no-explicit-any rule happy while preserving the runtime semantics
+// of `(m)[field] || ''`. Six case branches below dispatch through
+// this helper so the field-index cast + null-coerce + input-coerce
+// logic lives in one place. Inlining the cast at each call would
+// force a copy of this dance into every branch.
 function readStringField(m: Partial<MusicTagInfo>, field: string): string {
   const v = (m as Record<string, unknown>)[field];
   if (v == null) return '';
   return typeof v === 'string' ? v : String(v);
-}
-
-interface Props {
-  onLoadFiles: (path?: string) => void;
 }
 
 const SOURCES: { id: MusicSource; name: string }[] = [
@@ -64,18 +78,16 @@ const FIELD_LABELS: Record<string, string> = {
   tracknumber: '音轨号', duration: '时长', bit_rate: '比特率', size: '文件大小', album_type: '专辑类型',
 };
 
-/** Prominent cover shown in the song-detail header. Mirrors the row-level
- *  CoverThumb semantics byte-for-byte: same gradient palette, same
- *  array-indexed seed (`id % length`), same empty-payload + oversized
- *  short-circuit, same `imgFailed` fallback, same first-letter placeholder.
- *  The only intentional difference is the visual size (w-32 h-32 vs w-10 h-10). */
+/** Prominent cover shown in the song-detail header. Mirrors the
+ *  row-level CoverThumb semantics byte-for-byte: same gradient
+ *  palette, same array-indexed seed (`id % length`), same empty-
+ *  payload + oversized short-circuit, same `imgFailed` fallback, same
+ *  first-letter placeholder. The only intentional difference is the
+ *  visual size (w-32 h-32 vs w-10 h-10). */
 function DetailCover({ src, id, alt }: { src?: string; id: number; alt: string }) {
   const [imgFailed, setImgFailed] = useState(false);
   const { isEmptyPayload, isOversized, tooltip } = inspectCoverSrc(src);
   const showImg = !isEmptyPayload && !isOversized && !imgFailed;
-  // Backend sometimes hands us `alt` as a number or another non-string —
-  // `toInitialChar` coerces defensively so a stray type flip here becomes
-  // a no-op instead of "X?.trim is not a function" unmounting the tree.
   const initial = toInitialChar(alt);
   const bg: CSSProperties = {
     background: COVER_PLACEHOLDER_GRADIENTS[id % COVER_PLACEHOLDER_GRADIENTS.length],
@@ -103,10 +115,10 @@ function DetailCover({ src, id, alt }: { src?: string; id: number; alt: string }
   );
 }
 
-/** Header shown at the top of the song-detail panel. Big cover on the left;
- *  title/artist/album/year stacked on the right. Stable id derived from
- *  title so the same song always picks the same gradient slot in sync with
- *  the row-level CoverThumb. */
+/** Header shown at the top of the song-detail panel. Big cover on the
+ *  left; title/artist/album/year stacked on the right. Stable id
+ *  derived from title so the same song always picks the same gradient
+ *  slot in sync with the row-level CoverThumb. */
 function SongHeader({
   coverSrc,
   title,
@@ -129,10 +141,7 @@ function SongHeader({
     <div className="flex items-start gap-4 pb-4 border-b border-border">
       <DetailCover src={coverSrc} id={coverId} alt={headerTitle} />
       <div className="flex-1 min-w-0 space-y-1.5 pt-0.5">
-        <div
-          className="text-lg font-semibold leading-tight truncate"
-          title={headerTitle}
-        >
+        <div className="text-lg font-semibold leading-tight truncate" title={headerTitle}>
           {headerTitle}
         </div>
         <div className="text-sm text-muted-foreground truncate" title={artist || ''}>
@@ -157,10 +166,7 @@ function SongHeader({
             <span className="opacity-60">未知专辑</span>
           )}
         </div>
-        <div
-          className="text-xs text-muted-foreground/80 truncate"
-          title={year || '未知年份'}
-        >
+        <div className="text-xs text-muted-foreground/80 truncate" title={year || '未知年份'}>
           <span className="text-foreground/70">年份</span>
           <span className="mx-1.5 opacity-50">·</span>
           {toTrimmedString(year) || <span className="opacity-60">未知年份</span>}
@@ -170,29 +176,33 @@ function SongHeader({
   );
 }
 
-export function TagEditor({ onLoadFiles }: Props) {
-  const {
-    musicInfo, updateMusicInfo, fullPath, selectedFile, resource, setResource,
-    showFields, setFadeShowDetail, setSongList,
-    isLoading, setIsLoading,
-    checkedIds,
-  } = useAppStore();
+export function TagEditor() {
+  const musicInfo = useEditorStore((s) => s.musicInfo);
+  const fullPath = useEditorStore((s) => s.fullPath);
+  const selectedFile = useEditorStore((s) => s.selectedFile);
+  const resource = useEditorStore((s) => s.resource);
+  const showFields = useEditorStore((s) => s.showFields);
 
-  // (Removed: `<Dialog open={settingsOpen}>` + `<Dialog open={batchOpen}>` stubs
-  // that lived inside the outer AppShell dialog. base-ui's DialogPrimitive.Root
-  // mounts a provider chain per Root; nesting two extra Roots inside the
-  // outermost one silently unmounts the React tree on detail-open, producing
-  // a white screen with no dev-tools error.)
+  // Local loading flag — was a global on useAppStore. The save + scrape
+  // calls are short-lived so the editor-local useState is sufficient
+  // and avoids the cross-component re-render storm a global flag
+  // would create.
+  const [isLoading, setIsLoading] = useState(false);
 
+  // fullPath 现在是「相对 MUSIC_DIR」字面量（与 filePath 同根）。
+  // 后端 fetch_id3_by_title/update_id3 接 full_path：files相对路径
+  // 转 disk 路径走的是同 SafeJoin(MUSIC_DIR, ...)路径，所以此处不需要
+  // 任何 absolute 重构。前端 /media/<rel>/<name> 与后端 /app/media/<rel>/<name>
+  // 也指向同一文件——三处一致。
   const handleSearch = async () => {
     if (!musicInfo.title) return;
-    setSongList([]);
-    setFadeShowDetail(false);
+    editorActions.setSongList([]);
+    editorActions.setFadeShowDetail(false);
     try {
       const res = await fetchId3ByTitle(musicInfo.title, resource, fullPath);
       if (res.result) {
-        setSongList(res.data);
-        setFadeShowDetail(true);
+        editorActions.setSongList(res.data);
+        editorActions.setFadeShowDetail(true);
       }
     } catch {
       // ignore
@@ -209,7 +219,13 @@ export function TagEditor({ onLoadFiles }: Props) {
       }];
       const res = await updateId3(params);
       if (res.result) {
-        onLoadFiles();
+        // Mark the Worklist row as scraped on success. Falls through
+        // silently if fullPath isn't a row id (e.g. open editor in
+        // play mode — no Worklist row to mark).
+        const rowId = useEditorStore.getState().fullPath;
+        if (rowId) {
+          useWorklistStore.getState().setStatus(rowId, 'scraped');
+        }
       }
     } finally {
       setIsLoading(false);
@@ -222,10 +238,10 @@ export function TagEditor({ onLoadFiles }: Props) {
     try {
       const res = await uploadImage(file);
       if (res.result) {
-        // DetailCover re-resolves via `musicInfo.album_img`, so mutating it
-        // through `updateMusicInfo` is enough to refresh the header preview —
-        // no extra toggle needed.
-        updateMusicInfo('album_img', res.data);
+        // DetailCover re-resolves via `musicInfo.album_img`, so
+        // mutating it through `updateMusicInfo` is enough to refresh
+        // the header preview — no extra toggle needed.
+        editorActions.updateMusicInfo('album_img', res.data);
       }
     } catch {
       // ignore
@@ -240,7 +256,7 @@ export function TagEditor({ onLoadFiles }: Props) {
             <Label className="w-20 shrink-0 text-xs text-muted-foreground">{FIELD_LABELS[field]}</Label>
             <Input
               value={musicInfo.title || ''}
-              onChange={e => updateMusicInfo('title', e.target.value)}
+              onChange={e => editorActions.updateMusicInfo('title', e.target.value)}
               className="h-8 text-sm flex-1"
             />
             <Button size="icon" variant="ghost" className="h-8 w-8" onClick={handleSearch}>
@@ -255,7 +271,7 @@ export function TagEditor({ onLoadFiles }: Props) {
             <Label className="w-20 shrink-0 text-xs text-muted-foreground">{FIELD_LABELS[field]}</Label>
             <Input
               value={musicInfo.filename || ''}
-              onChange={e => updateMusicInfo('filename', e.target.value)}
+              onChange={e => editorActions.updateMusicInfo('filename', e.target.value)}
               className="h-8 text-sm flex-1"
             />
           </div>
@@ -272,7 +288,7 @@ export function TagEditor({ onLoadFiles }: Props) {
             <Label className="w-20 shrink-0 text-xs text-muted-foreground">{FIELD_LABELS[field]}</Label>
             <Input
               value={readStringField(musicInfo, field)}
-              onChange={e => updateMusicInfo(field, e.target.value)}
+              onChange={e => editorActions.updateMusicInfo(field, e.target.value)}
               className="h-8 text-sm flex-1"
             />
           </div>
@@ -282,7 +298,7 @@ export function TagEditor({ onLoadFiles }: Props) {
         return (
           <div className="flex items-center gap-2">
             <Label className="w-20 shrink-0 text-xs text-muted-foreground">风格</Label>
-            <Select value={musicInfo.genre || '流行'} onValueChange={v => updateMusicInfo('genre', v)}>
+            <Select value={musicInfo.genre || '流行'} onValueChange={v => editorActions.updateMusicInfo('genre', v)}>
               <SelectTrigger className="h-8 text-sm flex-1">
                 <SelectValue />
               </SelectTrigger>
@@ -297,7 +313,7 @@ export function TagEditor({ onLoadFiles }: Props) {
         return (
           <div className="flex items-center gap-2">
             <Label className="w-20 shrink-0 text-xs text-muted-foreground">语言</Label>
-            <Select value={musicInfo.language || ''} onValueChange={v => updateMusicInfo('language', v)}>
+            <Select value={musicInfo.language || ''} onValueChange={v => editorActions.updateMusicInfo('language', v)}>
               <SelectTrigger className="h-8 text-sm flex-1">
                 <SelectValue placeholder="选择语言" />
               </SelectTrigger>
@@ -312,7 +328,7 @@ export function TagEditor({ onLoadFiles }: Props) {
         return (
           <div className="flex items-center gap-2">
             <Label className="w-20 shrink-0 text-xs text-muted-foreground">专辑类型</Label>
-            <Select value={musicInfo.album_type || ''} onValueChange={v => updateMusicInfo('album_type', v)}>
+            <Select value={musicInfo.album_type || ''} onValueChange={v => editorActions.updateMusicInfo('album_type', v)}>
               <SelectTrigger className="h-8 text-sm flex-1">
                 <SelectValue placeholder="选择类型" />
               </SelectTrigger>
@@ -330,7 +346,7 @@ export function TagEditor({ onLoadFiles }: Props) {
               <Label className="w-20 shrink-0 text-xs text-muted-foreground">歌词</Label>
               <Textarea
                 value={musicInfo.lyrics || ''}
-                onChange={e => updateMusicInfo('lyrics', e.target.value)}
+                onChange={e => editorActions.updateMusicInfo('lyrics', e.target.value)}
                 className="text-xs flex-1 min-h-[180px] font-mono"
                 rows={12}
               />
@@ -338,7 +354,7 @@ export function TagEditor({ onLoadFiles }: Props) {
             <div className="flex items-center gap-2 ml-[88px]">
               <Switch
                 checked={musicInfo.is_save_lyrics_file || false}
-                onCheckedChange={v => updateMusicInfo('is_save_lyrics_file', v)}
+                onCheckedChange={v => editorActions.updateMusicInfo('is_save_lyrics_file', v)}
               />
               <Label className="text-xs text-muted-foreground">保存歌词文件</Label>
             </div>
@@ -351,7 +367,7 @@ export function TagEditor({ onLoadFiles }: Props) {
             <Label className="w-20 shrink-0 text-xs text-muted-foreground">描述</Label>
             <Textarea
               value={musicInfo.comment || ''}
-              onChange={e => updateMusicInfo('comment', e.target.value)}
+              onChange={e => editorActions.updateMusicInfo('comment', e.target.value)}
               className="text-xs flex-1"
               rows={3}
             />
@@ -381,7 +397,7 @@ export function TagEditor({ onLoadFiles }: Props) {
             <div className="flex items-center gap-2 ml-[88px]">
               <Switch
                 checked={musicInfo.is_save_album_cover || false}
-                onCheckedChange={v => updateMusicInfo('is_save_album_cover', v)}
+                onCheckedChange={v => editorActions.updateMusicInfo('is_save_album_cover', v)}
               />
               <Label className="text-xs text-muted-foreground">将封面写入文件元数据</Label>
             </div>
@@ -417,7 +433,7 @@ export function TagEditor({ onLoadFiles }: Props) {
     }
   };
 
-  if (!selectedFile && checkedIds.length === 0) {
+  if (!selectedFile) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
         选择文件以编辑标签
@@ -428,27 +444,36 @@ export function TagEditor({ onLoadFiles }: Props) {
   return (
     <ScrollArea className="h-full">
       <div className="py-4 space-y-3">
-        {/* Song-detail header. Shown only in single-file mode so the cover
-            reflects the actual selected song rather than the batch aggregate. */}
-        {selectedFile && checkedIds.length === 0 && (
+        {/* Song-detail header — shown unconditionally in single-file
+            mode (the old `selectedFile && checkedIds.length === 0`
+            branch collapsed to just `selectedFile` after the batch-
+            mode concept was removed).
+            `filename` falls back to `selectedFile` so the header
+            never reads "未命名歌曲" during the optimistic-mount
+            window before /api/music_id3/ resolves (or if the fetch
+            returns a Failure envelope we can't recover from). The
+            scene-mapping is intentional: Worklist/PlayView's row
+            click handler sets `selectedFile = row.fileName`
+            synchronously, so this stays a basename in lockstep with
+            whatever the file's on-disk name actually is — exactly
+            what `tag.Read`'s `Filename` fallback would have returned. */}
+        {selectedFile && (
           <SongHeader
             coverSrc={resolveCoverSrc(musicInfo as Partial<MusicTagInfo>)}
             title={musicInfo.title}
-            filename={musicInfo.filename}
+            filename={musicInfo.filename || selectedFile}
             artist={musicInfo.artist}
             album={musicInfo.album}
             year={musicInfo.year}
           />
         )}
 
-        {/* Tag-source selector + scrape trigger. "标签源" reflects that this
-            picker drives the scrape-by-title search, not playback. The right-
-            side 开始刮削 button is the discoverable secondary CTA of this
-            clicking it runs the same handleSearch as the per-title Search
-            icon, but the placement makes the action discoverable up-front. */}
+        {/* Tag-source selector + scrape trigger. The right-side
+            「开始刮削」button is the discoverable secondary CTA; it
+            runs the same handleSearch as the per-title Search icon. */}
         <div className="flex items-center gap-2">
           <Label className="text-xs text-muted-foreground shrink-0">标签源</Label>
-          <Select value={resource} onValueChange={v => setResource(v as MusicSource)}>
+          <Select value={resource} onValueChange={v => editorActions.setResource(v as MusicSource)}>
             <SelectTrigger className="h-7 text-xs w-28">
               <SelectValue />
             </SelectTrigger>
@@ -479,11 +504,11 @@ export function TagEditor({ onLoadFiles }: Props) {
 
       </div>
 
-      {/* Sticky bottom action bar. The save button lives here (rather than
-          next to the source selector at the top) so it stays reachable
-          through any field scroll position without competing for visual
-          space with the source picker. */}
-      <div className="sticky bottom-0 bg-card/95 backdrop-blur-sm border-t border-border px-4 py-3 flex justify-end">
+      {/* Sticky bottom action bar. The save button lives here (rather
+          than next to the source selector at the top) so it stays
+          reachable through any field scroll position without
+          competing for visual space with the source picker. */}
+      <div className="sticky bottom-0 bg-surface-3 backdrop-blur-sm border-t border-border px-4 py-3 flex justify-end">
         <Button size="sm" className="h-8 text-xs" onClick={handleSave} disabled={isLoading}>
           <Save className="w-3.5 h-3.5 mr-1.5" />
           保存

@@ -25,18 +25,22 @@ export function LoginPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
-      if (!res.ok) {
-        setError('用户名或密码错误');
-        return;
-      }
-      const data = (await res.json()) as { access?: string };
-      if (!data.access) {
-        setError('登录响应缺少 access token');
+      // handler/auth.go::Login now returns the standard APIResponse envelope
+      // (SuccessData/Failure helpers). Failure() emits HTTP 200 with
+      // {result:false, message:"..."} by project convention (response.go),
+      // so `!res.ok` will NOT detect auth failures; check data.result.
+      const data = (await res.json()) as {
+        result: boolean;
+        message: string;
+        data?: { access?: string; refresh?: string };
+      };
+      if (!data.result || !data.data?.access) {
+        setError(data.message || '登录失败');
         return;
       }
       // Hand the raw JWT to the in-memory store; api/client.ts attaches it
       // as 'Authorization: JWT <access>' on every subsequent request.
-      login(data.access);
+      login(data.data.access);
     } catch {
       setError('网络错误，请重试');
     } finally {

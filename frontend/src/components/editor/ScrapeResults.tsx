@@ -1,28 +1,48 @@
-import { useAppStore } from '@/store/useAppStore';
+// Scrape-result sidebar inside the song-detail Dialog. Migrated off
+// useAppStore to useEditorStore — the slice it owns (songList +
+// fadeShowDetail) lives entirely in useEditorStore today.
+//
+// Batch-mode is gone: the old `if (!selectedFile && checkedIds.length
+// > 0)` lockdown has been removed because FileBrowser's checkbox list
+// doesn't exist in the post-refactor layout, and the editor is now
+// single-file by construction. Every chip / 应用所有 button on a
+// scrape-result row directly applies to the open editor's musicInfo,
+// then ALSO mirrors into the matching Worklist row's lazy musicInfo
+// cache so the thumbnail + first-line preview pick up the change
+// without a full /api/music_id3/ refetch.
+//
+// Lyric field handling: the SCRAPE_FIELD_MAP entry reads BOTH `lyric`
+// (singular — Kuwo's [cover] appendix path) and `lyrics` (plural —
+// bulk-fetch path). One chip covers both shapes; no second row.
+
+import { useEditorStore, editorActions } from '@/store/useEditorStore';
+import { useWorklistStore } from '@/store/useWorklistStore';
 import type { MusicTagInfo, SongInfo } from '@/types';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { X, Music } from 'lucide-react';
+import { X, Music, Sparkles } from 'lucide-react';
 
 interface Props {
   onApply: (field: keyof MusicTagInfo, value: string) => void;
 }
 
-/** Map from SongInfo keys to MusicTagInfo keys + Chinese display labels. */
 const SCRAPE_FIELD_MAP: {
-  songKey: keyof SongInfo;
+  songKey: string;
   tagKey: keyof MusicTagInfo;
   label: string;
+  altKey?: string;
 }[] = [
   { songKey: 'name',   tagKey: 'title',    label: '标题' },
   { songKey: 'artist', tagKey: 'artist',   label: '艺术家' },
   { songKey: 'album',  tagKey: 'album',    label: '专辑' },
   { songKey: 'year',   tagKey: 'year',     label: '年份' },
+  { songKey: 'lyric',  tagKey: 'lyrics',   label: '歌词', altKey: 'lyrics' },
 ];
 
-/** Single thumbnail for a scrape result. Falls back to a music icon when
- *  no cover URL is available (common for MusicBrainz / acoustid results). */
+/** Single thumbnail for a scrape result. Falls back to a music icon
+ *  when no cover URL is available (common for MusicBrainz / acoustid
+ *  results). */
 function ScrapeCover({ src, alt }: { src?: string; alt: string }) {
   return (
     <div className="w-10 h-10 rounded overflow-hidden bg-muted shrink-0 ring-1 ring-border/50">
@@ -42,11 +62,48 @@ function ScrapeCover({ src, alt }: { src?: string; alt: string }) {
   );
 }
 
-export function ScrapeResults({ onApply }: Props) {
-  const songList = useAppStore((s) => s.songList);
-  const setSongList = useAppStore((s) => s.setSongList);
+/** Read a field off a SongInfo per the SCRAPE_FIELD_MAP entry. Caller
+ *  sometimes delivers `lyric` (singular) and sometimes `lyrics`; the
+ *  `altKey` lets one map entry cover both shapes so we don't need to
+ *  enumerate a second row.
+ *
+ *  Two-step `unknown → Record<string, unknown>` cast: required because
+ *  SongInfo's numeric fields (artwork_w/artwork_h/artwork_size) are
+ *  typed as `number` and don't satisfy the `Record<string, unknown>`
+ *  overlap rule. Going through `unknown` first is TS's blessed idiom
+ *  for untyped-indexing with explicit acknowledgement. */
+function readScrapeValue(song: SongInfo, songKey: string, altKey?: string): string {
+  const obj = song as unknown as Record<string, unknown>;
+  const primary = obj[songKey];
+  if (primary != null && String(primary).length > 0) return String(primary);
+  if (altKey) {
+    const alt = obj[altKey];
+    if (alt != null && String(alt).length > 0) return String(alt);
+  }
+  return '';
+}
 
-  const handleClose = () => setSongList([]);
+export function ScrapeResults({ onApply }: Props) {
+  const songList = useEditorStore((s) => s.songList);
+  const handleClose = () => editorActions.setSongList([]);
+
+  // Apply writes to BOTH the editor (so the visible form updates)
+  // AND the Worklist row's lazy musicInfo cache (so the row's
+  // thumbnail + first-line preview pick up the change instantly). The
+  // row id == editor's fullPath by convention set in WorklistRowView's
+  // openEditor handler.
+
+  // Inline apply that mirrors into the Worklist cache. The component
+  // is fed onApply via props (so the parent can decide whether to
+  // merge into a shared store or a per-row store); we extend it here
+  // so the row's lazy cache stays in lockstep with the editor.
+  const applyAndCache = (field: keyof MusicTagInfo, value: string): void => {
+    onApply(field, value);
+    const rowId = useEditorStore.getState().fullPath;
+    if (rowId) {
+      useWorklistStore.getState().setMusicInfo(rowId, { [field]: value });
+    }
+  };
 
   if (songList.length === 0) {
     return (
@@ -103,10 +160,11 @@ export function ScrapeResults({ onApply }: Props) {
                 </div>
               </div>
 
-              {/* Clickable field chips */}
+              {/* Clickable field chips. Apply always works (no batch-
+                  mode lockdown in the single-file editor). */}
               <div className="flex flex-wrap gap-1.5">
-                {SCRAPE_FIELD_MAP.map(({ songKey, tagKey, label }) => {
-                  const value = song[songKey];
+                {SCRAPE_FIELD_MAP.map(({ songKey, tagKey, label, altKey }) => {
+                  const value = readScrapeValue(song, songKey, altKey);
                   if (!value) return null;
                   return (
                     <Button
@@ -114,14 +172,39 @@ export function ScrapeResults({ onApply }: Props) {
                       variant="outline"
                       size="sm"
                       className="h-6 px-2 text-[11px] font-normal gap-1 hover:bg-primary/10 hover:text-primary hover:border-primary/40 transition-colors"
-                      onClick={() => onApply(tagKey, String(value))}
-                      title={`${label}: ${value}`}
+                      onClick={() => applyAndCache(tagKey, value)}
+                      title={
+                        tagKey === 'lyrics' && value.length > 80
+                          ? `${label} · ${value.length} chars`
+                          : `${label}: ${value}`
+                      }
                     >
                       <span className="text-muted-foreground">{label}</span>
                       <span className="max-w-[100px] truncate">{value}</span>
                     </Button>
                   );
                 })}
+              </div>
+
+              {/* One-click apply-all — pops every non-empty fieldwork
+                  onto the open editor in a single batch. Same altKey
+                  fallback as the per-field chip. */}
+              <div className="flex justify-end pt-1 border-t border-border/40">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-[11px] gap-1 text-primary hover:text-primary hover:bg-primary/10"
+                  onClick={() => {
+                    SCRAPE_FIELD_MAP.forEach(({ songKey, tagKey, altKey }) => {
+                      const v = readScrapeValue(song, songKey, altKey);
+                      if (v.length > 0) applyAndCache(tagKey, v);
+                    });
+                  }}
+                  title="把这一行所有可填充字段一次性写到正在编辑的歌曲上"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  应用所有
+                </Button>
               </div>
             </div>
           ))}
