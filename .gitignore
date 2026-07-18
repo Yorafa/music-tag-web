@@ -35,3 +35,11 @@ worker
 # them in if a Django-era toolchain is run on the host.
 static/admin/
 static/rest_framework/
+
+# Local media/data for dev testing — never commit
+/music/
+/data/
+
+# Local scratch/temp scripts
+/a1
+/verify_yaml.sh
