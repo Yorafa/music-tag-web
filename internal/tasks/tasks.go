@@ -17,9 +17,9 @@ const (
 	TypeFullScanFolder   = "scan:full"
 	TypeUpdateScanFolder = "scan:update"
 	TypeBatchAutoTag     = "tag:batch_auto"
-	TypeTidyFolder       = "folder:tidy"
-	TypeYouTubeDownload  = "download:youtube"
-	TypeClearMusic       = "db:clear"
+	TypeTidyFolder      = "folder:tidy"
+	TypeDownloadGeneric = "download:generic" // unified download type — payload.Source dispatches to the matching DownloadSource
+	TypeClearMusic      = "db:clear"
 )
 
 // --- Payloads ---
@@ -42,12 +42,20 @@ type TidyFolderPayload struct {
 	SecondDir  string   `json:"second_dir"`
 }
 
-type YouTubeDownloadPayload struct {
-	VideoID      string `json:"video_id"`
-	DownloadDir  string `json:"download_dir"`
-	ExtraJSON    string `json:"extra,omitempty"` // format/output_format/quality
-	Batch        string `json:"batch,omitempty"`
-	RequestedBy  string `json:"requested_by,omitempty"`
+// DownloadPayload is the generic, source-routed download task body.
+// The new generic download endpoint POST /api/download enqueues this so
+// any registered DownloadSource (youtube today, soundcloud/etc tomorrow)
+// can share one asynq task type and one worker handler. DestDir is the
+// user's chosen server-side destination (`settings.downloadPath`
+// relative to MUSIC_DIR) for "加入库"; empty means the global default
+// (e.g. /app/media/<downloadPath>), resolved by the worker.
+type DownloadPayload struct {
+	Source        string `json:"source"`                  // registered DownloadSource name
+	VideoID       string `json:"video_id"`
+	DestDir       string `json:"dest_dir,omitempty"`     // optional server-side destination (relative to MUSIC_DIR)
+	ExtraJSON     string `json:"extra,omitempty"`        // format/output_format/quality
+	Batch         string `json:"batch,omitempty"`
+	RequestedBy   string `json:"requested_by,omitempty"`
 }
 
 type ClearMusicPayload struct{}
@@ -159,10 +167,12 @@ func NewTidyFolderMux(mux *asynq.ServeMux, h Handler) {
 	}).ProcessTask)
 }
 
-func NewYouTubeDownloadMux(mux *asynq.ServeMux, h Handler) {
-	mux.HandleFunc(TypeYouTubeDownload, (&asynqAdapter{
+// NewDownloadGenericMux registers the unified TypeDownloadGeneric handler.
+// Handler h is expected to accept *DownloadPayload and dispatch by payload.Source.
+func NewDownloadGenericMux(mux *asynq.ServeMux, h Handler) {
+	mux.HandleFunc(TypeDownloadGeneric, (&asynqAdapter{
 		decode: func(data []byte) (interface{}, error) {
-			var p YouTubeDownloadPayload
+			var p DownloadPayload
 			err := Decode(data, &p)
 			return &p, err
 		},

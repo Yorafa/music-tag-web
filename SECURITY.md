@@ -60,13 +60,13 @@ GRPC_TLS_CA_FILE=/etc/music-tag/ca.pem   # 可选；不设置则使用系统根�
 
 ### yt-dlp 参数注入
 
-`POST /api/youtube_download/` 接受一个 `extra_audio_format` 提示参数。`internal/tasks/yt_dlp_validate.go` 对三个字段做清洗：
+`POST /api/download/` 接受一个 `extra` 提示参数（format / output_format / quality）。`internal/tasks/yt_dlp_validate.go` 对三个字段做清洗：
 
 - `format` — 正则 `^[a-zA-Z0-9_./+<>:=]{1,64}$`，拒绝 `-` 前缀
 - `output_format` — 闭合枚举 `mp3 | m4a | ogg | vorbis | wav | ""`
 - `quality` — `^[0-9]{1,4}$`
 
-Gateway（`handler.YoutubeDownload`）与 worker（`tasks.YouTubeDownloadHandler.ProcessTask`）两侧**都**重新校验；纵深防御可以同时挡住任务 payload 重放与 DB 篡改。
+Gateway（`handler.Download`）与 worker（`tasks.DownloadHandler.ProcessTask`）两侧**都**重新校验；纵深防御可以同时挡住任务 payload 重放与 DB 篡改。
 
 ---
 

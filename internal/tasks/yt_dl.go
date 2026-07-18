@@ -15,21 +15,39 @@ import (
 	"gorm.io/gorm"
 )
 
-// YouTubeDownloadHandler downloads a YouTube video as audio into a tmp
-// staging dir shared with the gateway /api/stream youtube branch.
+// AudioCacheRoot returns the per-source staging directory downloaded audio
+// files land in (shared with the gateway /api/stream handler's glob lookup).
 //
-// Mirrors the Django applications/task/services/youtube.py happy path:
-//   - extract audio via yt-dlp
-//   - land under <YT_TMP_DIR>/<video_id>.{ext} (default /tmp/youtube_audio)
-//   - write a Folder (file_type='youtube') and one TaskRecord into the
-//     library DB so the existing /api/file_list/ picks the row up.
+// Each registered DownloadSource gets its own subdirectory under
+// /tmp/audio_cache/<source>/ so cross-source video_id collisions (e.g.
+// numeric IDs from migu / soundcloud vs youtube's 11-char) can't collide.
+// MUST stay in lockstep with internal/gateway/handler/stream.go's
+// audioCacheDir (same env var, same default).
+func audioCacheDir(source string) string {
+	root := os.Getenv("AUDIO_CACHE_DIR")
+	if root == "" {
+		root = "/tmp/audio_cache"
+	}
+	return filepath.Join(root, source)
+}
+
+// DownloadHandler is the unified, source-routed asynq handler for the
+// `download:generic` task type. payload.Source dispatches to the
+// matching download branch. Today only the youtube/yt-dlp branch is
+// implemented; adding a new download source (e.g. soundcloud) means
+// adding a case here plus a side-effecting exec path for that source,
+// NOT a new asynq task type and NOT a new endpoint.
 //
-// The /tmp staging dir is a deliberate design choice: the user listens
-// to YouTube previews in-browser via the /api/stream proxy (Range
-// pass-through) without retaining them as permanent library files. After
-// the user likes a track, they scrape (TagEditor/SmartTagSearch) + add;
-// only then does the file land in the user's music library via the
-// conventional tag-write path.
+// Two landing directories are involved:
+//   - Cache dir (preview path): audioCacheDir(source)/<id>.<ext>
+//     written by the source-specific exec call. Shared with the
+//     gateway's /api/stream glob so ServeFile picks the file up.
+//   - DestDir (加入库 path): when non-empty, the file is copied from
+//     the cache dir to SafeJoin(MusicRoot, DestDir)/<id>.<ext> AFTER
+//     the download finishes, so preview cache stays short-lived and
+//     the library gets a permanent copy. When empty, the worker just
+//     leaves the file in cache (this is the preview-only path the
+//     /api/stream proxy triggers).
 //
 // SECURITY: ExtraJSON is untrusted input (any client can POST
 // /api/download/). The previous code path called
@@ -38,33 +56,17 @@ import (
 // and the worker run each value through SanitizeYTDLPFormat/OutputFormat/
 // Quality before constructing argv, so yt-dlp flags like `--exec` are
 // refused at the boundary.
-type YouTubeDownloadHandler struct {
-	DB          *gorm.DB
-	MusicRoot   string // unused for the file landing dir but kept so callers can stay agnostic; see youtubeTmpDir() below
-	YTDLPPath   string // absolute path inside worker image; default "yt-dlp"
-	Concurrency int
+type DownloadHandler struct {
+	DB        *gorm.DB
+	MusicRoot string
+	YTDLPPath string // absolute path inside worker image; default "yt-dlp". Currently only used by the youtube branch.
 }
 
-func NewYouTubeDownloadHandler(gormDB *gorm.DB, musicRoot, ytdlpPath string) *YouTubeDownloadHandler {
+func NewDownloadHandler(gormDB *gorm.DB, musicRoot, ytdlpPath string) *DownloadHandler {
 	if ytdlpPath == "" {
 		ytdlpPath = "yt-dlp"
 	}
-	return &YouTubeDownloadHandler{
-		DB:          gormDB,
-		MusicRoot:   musicRoot,
-		YTDLPPath:   ytdlpPath,
-		Concurrency: 4,
-	}
-}
-
-// youtubeTmpDir returns the directory yt-dlp is expected to write to.
-// MUST stay in lockstep with internal/gateway/handler/stream.go's
-// youtubeTmpDir (same env var, same default).
-func youtubeTmpDir() string {
-	if v := os.Getenv("YT_TMP_DIR"); v != "" {
-		return v
-	}
-	return "/tmp/youtube_audio"
+	return &DownloadHandler{DB: gormDB, MusicRoot: musicRoot, YTDLPPath: ytdlpPath}
 }
 
 type youTubeDownloadExtra struct {
@@ -73,12 +75,33 @@ type youTubeDownloadExtra struct {
 	Quality      string `json:"quality,omitempty"`       // e.g. "192"
 }
 
-func (h *YouTubeDownloadHandler) ProcessTask(ctx context.Context, t Task) error {
-	payload, ok := t.Payload.(*YouTubeDownloadPayload)
+func (h *DownloadHandler) ProcessTask(ctx context.Context, t Task) error {
+	payload, ok := t.Payload.(*DownloadPayload)
 	if !ok {
-		return fmt.Errorf("youtube: invalid payload type %T", t.Payload)
+		return fmt.Errorf("download: invalid payload type %T", t.Payload)
 	}
+	if payload.Source == "" {
+		return fmt.Errorf("download: empty source")
+	}
+	switch payload.Source {
+	case "youtube":
+		return h.runYouTube(ctx, payload)
+	default:
+		return fmt.Errorf("download: source %q not yet supported by worker", payload.Source)
+	}
+}
 
+// runYouTube is the youtube-specific branch: fork yt-dlp into the cache dir.
+// Other branches (soundcloud, etc) would each have their own run<Source>
+// helper here once those download sources are registered. Until branch
+// generalization happens at the plugin interface level (yt-dlp exec is
+// the only one implemented today), we dispatch on payload.Source here,
+// not via plugin.GetDownloadSource — that helper is for the gateway
+// handler (which never runs yt-dlp itself), not the worker (which runs
+// the actual binary).
+func (h *DownloadHandler) runYouTube(ctx context.Context, payload *DownloadPayload) error {
+	// 0) Sanitize persisted ExtraJSON (defence-in-depth — gateway already
+	//    vetted, but DB-replay / tamper paths still reach the worker).
 	extra := youTubeDownloadExtra{
 		Format:       "bestaudio/best",
 		OutputFormat: "mp3",
@@ -86,29 +109,26 @@ func (h *YouTubeDownloadHandler) ProcessTask(ctx context.Context, t Task) error 
 	}
 	if payload.ExtraJSON != "" {
 		if err := json.Unmarshal([]byte(payload.ExtraJSON), &extra); err != nil {
-			return fmt.Errorf("youtube: parse ExtraJSON: %w", err)
+			return fmt.Errorf("download: parse ExtraJSON: %w", err)
 		}
 	}
-	// Sanitize re-checks the persisted values (defence-in-depth — covers
-	// task payload replay / DB tampering paths as well as gateway-vetting
-	// that already happens in handler.Download).
 	cleanFmt, err := SanitizeYTDLPFormat(extra.Format)
 	if err != nil {
-		return fmt.Errorf("youtube: format: %w", err)
+		return fmt.Errorf("download: format: %w", err)
 	}
 	cleanOut, err := SanitizeYTDLPOutputFormat(extra.OutputFormat)
 	if err != nil {
-		return fmt.Errorf("youtube: output_format: %w", err)
+		return fmt.Errorf("download: output_format: %w", err)
 	}
 	cleanQuality, err := SanitizeYTDLPQuality(extra.Quality)
 	if err != nil {
-		return fmt.Errorf("youtube: quality: %w", err)
+		return fmt.Errorf("download: quality: %w", err)
 	}
 
-	// 1) ensure download dir
-	downloadsDir := youtubeTmpDir()
+	// 1) ensure cache dir
+	downloadsDir := audioCacheDir("youtube")
 	if err := os.MkdirAll(downloadsDir, 0o755); err != nil {
-		return fmt.Errorf("youtube: mkdir downloads: %w", err)
+		return fmt.Errorf("download: mkdir cache: %w", err)
 	}
 
 	// 2) build yt-dlp output template: <id>.%(ext)s
@@ -162,12 +182,12 @@ func (h *YouTubeDownloadHandler) ProcessTask(ctx context.Context, t Task) error 
 	)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("youtube: stdout pipe: %w", err)
+		return fmt.Errorf("download: stdout pipe: %w", err)
 	}
 	cmd.Stderr = cmd.Stdout // merge: yt-dlp prints to stderr
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("youtube: start %q: %w", h.YTDLPPath, err)
+		return fmt.Errorf("download: start %q: %w", h.YTDLPPath, err)
 	}
 
 	// Log progress to stdout (cheap signals for ops; no buffering).
@@ -188,7 +208,7 @@ func (h *YouTubeDownloadHandler) ProcessTask(ctx context.Context, t Task) error 
 	}()
 
 	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("youtube: %q exit: %w", h.YTDLPPath, err)
+		return fmt.Errorf("download: %q exit: %w", h.YTDLPPath, err)
 	}
 
 	// 3) locate downloaded file (mp3 / m4a / ogg / original)
@@ -197,13 +217,40 @@ func (h *YouTubeDownloadHandler) ProcessTask(ctx context.Context, t Task) error 
 		return err
 	}
 
-	// 4) persist: 1 Folder + 1 TaskRecord
+	// 4) If DestDir is supplied (加入库 path), copy the cache file into
+	//    SafeJoin(MusicRoot, DestDir) so the user gets a permanent library
+	//    file; preview cache keeps its transient copy. Failing to persist
+	//    is non-fatal for the play path — we surface the error and let
+	//    asynq retry once; the cache copy is already valid for preview.
+	libraryPath := dlFile
+	if payload.DestDir != "" && h.MusicRoot != "" {
+		destDir := filepath.Join(h.MusicRoot, filepath.Clean(payload.DestDir))
+		// SafeJoin-ish: refuse absolute / `..` traversal. This path came
+		// from the user's `settings.downloadPath` localStorage (personal
+		// deployment) so we don't expect abuse, but the boundary guard
+		// stays for defence-in-depth.
+		if strings.Contains(filepath.Clean(payload.DestDir), "..") ||
+			filepath.IsAbs(payload.DestDir) {
+			return fmt.Errorf("download: dest_dir must be relative path under music root, got %q", payload.DestDir)
+		}
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
+			return fmt.Errorf("download: mkdir dest %q: %w", destDir, err)
+		}
+		destPath := filepath.Join(destDir, filepath.Base(dlFile))
+		if err := copyFile(dlFile, destPath); err != nil {
+			return fmt.Errorf("download: copy to library %q: %w", destPath, err)
+		}
+		libraryPath = destPath
+		dlFile = destPath
+	}
+
+	// 5) persist: 1 Folder + 1 TaskRecord
 	now := time.Now()
 	folder := db.Folder{
-		UID:       payload.VideoID, // re-use YouTube id as unique folder UID
+		UID:       payload.VideoID, // re-use video id as unique folder UID
 		ParentID:  "",
 		Name:      filepath.Base(dlFile),
-		FileType:  "youtube",
+		FileType:  payload.Source,
 		Path:      dlFile,
 		Size:      dlSize,
 		UpdatedAt: now,
@@ -211,7 +258,7 @@ func (h *YouTubeDownloadHandler) ProcessTask(ctx context.Context, t Task) error 
 	if err := h.DB.WithContext(ctx).Where("uid = ?", folder.UID).
 		Attrs(folder).
 		FirstOrCreate(&folder).Error; err != nil {
-		return fmt.Errorf("youtube: upsert folder: %w", err)
+		return fmt.Errorf("download: upsert folder: %w", err)
 	}
 
 	rec := db.TaskRecord{
@@ -219,16 +266,17 @@ func (h *YouTubeDownloadHandler) ProcessTask(ctx context.Context, t Task) error 
 		Batch:     payload.Batch,
 		FileName:  filepath.Base(dlFile),
 		FullPath:  dlFile,
-		Source:    "youtube",
+		Source:    payload.Source,
 		UID:       payload.VideoID,
-		FileType:  "youtube",
+		FileType:  payload.Source,
 		Status:    "completed",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 	if err := h.DB.WithContext(ctx).Create(&rec).Error; err != nil {
-		return fmt.Errorf("youtube: create task record: %w", err)
+		return fmt.Errorf("download: create task record: %w", err)
 	}
+	_ = libraryPath
 	return nil
 }
 
@@ -236,7 +284,7 @@ func (h *YouTubeDownloadHandler) ProcessTask(ctx context.Context, t Task) error 
 func findDownloadedFile(dir, videoID string) (string, int64, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return "", 0, fmt.Errorf("youtube: read downloads dir: %w", err)
+		return "", 0, fmt.Errorf("download: read cache dir: %w", err)
 	}
 	var (
 		bestPath string
@@ -268,7 +316,25 @@ func findDownloadedFile(dir, videoID string) (string, int64, error) {
 		}
 	}
 	if bestPath == "" {
-		return "", 0, fmt.Errorf("youtube: no audio file for id=%s in %s", videoID, dir)
+		return "", 0, fmt.Errorf("download: no audio file for id=%s in %s", videoID, dir)
 	}
 	return bestPath, bestInfo.Size(), nil
+}
+
+// copyFile is a minimal byte copy for the cache→library persistence step.
+// Not using io.Copy on raw os.File handles because they aren't
+// seek-aware on cross-fs rename and we want a clean truncated destination.
+func copyFile(src, dst string) error {
+	srcF, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcF.Close()
+	dstF, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstF.Close()
+	_, err = io.Copy(dstF, srcF)
+	return err
 }

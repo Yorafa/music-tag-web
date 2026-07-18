@@ -108,7 +108,9 @@ func main() {
 		MusicRoot: cfg.MusicDir,
 		Bus:       bus,
 	})
-	tasks.NewYouTubeDownloadMux(mux, &tasks.YouTubeDownloadHandler{
+	// Unified download handler — all download enqueues go through
+	// download:generic; payload.Source dispatches to the matching branch.
+	tasks.NewDownloadGenericMux(mux, &tasks.DownloadHandler{
 		DB:        gormDB,
 		MusicRoot: cfg.MusicDir,
 	})

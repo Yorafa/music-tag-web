@@ -101,9 +101,10 @@ type Server struct {
 
 	ytdlpPath string
 	// workDir is the on-disk staging dir Download() lands files in.
-	// Fixed at boot via YT_TMP_DIR (defaults to /tmp/youtube_audio) so
-	// the gateway's /api/stream handler can find them without a second
-	// hop.
+	// Fixed at boot via AUDIO_CACHE_DIR (defaults to /tmp/audio_cache) plus
+	// the per-source subdir "youtube" so the gateway's /api/stream handler
+	// can find the file without a second hop. Per-source subdirs prevent
+	// video_id collisions across different DownloadSources.
 	workDir         string
 	searchTimeout   time.Duration
 	downloadTimeout time.Duration
@@ -117,8 +118,8 @@ type Option func(*Server)
 func WithYTDLPPath(p string) Option { return func(s *Server) { s.ytdlpPath = p } }
 
 // WithWorkDir overrides the directory Download() writes into. Default
-// YT_TMP_DIR=/tmp/youtube_audio — must stay in lockstep with
-// internal/tasks/yt_dl.go::youtubeTmpDir.
+// <AUDIO_CACHE_DIR>/youtube (= /tmp/audio_cache/youtube) — must stay in
+// lockstep with internal/tasks/yt_dl.go::audioCacheDir("youtube").
 func WithWorkDir(d string) Option { return func(s *Server) { s.workDir = d } }
 
 // NewServer constructs a Server. It MkdirAll's workDir at startup so
@@ -139,15 +140,16 @@ func NewServer(opts ...Option) (*Server, error) {
 	return s, nil
 }
 
-// tmpDir mirrors internal/tasks/yt_dl.go::youtubeTmpDir. Kept private
-// here (instead of importing tasks) to keep the gRPC plugin code decoupled
-// from the worker's taskqueue machinery — they share a runtime directory
-// by convention, not by import.
+// tmpDir mirrors internal/tasks/yt_dl.go::audioCacheDir("youtube"). Kept
+// private here (instead of importing tasks) to keep the gRPC plugin code
+// decoupled from the worker's taskqueue machinery — they share a runtime
+// directory by convention, not by import.
 func tmpDir() string {
-	if v := os.Getenv("YT_TMP_DIR"); v != "" {
-		return v
+	root := os.Getenv("AUDIO_CACHE_DIR")
+	if root == "" {
+		root = "/tmp/audio_cache"
 	}
-	return "/tmp/youtube_audio"
+	return filepath.Join(root, "youtube")
 }
 
 // GetPluginInfo is the gRPC handshake — the gateway calls this once
@@ -306,8 +308,8 @@ func (s *Server) Search(ctx context.Context, req *pb.DownloadSearchRequest) (*pb
 
 // Download lands the audio track for video_id into workDir and returns
 // the file path the gateway can serve. Mirrors internal/tasks/yt_dl.go's
-// filenames — YouTube (id).(ext) is the same on both sides — so a
-// handler that points at YT_TMP_DIR can serve either result
+// filenames — <id>.<ext> under audioCacheDir("youtube") — so a handler
+// that points at AUDIO_CACHE_DIR/youtube can serve either result
 // interchangeably.
 func (s *Server) Download(ctx context.Context, req *pb.DownloadRequest) (*pb.DownloadResponse, error) {
 	videoID := strings.TrimSpace(req.GetVideoId())

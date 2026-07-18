@@ -21,10 +21,12 @@ db.sqlite3
 /media/
 /build/
 
-# Go build artifacts (project root)
+# Go build artifacts (project root only — bare names without a leading
+# slash would match any path component, e.g. internal/gateway/**, and
+# silently drop newly-added handler sources from git status).
 bin/
-gateway
-worker
+/gateway
+/worker
 *.exe
 *.test
 *.out

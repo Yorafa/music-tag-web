@@ -59,6 +59,7 @@ export function PlayerBar() {
   const prev = usePlayerStore((s) => s.prev);
   const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
   const setDuration = usePlayerStore((s) => s.setDuration);
+  const setIsBuffering = usePlayerStore((s) => s.setIsBuffering);
 
   // Initial volume + reactive volume sync.
   useEffect(() => {
@@ -161,6 +162,16 @@ export function PlayerBar() {
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
         onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
         onError={onMediaError}
+        // Buffering signal mirrors: onWaiting fires when playback halts
+        // because the next frame isn't buffered yet; onCanPlay / onPlaying
+        // both indicate recovery. Layered into usePlayerStore.isBuffering
+        // so PlayButton (and any future spinner overlay) can show the
+        // per-track stall signal next to the row that triggered it,
+        // instead of burying it in a global toast.
+        onWaiting={() => setIsBuffering(true)}
+        onCanPlay={() => setIsBuffering(false)}
+        onPlaying={() => setIsBuffering(false)}
+        onPause={() => setIsBuffering(false)}
       />
 
       {/* Cover */}

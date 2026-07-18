@@ -4,7 +4,7 @@
 //
 //   • TypeFullScanFolder  ("scan:full")
 //   • TypeBatchAutoTag    ("tag:batch_auto")
-//   • TypeYouTubeDownload ("download:youtube")
+//   • TypeDownloadGeneric ("download:generic") — youtube branch via fake yt-dlp
 //
 // Per test, a *testRig bootstraps:
 //   1. miniredis (in-process Redis, no Docker required for CI)
@@ -14,8 +14,8 @@
 // Skips testcontainers-go/Redis for portability: miniredis speaks the same
 // go-redis wire protocol asynq uses; tests run anywhere `go test` does.
 //
-// YouTubeDownload uses a fake shell script to inject yt-dlp behavior — no
-// real binary required.
+// DownloadGeneric (youtube branch) uses a fake shell script to inject
+// yt-dlp behavior — no real binary required.
 
 package tasks_test
 
@@ -385,20 +385,21 @@ func TestIntegration_BatchAutoTag_StateTransitions(t *testing.T) {
 	// TaskRecord.tag_source (proves plugin → candidate → write path).
 }
 
-// ─── Test 3: YouTubeDownload ───────────────────────────────────────────────
+// ─── Test 3: DownloadGeneric (youtube branch) ──────────────────────────────
 
-func TestIntegration_YouTubeDownload_FakeYtdlp(t *testing.T) {
+func TestIntegration_DownloadGeneric_YouTube_FakeYtdlp(t *testing.T) {
 	rig := newTestRig(t)
 
 	root := rig.MusicRoot
-	downloadsDir := filepath.Join(root, "downloads")
+	// DownloadHandler writes into audioCacheDir("youtube") =
+	// $AUDIO_CACHE_DIR/youtube. Point the root at our fixture so the
+	// fake yt-dlp output lands where the test asserts it.
+	cacheRoot := filepath.Join(root, "audio_cache")
+	t.Setenv("AUDIO_CACHE_DIR", cacheRoot)
+	downloadsDir := filepath.Join(cacheRoot, "youtube")
 	if err := os.MkdirAll(downloadsDir, 0o755); err != nil {
-		t.Fatalf("mkdir downloads: %v", err)
+		t.Fatalf("mkdir cache: %v", err)
 	}
-	// The YouTube handler now reads YT_TMP_DIR via os.Getenv on every
-	// task invocation — point it at our test fixture dir so the fake
-	// yt-dlp output lands where the test asserts it.
-	t.Setenv("YT_TMP_DIR", downloadsDir)
 
 	// Fake yt-dlp: emit a small mp3 file when invoked, derived from the URL.
 	// Honours the standard yt-dlp arg layout used by yt_dl.go:
@@ -434,17 +435,18 @@ exit 0
 
 	const videoID = "ytFake001"
 
-	// Consumer registers YouTubeDownloadHandler pointed at fake binary.
+	// Consumer registers DownloadHandler pointed at fake binary.
 	rig.Start(t, func(mux *asynq.ServeMux) {
-		tasks.NewYouTubeDownloadMux(mux, &tasks.YouTubeDownloadHandler{
+		tasks.NewDownloadGenericMux(mux, &tasks.DownloadHandler{
 			DB:        rig.DB,
 			MusicRoot: root,
 			YTDLPPath: fakeBin,
 		})
 	})
 
-	// Producer enqueues the YouTubeDownload task.
-	rig.Enqueue(t, tasks.TypeYouTubeDownload, &tasks.YouTubeDownloadPayload{
+	// Producer enqueues the unified download:generic task.
+	rig.Enqueue(t, tasks.TypeDownloadGeneric, &tasks.DownloadPayload{
+		Source:  "youtube",
 		VideoID: videoID,
 	})
 

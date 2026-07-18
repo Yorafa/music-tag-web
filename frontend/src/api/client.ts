@@ -122,3 +122,37 @@ export async function getSources(): Promise<{
   const { data } = await api.get('sources/');
   return data;
 }
+
+/** POST /api/download/ — enqueue a "download source X's track Y into the
+ *  library at download_path" task. Backend source-routes by the registry
+ *  (only youtube is registered today; future soundcloud add only needs a
+ *  new branch in tasks.DownloadHandler). Today the contract is:
+ *
+ *   - download_path is RELATIVE to MUSIC_DIR on the server (unsafe / .. /
+ *     absolute are rejected server-side). Frontend builds it from
+ *     artist/title + ext matching what the row shows; the user can
+ *     rename post-download in the editor.
+ *   - The backend short-circuits when the file is already in the
+ *     per-source cache dir (left over from a /api/stream preview
+ *     long-poll), so re-clicking 加入库 after a listen is a cp, not a
+ *     re-fetch.
+ *   - 200 envelope is the asynq enqueued-or-skipped signal. Surfaced to
+ *     the user via the toast returned from the caller; no follow-up poll
+ *     because the library dir scan refreshes via a separate toolbar button.
+ *
+ *  `extra_audio_format` defaults to 'mp3' (matches the stream proxy's
+ *  ServeFile extension when yt-dlp lands). */
+export async function downloadToLibrary(params: {
+  source: string;
+  video_id: string;
+  download_path?: string;
+  extra_audio_format?: string;
+}): Promise<{ result: boolean; code: string; data: unknown[]; message: string; skipped?: boolean; dest?: string }> {
+  const { data } = await api.post('download/', {
+    source: params.source,
+    video_id: params.video_id,
+    download_path: params.download_path ?? '',
+    extra_audio_format: params.extra_audio_format ?? 'mp3',
+  });
+  return data;
+}

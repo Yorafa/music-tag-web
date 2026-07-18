@@ -4,10 +4,9 @@ import path from 'path';
 
 // Vitest shares the Vite resolution rules + path aliases with src/ so
 // test files import via `@/lib/...` exactly like production code does.
-// jsdom gives us a window/document so future component-level tests
-// (useYoutubeStore is pure zustand, doesn't need DOM) can run without
-// extra setup. The `src` glob picks up `*.test.ts(x)` files alongside
-// regular source; vitest ignores non-matching files by default.
+// jsdom gives us a window/document so component-level tests can run
+// without extra setup. The `src` glob picks up `*.test.ts(x)` files
+// alongside regular source; vitest ignores non-matching files by default.
 export default defineConfig({
   plugins: [react()],
   resolve: {

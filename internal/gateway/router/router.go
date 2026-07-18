@@ -68,9 +68,17 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// registered DownloadSource. The client supplies `source` in
 		// the request body; the handler routes to the matching plugin.
 		authed.POST("/download/", handler.Download)
-		// /api/stream/ proxies audio playback for sources that advertise
-		// a playable URL (TagSource.GetAudioURL) or a local file
-		// (DownloadSource, e.g. a yt-dlp'd YouTube file on disk).
+		// /api/stream/ proxies audio playback for two dispatch paths:
+		//   (a) DownloadSource (e.g. youtube): ServeFile from the per-source
+		//     cache dir, with enqueue + 10s long-poll on miss. Add
+		//     ?as_attachment=1 to force a `Content-Disposition: attachment`
+		//     header so the browser saves the file to Downloads/ (the
+		//     row-level "下载到浏览器" button path).
+		//   (b) TagSource (e.g. netease): proxies the upstream audio URL
+		//     resolved via the plugin's GetAudioURL RPC, with Range /
+		//     User-Agent / Cookie passthrough.
+		// Frontend no longer special-cases any source name — the dispatch
+		// is driven by the plugin registry inside the handler.
 		authed.GET("/stream/", handler.StreamAudio)
 		// GET /api/sources/ — Stage A of docs/plugable-plugins.md: exposes
 		// every registered tag- + download-source so the frontend can drive

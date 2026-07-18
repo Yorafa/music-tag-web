@@ -62,7 +62,6 @@ Each concern has its own store (NO single global store):
 | `usePlayerStore` | `src/store/usePlayerStore.ts` | Audio playback (track, queue, volume, seek), volume persisted |
 | `useThemeStore` | `src/store/useThemeStore.ts` | Dark/light theme toggle |
 | `useSourceStore` | `src/store/useSourceStore.ts` | Dynamic source list from `GET /api/sources/`, enabled sources |
-| `useYoutubeStore` | `src/store/useYoutubeStore.ts` | YouTube search results, download state |
 | `useToastStore` | `src/store/useToastStore.ts` | Toast notification queue |
 
 ### Backend Directory Structure
@@ -131,10 +130,9 @@ Route groups:
 - `POST /api/fetch_lyric/` — fetch lyrics
 - `POST /api/tidy_folder/` — folder organize
 - `POST /api/upload_image/` — upload cover
-- `POST /api/youtube_search/` — search YouTube
-- `POST /api/youtube_download/` — download from YouTube
 - `POST /api/search_music/` — multi-source search (fan-out)
-- `GET /api/stream/` — audio proxy streaming
+- `POST /api/download/` — generic download enqueue (source-routed; class A 加入库)
+- `GET /api/stream/` — audio proxy streaming (+ `?as_attachment=1` for browser download)
 - `GET /api/sources/` — dynamic source list
 - `GET /api/clear_celery/` — clear task queue
 - `GET /api/active_queue/` — queue status

@@ -48,9 +48,20 @@ const defaultAdminPasswordLen = 16
 // bootstrapPath is overwritten by tests (t.Setenv not usable here because
 // we want to override the file location). Production stays at /app/data.
 //
-// The path is intentionally a `var` (not `const`) so tests can swap it.
+// The path is intentionally a `var` (not `const`) so tests can swap it via
+// OverrideBootstrapPathForTest. Production stays at /app/data.
 //   var bootstrapPath = "/app/data/.bootstrap-creds"
 var bootstrapPath = "/app/data/.bootstrap-creds"
+
+// OverrideBootstrapPathForTest redirects the bootstrap creds file so
+// package tests outside the container (where /app/data is unwritable)
+// can exercise config.Load() without log.Fatalf on first-boot write.
+// Production code must never call this.
+func OverrideBootstrapPathForTest(path string) {
+	if path != "" {
+		bootstrapPath = path
+	}
+}
 
 // bootstrapCreds is the JSON shape persisted to bootstrapPath. The
 // AdminPasswordPlain field is intentionally transient: it lives in the

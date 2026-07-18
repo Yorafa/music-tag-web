@@ -1,6 +1,6 @@
 // Package tasks — yt-dlp 参数净化。
 //
-// 攻击面：YouTubeDownloadHandler 把 ExtraJSON 字段直接拼到
+// 攻击面：DownloadHandler (youtube branch) 把 ExtraJSON 字段直接拼到
 // exec.CommandContext 的 arg slice 里。若前端恶意传入
 // {"format":"--exec=rm -rf /"}，yt-dlp 会执行任意命令。
 //

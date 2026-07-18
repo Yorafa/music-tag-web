@@ -36,6 +36,13 @@ interface PlayerState {
    *  PlayerBar's setter wrapper. */
   volume: number;
   error: string | null;
+  /** True while the <audio> element is buffering (waiting for enough
+   *  buffered bytes to resume). Set on onWaiting + cleared on
+   *  onPlaying / onCanPlay — see PlayerBar.tsx. The flag is consumed
+   *  by PlayButton to render the spin loader, surfacing the "this
+   *  particular preview is stalling" signal right next to the row
+   *  that triggered it, rather than burying it in a global toast. */
+  isBuffering: boolean;
 
   /** Start playing a new track. Replaces currentTrack; resets currentTime
    *  to 0 and (optionally) seeds the queue for next/prev navigation. */
@@ -54,6 +61,10 @@ interface PlayerState {
   // Mirrors from native <audio> events. Don't call from UI directly.
   setCurrentTime: (sec: number) => void;
   setDuration: (sec: number) => void;
+  /** Toggle isBuffering. Called from PlayerBar's onWaiting / onPlaying /
+   *  onCanPlay handlers so the buffering signal is observable outside
+   *  the <audio> element (PlayButton, future spinner, etc.). */
+  setIsBuffering: (b: boolean) => void;
   clearError: () => void;
 }
 
@@ -73,6 +84,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   queue: [],
   volume: loadInitialVolume(),
   error: null,
+  isBuffering: false,
 
   playTrack: (track, opts) =>
     set({
@@ -82,6 +94,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       duration: track.durationSec ?? 0,
       queue: opts?.queue && opts.queue.length > 0 ? opts.queue : [track],
       error: null,
+      // New track → the <audio> element will fire onWaiting the moment it
+      // starts fetching, and onCanPlay once it has enough buffered.
+      // Setting isBuffering=false here means: until onWaiting fires, we
+      // don't pre-emptively show a spinner, which is correct because the
+      // stream may resolve instantly (cached file on disk).
+      isBuffering: false,
     }),
 
   togglePlay: () => set((s) => ({ isPlaying: !s.isPlaying })),
@@ -108,6 +126,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       currentTime: 0,
       duration: q[idx + 1].durationSec ?? 0,
       error: null,
+      isBuffering: false,
     });
   },
 
@@ -129,10 +148,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       currentTime: 0,
       duration: q[idx - 1].durationSec ?? 0,
       error: null,
+      isBuffering: false,
     });
   },
 
   setCurrentTime: (sec) => set({ currentTime: sec }),
   setDuration: (sec) => set({ duration: sec }),
+  setIsBuffering: (b) => set({ isBuffering: b }),
   clearError: () => set({ error: null }),
 }));

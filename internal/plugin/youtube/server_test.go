@@ -136,9 +136,21 @@ func TestNewServer_DefaultAndOverride(t *testing.T) {
 }
 
 func TestTmpDir_EnvOverride(t *testing.T) {
-	t.Setenv("YT_TMP_DIR", "/tmp/custom-ytmp")
-	if got := tmpDir(); got != "/tmp/custom-ytmp" {
-		t.Errorf("tmpDir() = %q, want %q (env override)", got, "/tmp/custom-ytmp")
+	// AUDIO_CACHE_DIR is the new UV — backend's audioCacheDir(source)
+	// returns <AUDIO_CACHE_DIR>/<source>, so for the youtube plugin we
+	// expect <AUDIO_CACHE_DIR>/youtube here. Test pins that lockstep.
+	t.Setenv("AUDIO_CACHE_DIR", "/tmp/custom-cache-root")
+	if got := tmpDir(); got != "/tmp/custom-cache-root/youtube" {
+		t.Errorf("tmpDir() = %q, want %q (AUDIO_CACHE_DIR override)", got, "/tmp/custom-cache-root/youtube")
+	}
+}
+
+func TestTmpDir_Default(t *testing.T) {
+	// Clear both env vars to assert the no-config default. Has to run
+	// with t.Setenv so parallel tests don't trip over each other.
+	t.Setenv("AUDIO_CACHE_DIR", "")
+	if got := tmpDir(); got != "/tmp/audio_cache/youtube" {
+		t.Errorf("tmpDir() = %q, want %q (no-env default)", got, "/tmp/audio_cache/youtube")
 	}
 }
 

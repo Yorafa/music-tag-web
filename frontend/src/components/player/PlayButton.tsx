@@ -1,9 +1,7 @@
-import { useState } from 'react';
 import { Play, Pause, Loader2 } from 'lucide-react';
 import { usePlayerStore, type PlayerTrack } from '@/store/usePlayerStore';
 import { useSourceStore } from '@/store/useSourceStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
-import { useYoutubeStore } from '@/store/useYoutubeStore';
 import { resolveStreamUrl, metadataOnlyMessage } from '@/lib/streamUrl';
 
 interface Props {
@@ -31,24 +29,27 @@ function useHasPlayableUrl(track: PlayerTrack): boolean {
  *  Stops propagation so clicking "play" on a row doesn't ALSO trigger
  *  the row's primary action (open editor / expand).
  *
- *  YouTube-source preview path:
- *   - First click per session → POST /api/download/ via
- *     useYoutubeStore.ensureDownload, wait for the 202 envelope, then
- *     commit audio.src = /api/stream?src=youtube&id=. Subsequent clicks
- *     short-circuit and skip the POST so the gateway streams the
- *     already-landed file.
- *   - During the in-flight POST we render a Loader spinner + aria-busy
- *     so the row stays interactive feedback-wise but doesn't accept
- *     double-clicks. */
+ *  Buffering UX: the per-track buffering signal now comes from
+ *  usePlayerStore.isBuffering — flipped true by PlayerBar's <audio>
+ *  onWaiting, false on onPlaying/onCanPlay/onPause. We only render the
+ *  spinner when THIS row is the active track (currentTrack.id === track.id)
+ *  to avoid "row 47 looks busy" confusion when only the active track is
+ *  stalling. The legacy useYoutubeStore "ensureDownload on first click"
+ *  gate is gone: the backend StreamAudio handler now owns the
+ *  enqueue-then-long-poll contract, so PlayButton just commits audio.src
+ *  and the server stalls for us until the file is on disk. */
 export function PlayButton({ track, size = 'sm', className }: Props) {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const isBuffering = usePlayerStore((s) => s.isBuffering);
   const playTrack = usePlayerStore((s) => s.playTrack);
   const togglePlay = usePlayerStore((s) => s.togglePlay);
   const pushToast = useNoticeStore((s) => s.push);
-  const [loading, setLoading] = useState(false);
 
   const isThis = currentTrack?.id === track.id;
+  // Only the currently-playing row reflects buffering. Other rows show
+  // a clean Play icon, since they're not waiting on anything.
+  const loading = isThis && isBuffering;
   const showPause = isThis && isPlaying;
   const playable = useHasPlayableUrl(track);
 
@@ -68,28 +69,12 @@ export function PlayButton({ track, size = 'sm', className }: Props) {
       return;
     }
 
-    // YouTube-specific gate: ensure the file is on disk before assigning
-    // audio.src. ensureDownload is idempotent within the page session,
-    // so the second click onward does an early-return and we go straight
-    // to playTrack(...).
-    if (
-      track.source.kind === 'plugin' &&
-      track.source.source === 'youtube' &&
-      !useYoutubeStore.getState().isDownloaded(track.source.songId)
-    ) {
-      setLoading(true);
-      try {
-        await useYoutubeStore
-          .getState()
-          .ensureDownload(track.source.songId);
-      } catch {
-        pushToast('\u89c6\u9891\u4e0b\u8f7d\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5', 'warn');
-        setLoading(false);
-        return;
-      }
-      setLoading(false);
-    }
-
+    // No per-source gate (legacy youtube ensureDownload) — the gateway
+    // StreamAudio handler enqueues a download task on cache-miss and
+    // long-polls the cache dir for up to 10s before returning. If the
+    // file still isn't there, the response goes 202 + Retry-After or
+    // a Failure envelope, and <audio>.error → onMediaError surfaces
+    // the per-source toast via sourceErrorMessage(track.source.source).
     playTrack({ ...track, url: r.url });
   };
 
@@ -98,7 +83,7 @@ export function PlayButton({ track, size = 'sm', className }: Props) {
   const title = !playable
     ? '\u6765\u6e90\u4e0d\u652f\u6301\u8bd5\u542c'
     : loading
-    ? '\u6b63\u5728\u4e0b\u8f7d\u9884\u89c8...'
+    ? '\u7f13\u51b2\u4e2d...'
     : showPause
     ? '\u6682\u505c'
     : '\u64ad\u653e\u9884\u89c8';
@@ -113,7 +98,7 @@ export function PlayButton({ track, size = 'sm', className }: Props) {
     <button
       type="button"
       onClick={onClick}
-      aria-label={loading ? '\u4e0b\u8f7d\u4e2d' : showPause ? '\u6682\u505c' : '\u64ad\u653e\u9884\u89c8'}
+      aria-label={loading ? '\u7f13\u51b2\u4e2d' : showPause ? '\u6682\u505c' : '\u64ad\u653e\u9884\u89c8'}
       aria-pressed={showPause}
       aria-busy={loading}
       title={title}
