@@ -21,6 +21,7 @@ import (
 	"gorm.io/gorm"
 
 	"go-music-tag/internal/db"
+	"go-music-tag/internal/dedup"
 	"go-music-tag/internal/plugin"
 	"go-music-tag/internal/tag"
 )
@@ -28,6 +29,9 @@ import (
 // BatchAutoTagHandler 实施一次批量自动刮削。
 type BatchAutoTagHandler struct {
 	DB *gorm.DB
+	// Dedup 是可选的去重检查器；nil ⇒ 跳过 dedup 阶段（与旧行为等价）。
+	// 调用方（cmd/worker/main.go）在 db.Open 与 utils.MusicRoot 解析后注入。
+	Dedup *dedup.Checker
 }
 
 func (h *BatchAutoTagHandler) ProcessTask(ctx context.Context, t Task) error {
@@ -43,6 +47,14 @@ func (h *BatchAutoTagHandler) ProcessTask(ctx context.Context, t Task) error {
 	}
 	if p.Batch == "" {
 		return fmt.Errorf("batch_tag: batch id empty")
+	}
+
+	// dedup 仅在 payload 自带开关时启用；nil DedupChecker 视作禁用。
+	dedupEnabled := false
+	if p.CheckDuplicate && h.Dedup != nil {
+		dedupEnabled = true
+		log.Printf("[batch_tag] dedup enabled for batch=%s (full hash + fingerprint + meta fallback)",
+			p.Batch)
 	}
 
 	// 1) lock

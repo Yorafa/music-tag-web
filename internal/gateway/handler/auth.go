@@ -38,7 +38,7 @@ type storedCred struct {
 //	ADMIN_USERS=alice:$2a$10$...,bob:$2b$10$...           (production)
 //	ADMIN_USERS=admin:admin                                (dev)
 //
-// SECURITY (P1.5 issue F):
+// SECURITY:
 //
 //   - The admin/admin dev default only applies when ALLOW_INSECURE_DEFAULTS=1.
 //     Without that opt-in, an unset ADMIN_USERS produces an empty map so
@@ -101,9 +101,9 @@ func verifyCred(stored storedCred, presented string) bool {
 
 // jwtKeyFunc is shared by RefreshToken + VerifyToken. It enforces:
 //
-//   • Only HMAC-family methods are accepted (rejects "none" and any
-//     asymmetric alg trivially). P1.5 issue F (M1).
-//   • Returns the configured secret.
+//   - Only HMAC-family methods are accepted (rejects "none" and any
+//     asymmetric alg trivially).
+//   - Returns the configured secret.
 //
 // Errors are intentionally non-specific to avoid leaking which check failed.
 func jwtKeyFunc(secret string) jwt.Keyfunc {
@@ -123,20 +123,20 @@ func Login(c *gin.Context) {
 		Password string `json:"password"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"detail": "Invalid input"})
+		Failure(c, "Invalid input")
 		return
 	}
 
 	if config.JWTSecretIsDefault() {
 		log.Printf("[auth] REFUSED /api/token/: JWT_SECRET is the placeholder value")
-		c.JSON(401, gin.H{"detail": "用户名或密码错误"})
+		Failure(c, "用户名或密码错误")
 		return
 	}
 
 	users := loadUsers()
 	cred, ok := users[req.Username]
 	if !ok || !verifyCred(cred, req.Password) {
-		c.JSON(401, gin.H{"detail": "用户名或密码错误"})
+		Failure(c, "用户名或密码错误")
 		return
 	}
 
@@ -145,7 +145,7 @@ func Login(c *gin.Context) {
 	accessToken, _ := generateJWT(cfg.JWTSecret, req.Username)
 	refreshToken, _ := generateJWT(cfg.JWTSecret, req.Username)
 
-	c.JSON(200, gin.H{
+	SuccessData(c, gin.H{
 		"access":  accessToken,
 		"refresh": refreshToken,
 	})
@@ -157,28 +157,28 @@ func RefreshToken(c *gin.Context) {
 		Refresh string `json:"refresh"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"detail": "Invalid input"})
+		Failure(c, "Invalid input")
 		return
 	}
 	cfg := config.Load()
 	if config.JWTSecretIsDefault() {
-		c.JSON(401, gin.H{"detail": "Invalid refresh token"})
+		Failure(c, "Invalid refresh token")
 		return
 	}
 	token, err := jwt.Parse(req.Refresh, jwtKeyFunc(cfg.JWTSecret))
 	if err != nil || !token.Valid {
-		c.JSON(401, gin.H{"detail": "Invalid refresh token"})
+		Failure(c, "Invalid refresh token")
 		return
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		c.JSON(401, gin.H{"detail": "Invalid token claims"})
+		Failure(c, "Invalid token claims")
 		return
 	}
 	username, _ := claims["sub"].(string)
 	access, _ := generateJWT(cfg.JWTSecret, username)
-	c.JSON(200, gin.H{"access": access})
+	SuccessData(c, gin.H{"access": access})
 }
 
 // VerifyToken handles POST /api/token/verify/
@@ -187,20 +187,20 @@ func VerifyToken(c *gin.Context) {
 		Token string `json:"token"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"detail": "Invalid input"})
+		Failure(c, "Invalid input")
 		return
 	}
 	cfg := config.Load()
 	if config.JWTSecretIsDefault() {
-		c.JSON(401, gin.H{"detail": "Invalid token"})
+		Failure(c, "Invalid token")
 		return
 	}
 	token, err := jwt.Parse(req.Token, jwtKeyFunc(cfg.JWTSecret))
 	if err != nil || !token.Valid {
-		c.JSON(401, gin.H{"detail": "Invalid token"})
+		Failure(c, "Invalid token")
 		return
 	}
-	c.JSON(200, gin.H{})
+	SuccessData(c, gin.H{})
 }
 
 func generateJWT(secret, username string) (string, error) {

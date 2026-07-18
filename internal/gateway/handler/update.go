@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"go-music-tag/internal/dedup"
 	"go-music-tag/internal/netguard"
 	"go-music-tag/internal/tag"
 	"go-music-tag/internal/utils"
@@ -25,11 +26,25 @@ import (
 // 给内网出站连接用的)，所以默认 deny private/loopback 即可。
 var remoteGuard = netguard.NewGuard()
 
+// dedupChecker 是跨 handler 复用的 dedup.Checker 实例（按需懒构造）。
+// 它绑定当前 gateway 进程的 GORM DB 与 MUSIC_DIR，在第一次刮削请求时
+// 完成初始化；后续重入直接复用以省 fpcalc LookPath 等 syscall。
+//
+// nil ⇒ dedup 检查被禁用（操作员可在配置中显式 opt-out 时不挂上）。
+var dedupChecker *dedup.Checker
+
+// SetDedupChecker 由 main 在 db.Open 之后调用注入；handler 不主动 new。
+func SetDedupChecker(c *dedup.Checker) { dedupChecker = c }
+
 // UpdateID3 handles POST /api/update_id3/ — 写入单条文件标签。
 //
 // Security (P1.5 issue F): every file_full_path is SafeJoined against
 // MUSIC_DIR before being touched; previously the handler trusted the
 // path verbatim, which let any caller rename tags outside the library.
+//
+// Dedup optionally: each MusicID3Info 行携带 check_duplicate=true/缺省 → 在
+// tag.Write 前调用 dedup.Checker；命中 Duplicate 时跳过该条并附 skip 信息
+// 一起回包，给前端 toast / 状态 badge 用。
 func UpdateID3(c *gin.Context) {
 	var req struct {
 		MusicID3Info []map[string]interface{} `json:"music_id3_info" binding:"required"`
@@ -39,6 +54,7 @@ func UpdateID3(c *gin.Context) {
 		return
 	}
 	root := utils.MusicRoot()
+	report := updateBatchReport{}
 	for _, info := range req.MusicID3Info {
 		rawPath := stringValue(info["file_full_path"])
 		if rawPath == "" {
@@ -50,11 +66,56 @@ func UpdateID3(c *gin.Context) {
 			return
 		}
 		if err := applyFileUpdate(filePath, info); err != nil {
+			if dupErr, ok := err.(ErrDuplicateSkipped); ok {
+				// 记录跳过信息但 handler 整体仍返回成功，避免前端给一行「重复」扔 4xx。
+				report.addSkipped(rawPath, dupErr.Dup)
+				continue
+			}
 			Failure(c, fmt.Sprintf("update %s: %v", filepath.Base(filePath), err))
 			return
 		}
+		report.addDone(rawPath)
 	}
-	Success(c, "success", nil)
+	SuccessData(c, report.toJSON())
+}
+
+// updateBatchReport 是 BatchUpdateID3 / UpdateID3 共用的「哪些写成功、哪些
+// 因重复被跳过」回包包体。给前端 toast / 状态 badge 渲染。
+type updateBatchReport struct {
+	done    []map[string]interface{}
+	skipped []map[string]interface{}
+}
+
+func (r *updateBatchReport) addDone(path string) {
+	r.done = append(r.done, map[string]interface{}{
+		"file_full_path": path,
+		"status":         "updated",
+	})
+}
+func (r *updateBatchReport) addSkipped(path string, dup dedup.Result) {
+	r.skipped = append(r.skipped, map[string]interface{}{
+		"file_full_path":  path,
+		"status":          "duplicate",
+		"verdict":         dup.Verdict,
+		"match_field":     dup.MatchField,
+		"duplicate_path":  dup.DuplicatePath,
+		"reason":          dup.Reason,
+	})
+}
+
+// toJSON 把 done/skipped 合并回一个稳定的 dict 结构，避免返回 nil slice 给
+// 前端造成 JSON null（types 约定是数组）。
+func (r *updateBatchReport) toJSON() map[string]interface{} {
+	if r.done == nil {
+		r.done = []map[string]interface{}{}
+	}
+	if r.skipped == nil {
+		r.skipped = []map[string]interface{}{}
+	}
+	return map[string]interface{}{
+		"done":    r.done,
+		"skipped": r.skipped,
+	}
 }
 
 // BatchUpdateID3 handles POST /api/batch_update_id3/ — folder 展开 + 多文件写入。
@@ -62,6 +123,10 @@ func UpdateID3(c *gin.Context) {
 // Security (P1.5 issue F): each leaf path is SafeJoined under MUSIC_DIR;
 // folder recursion only descends into directories that resolved inside
 // the root.
+//
+// Dedup: 若 req.MusicInfo["check_duplicate"]==true，则该标志会随 mergeInfo
+// 透传到每个 leaf 的 applyFileUpdate 调用，命中 Duplicate 的文件计入
+// report.skipped。失败 = 老语义的 Failure；整批没有 Failure 即 200 + report。
 func BatchUpdateID3(c *gin.Context) {
 	var req struct {
 		FileFullPath string                   `json:"file_full_path" binding:"required"`
@@ -86,6 +151,10 @@ func BatchUpdateID3(c *gin.Context) {
 		return
 	}
 
+	report := updateBatchReport{}
+
+	// 把每张 leaf 的写入错误拆开，duplicate 走 report.skipped，
+	// 真实写错误走 Failure（同老语义：单条炸就报错并返回）。
 	for _, sel := range req.SelectData {
 		name := stringValue(sel["name"])
 		if name == "" {
@@ -115,9 +184,14 @@ func BatchUpdateID3(c *gin.Context) {
 					"filename":       e.Name(),
 				})
 				if err := applyFileUpdate(stringValue(merged["file_full_path"]), merged); err != nil {
+					if dupErr, ok := err.(ErrDuplicateSkipped); ok {
+						report.addSkipped(leaf, dupErr.Dup)
+						continue
+					}
 					Failure(c, err.Error())
 					return
 				}
+				report.addDone(leaf)
 			}
 			continue
 		}
@@ -130,11 +204,16 @@ func BatchUpdateID3(c *gin.Context) {
 			"file_full_path": leaf,
 		})
 		if err := applyFileUpdate(stringValue(merged["file_full_path"]), merged); err != nil {
+			if dupErr, ok := err.(ErrDuplicateSkipped); ok {
+				report.addSkipped(leaf, dupErr.Dup)
+				continue
+			}
 			Failure(c, err.Error())
 			return
 		}
+		report.addDone(leaf)
 	}
-	Success(c, "success", nil)
+	SuccessData(c, report.toJSON())
 }
 
 // 注: BatchAutoUpdateID3 / TidyFolder 在 task.go 里已经接入 asynq，这里保持空。
@@ -155,6 +234,46 @@ func UploadImage(c *gin.Context) {
 	SuccessData(c, b64)
 }
 
+// skipDuplicateCheck 返回 true 表示 info 标记了跳过去重。
+// JSON 入参约定: {"...":..., "check_duplicate": true}；显式传 false / 缺省都视为
+// 不开，保持旧行为（向后兼容，不强迫老前端必须升级才能用）。
+func shouldRunDedup(info map[string]interface{}) bool {
+	v, ok := info["check_duplicate"]
+	if !ok || v == nil {
+		return false
+	}
+	return truthy(v)
+}
+
+// runDedupCheck 在 applyFileUpdate 写入前执行一次去重检查；命中 Duplicate
+// 时跳过整个写入并返回一个 sentinel 错误，由 caller 把信息透传给前端。
+// LikelyDuplicate 仅给 caller 参考并不阻断写入，符合「兜底提示」语义。
+func runDedupCheck(ctx context.Context, filePath string, info map[string]interface{}) error {
+	if !shouldRunDedup(info) || dedupChecker == nil {
+		return nil
+	}
+	r := dedupChecker.Check(ctx, filePath, dedup.Options{MusicRoot: utils.MusicRoot()})
+	switch r.Verdict {
+	case dedup.VerdictDuplicate, dedup.VerdictLikelyDuplicate:
+		return ErrDuplicateSkipped{Dup: r}
+	case dedup.VerdictError:
+		// dedup 错误本身不阻塞写流程（保守策略：工具失败仍允许写入）。
+		return nil
+	}
+	return nil
+}
+
+// ErrDuplicateSkipped 是 applyFileUpdate 在去重命中时返回的 sentinel 错误，
+// 让 caller 判断该不该把信息回写到前端（区分写失败与主动跳过）。
+type ErrDuplicateSkipped struct{ Dup dedup.Result }
+
+func (e ErrDuplicateSkipped) Error() string {
+	if e.Dup.DuplicatePath != "" {
+		return fmt.Sprintf("duplicate: %s", e.Dup.DuplicatePath)
+	}
+	return "duplicate"
+}
+
 // ─── internal ─────────────────────────────────────────────────────────────
 
 // applyFileUpdate 每个文件按 MusicIDS 流：模板 → 写 tag → sidecar → 文件名模板 → 改名。
@@ -164,6 +283,11 @@ func UploadImage(c *gin.Context) {
 func applyFileUpdate(filePath string, info map[string]interface{}) error {
 	if !isAudioFile(filePath) {
 		return nil
+	}
+	// 去重前置检查：caller 通过 info["check_duplicate"]=true 开启；
+	// 命中 Duplicate 即跳过整张文件的写入。
+	if err := runDedupCheck(context.Background(), filePath, info); err != nil {
+		return err
 	}
 	tmplVars := readFileContext(filePath)
 

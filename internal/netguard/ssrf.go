@@ -1,4 +1,4 @@
-// Package netguard 给 HTTP 客户端与外部资源下载提供 SSRF 防护 (P1.5 issue F)。
+// Package netguard 给 HTTP 客户端与外部资源下载提供 SSRF 防护。
 //
 // Guard.Validate 在发起外网请求之前对 URL 做以下校验：
 //   - scheme 必须是 http 或 https

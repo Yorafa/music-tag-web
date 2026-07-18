@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"log"
 	"regexp"
 	"strings"
 
@@ -150,12 +151,21 @@ func SearchMusic(c *gin.Context) {
 
 		src, err := plugin.GetTagSource(source)
 		if err != nil {
+			// Surface the unreachable-dial failure on the gateway log so
+			// operators can tell network-vs-code without packet-tracing.
+			// Without this line, a silent continue masks the root cause of
+			// "search returned no songs for source X".
+			log.Printf("[SearchMusic] tag plugin %q unreachable at registry: %v", source, err)
 			newPages[source] = req.Pages[source]
 			hasMore[source] = false
 			continue
 		}
 		result, err := src.Search(c.Request.Context(), req.Query, curPage, req.Limit)
 		if err != nil {
+			// Surface upstream search failures (timeout, HTTP 403, etc.).
+			// acoustid intentionally returns no Songs for Search() so we
+			// don't expect errors from it; every err here is a real fault.
+			log.Printf("[SearchMusic] plugin %q Search() failed: %v", source, err)
 			newPages[source] = req.Pages[source]
 			hasMore[source] = false
 			continue

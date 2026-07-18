@@ -32,7 +32,7 @@ type Config struct {
 	// Celery-compat (asynq queue names)
 	TaskQueueDefault string
 
-	// ─── P1.5 hardening (issue F) ──────────────────────────────────────────
+	// ─── gRPC transport + CORS hardening ───────────────────────────────────
 	// CORSAllowedOrigins 列出允许跨域携带凭证的来源。空字符串切片表示
 	// 拒绝所有跨域请求 (后端不会回显 Access-Control-Allow-Origin)。
 	CORSAllowedOrigins []string
@@ -58,7 +58,7 @@ type Config struct {
 }
 
 const (
-	defaultJWTSecret     = "change-me-in-production"
+	defaultJWTSecret = "change-me-in-production"
 	// placeholderAdminUsers / placeholderWebhookToken are the obvious
 	// sentinel tokens shipped in .env.example. When any of
 	// these (or the equivalent string "__REPLACE_ME__") is detected,
@@ -66,13 +66,13 @@ const (
 	// way as defaultJWTSecret so an operator who copies the example
 	// without editing can't accidentally boot the gateway with a public
 	// placeholder credential.
-	placeholderAdminUsers    = "admin:__REPLACE_ME__"
-	placeholderWebhookToken  = "__REPLACE_ME__"
-	placeholderSentinel      = "__REPLACE_ME__"
-	envAllowInsecure     = "ALLOW_INSECURE_DEFAULTS"
-	envCORSAllowed       = "CORS_ALLOWED_ORIGINS"
-	envGRPCUseTLS        = "GRPC_USE_TLS"
-	envGRPCCAFile        = "GRPC_TLS_CA_FILE"
+	placeholderAdminUsers   = "admin:__REPLACE_ME__"
+	placeholderWebhookToken = "__REPLACE_ME__"
+	placeholderSentinel     = "__REPLACE_ME__"
+	envAllowInsecure        = "ALLOW_INSECURE_DEFAULTS"
+	envCORSAllowed          = "CORS_ALLOWED_ORIGINS"
+	envGRPCUseTLS           = "GRPC_USE_TLS"
+	envGRPCCAFile           = "GRPC_TLS_CA_FILE"
 	envJWTSecret            = "JWT_SECRET"
 	envAdminUsers           = "ADMIN_USERS"
 	envWebhookInternalToken = "WEBHOOK_INTERNAL_TOKEN"
@@ -110,7 +110,9 @@ func isPlaceholderEnv(val string) bool {
 // works.
 //
 // This is the guard that catches the previously-missing compound case:
-//   ADMIN_USERS='alice:__REPLACE_ME__,bob:realpwd'
+//
+//	ADMIN_USERS='alice:__REPLACE_ME__,bob:realpwd'
+//
 // where neither Load()'s whole-string check nor isPlaceholderEnv on the
 // joined string trips.
 func containsPlaceholderAdminPair(raw string) bool {
@@ -138,6 +140,15 @@ func containsPlaceholderAdminPair(raw string) bool {
 // here so a log-only deployment sees a loud signal.
 func Load() *Config {
 	insecure := isTruthyEnv(envAllowInsecure)
+
+	// ─── First-boot auto-bootstrap (lazy deploy) ───
+	// In non-insecure mode, fill any missing/placeholder JWT_SECRET /
+	// ADMIN_USERS / WEBHOOK_INTERNAL_TOKEN from ./data/.bootstrap-creds
+	// (regenerating on first boot). Lets `docker compose up -d --build`
+	// succeed with zero .env edits.
+	if !isInsecureDevMode() {
+		ensureBootstrap()
+	}
 
 	jwtSecret := os.Getenv(envJWTSecret)
 	if !insecure && (jwtSecret == "" || strings.EqualFold(jwtSecret, defaultJWTSecret) || isPlaceholderEnv(jwtSecret)) {

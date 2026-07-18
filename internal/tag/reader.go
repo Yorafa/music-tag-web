@@ -1,3 +1,37 @@
+// Package tag contains audio-tag readers and writers for the
+// gateway's MP3/FLAC/OGG/M4A workflow.
+//
+// ---------------------------------------------------------------------------
+// Architectural note (post-P1 frontend-owns-id3 refactor)
+// ---------------------------------------------------------------------------
+//
+// The HTTP surface /api/music_id3/ was removed as part of a
+// frontend-takes-ownership move (see frontend/src/lib/id3Reader.ts
+// for the in-browser equivalent using music-metadata + fetch Range).
+// However, the tag.Read function is STILL USED INTERNALLY for three
+// workflow paths that cannot move to the browser:
+//
+//   1. internal/tasks/batchtag.go::batchAutoTag — worker's batch
+//      scrape (`/api/batch_auto_update_id3/`) reads tags server-side
+//      because the task runs in asynq, not a browser.
+//
+//   2. internal/tasks/tidy.go — folder tidy reads existing tags to
+//      fold album/artist from filename patterns atomically with
+//      metadata writes (one side effect per file rename).
+//
+//   3. internal/tag/writer.go::HandleSidecars — when /api/update_id3/
+//      arrives without an AlbumImg payload, the writer uses tag.Read
+//      to extract existing embedded artwork and write it as a sidecar
+//      (.jpg) next to the audio file. Moving this to the browser
+//      would require the frontend to always pre-fetch cover bytes and
+//      ship them with every tag-edit request — a contract change not
+//      yet taken.
+//
+// Reader.go stays for these internal callers. A future
+// "StrictFrontend" rework can drop HandleSidecars →
+// album-img-always-supplied-by-frontend and port batch/tidy to a CLI
+// fallback (`metaflac`/`mid3v2`) — defer.
+
 package tag
 
 import (

@@ -24,7 +24,13 @@ import (
 //
 // 行为细节：
 //   - root 必须为非空字符串且能被 filepath.Abs 解析为绝对路径。
-//   - p 为空时返回 ErrUnsafeEmpty，避免返回 root 本身造成误用。
+//   - p 为空时返回 cleanedRoot——这是与 handler/file.go::FileList
+//     文档一致的"operate-on-root sentinel"语义：调用者想要
+//     "list MUSIC_DIR" / "在 root 内创建/重命名" 等空路径合法操作
+//     时可以直接 SafeJoin(root, "")。需要在 API 边界拒绝空路径的
+//     handler 自行在 gin binding 阶段声明 binding:"required"
+//     (例如 MusicID3、UpdateID3、BatchUpdateID3)，这些 handler
+//     永远走不到 SafeJoin 的空路径分支。
 //   - p 为绝对路径时由 filepath.Join 把前导 / 视作路径分隔符，因此
 //     "/etc/passwd" 当作 "etc/passwd" 处理；这是 Go 的标准行为。
 //   - 一律通过 filepath.Clean 规范化 .. 与 .，规范化后的结果必须以
@@ -35,14 +41,17 @@ func SafeJoin(root, p string) (string, error) {
 	if root == "" {
 		return "", errors.New("utils: SafeJoin: root is empty")
 	}
-	if p == "" {
-		return "", errors.New("utils: SafeJoin: path is empty")
-	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return "", fmt.Errorf("utils: SafeJoin: abs root %q: %w", root, err)
 	}
 	cleanedRoot := filepath.Clean(absRoot)
+	// 空路径 = 直接作用于 root 本身（list / stat / 等价于 "directory cwd"）。
+	// 见上面行为细节第二点；handler/file.go::FileList 是当前唯一依赖此
+	// 约定的 caller，避免在 handler 内部重复 `if FilePath == "" { root }`。
+	if p == "" {
+		return cleanedRoot, nil
+	}
 	candidate := filepath.Clean(filepath.Join(absRoot, p))
 	if candidate != cleanedRoot && !strings.HasPrefix(candidate, cleanedRoot+string(filepath.Separator)) {
 		return "", fmt.Errorf("utils: SafeJoin: %q escapes root %q (resolved %q)", p, cleanedRoot, candidate)

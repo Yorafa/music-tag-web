@@ -44,12 +44,30 @@ func TestSafeJoin_TraversalRejected(t *testing.T) {
 	}
 }
 
-func TestSafeJoin_RejectsEmptyArgs(t *testing.T) {
+func TestSafeJoin_RejectsEmptyRoot(t *testing.T) {
+	// root=empty is still a hard error: callers always pass utils.MusicRoot()
+	// (一个非空绝对路径) 经过同一 env-var lookup，root 为空只可能是误用。
 	if _, err := SafeJoin("", "foo"); err == nil {
 		t.Error("empty root: expected error")
 	}
-	if _, err := SafeJoin("/app/media", ""); err == nil {
-		t.Error("empty path: expected error")
+}
+
+func TestSafeJoin_EmptyPathReturnsRoot(t *testing.T) {
+	// 与 handler/file.go::FileList 的 "operate-on-root" 文档一致
+	// 空 p 应返回 cleanedRoot，而非错误。让 FileList 可以直接
+	// SafeJoin(MusicRoot, req.FilePath)（req.FilePath 非 required），
+	// 由 os.ReadDir(rooted) 列根目录，不必在 handler 里重复一遍
+	// empty→root 的 fallback dance。
+	got, err := SafeJoin("/app/media", "")
+	if err != nil {
+		t.Fatalf("empty path: expected nil err (operate-on-root sentinel), got %v", err)
+	}
+	if want := filepath.Clean("/app/media"); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	// 安全断言：越界检查没有因空路径分支被跳过。
+	if _, err := SafeJoin("/app/media", "../etc"); err == nil {
+		t.Error("traversal from root parent: still expected error")
 	}
 }
 
@@ -91,13 +109,13 @@ func TestSafeAbs_RejectsEscapeAndRelative(t *testing.T) {
 	cases := []struct {
 		root, absPath string
 	}{
-		{"/app/media", "/etc/passwd"},            // absolute outside
-		{"/app/media", "/app/mediaX/foo"},        // sibling-prefix trap (must reject)
+		{"/app/media", "/etc/passwd"},             // absolute outside
+		{"/app/media", "/app/mediaX/foo"},         // sibling-prefix trap (must reject)
 		{"/app/media", "/app/media-evil/foo.mp3"}, // dash-suffix bypass
-		{"/app/media", "relative/foo"},           // not absolute (SafeAbs requires absolute)
-		{"/app/media", ""},                       // empty
-		{"", "/app/media/foo"},                   // empty root
-		{"/app/media", "/app/media/../../etc"},   // collapses to /etc — must reject
+		{"/app/media", "relative/foo"},            // not absolute (SafeAbs requires absolute)
+		{"/app/media", ""},                        // empty
+		{"", "/app/media/foo"},                    // empty root
+		{"/app/media", "/app/media/../../etc"},    // collapses to /etc — must reject
 	}
 	for _, c := range cases {
 		_, err := SafeAbs(c.root, c.absPath)

@@ -1,4 +1,4 @@
-// Package tasks — yt-dlp 参数净化 (P1.5 issue F)。
+// Package tasks — yt-dlp 参数净化。
 //
 // 攻击面：YouTubeDownloadHandler 把 ExtraJSON 字段直接拼到
 // exec.CommandContext 的 arg slice 里。若前端恶意传入

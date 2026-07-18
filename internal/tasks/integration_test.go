@@ -50,11 +50,12 @@ type mockTagSource struct {
 	fetchResult []plugin.Song
 }
 
-func (m *mockTagSource) Name() string        { return m.name }
-func (m *mockTagSource) DisplayName() string { return "Mock " + m.name }
-func (m *mockTagSource) SupportsSearch() bool { return false }
-func (m *mockTagSource) SupportsLyric() bool  { return false }
-func (m *mockTagSource) SupportsId3() bool   { return true } // mock is used by BatchAutoTag, which writes ID3
+func (m *mockTagSource) Name() string           { return m.name }
+func (m *mockTagSource) DisplayName() string    { return "Mock " + m.name }
+func (m *mockTagSource) SupportsSearch() bool   { return false }
+func (m *mockTagSource) SupportsLyric() bool    { return false }
+func (m *mockTagSource) SupportsId3() bool      { return true }  // mock is used by BatchAutoTag, which writes ID3
+func (m *mockTagSource) SupportsAudioURL() bool { return false } // mock is metadata-only; integration test doesn't exercise playback
 func (m *mockTagSource) Search(_ context.Context, _ string, _, _ int) (*plugin.SearchResult, error) {
 	return &plugin.SearchResult{}, nil
 }
@@ -72,6 +73,9 @@ func (m *mockTagSource) FetchID3ByTitle(_ context.Context, title string) ([]plug
 }
 func (m *mockTagSource) FetchLyric(_ context.Context, _ string) (string, error) {
 	return "", nil
+}
+func (m *mockTagSource) GetAudioURL(_ context.Context, _ string) (string, error) {
+	return "", nil // mock is metadata-only; integration test doesn't probe the stream path
 }
 
 // mockSourceName returns the per-test mock-source key. The name embeds
@@ -391,6 +395,10 @@ func TestIntegration_YouTubeDownload_FakeYtdlp(t *testing.T) {
 	if err := os.MkdirAll(downloadsDir, 0o755); err != nil {
 		t.Fatalf("mkdir downloads: %v", err)
 	}
+	// The YouTube handler now reads YT_TMP_DIR via os.Getenv on every
+	// task invocation — point it at our test fixture dir so the fake
+	// yt-dlp output lands where the test asserts it.
+	t.Setenv("YT_TMP_DIR", downloadsDir)
 
 	// Fake yt-dlp: emit a small mp3 file when invoked, derived from the URL.
 	// Honours the standard yt-dlp arg layout used by yt_dl.go:

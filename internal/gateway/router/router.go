@@ -52,7 +52,6 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// Task endpoints — action-based routing like DRF @action
 		// Python: /api/<action>/
 		authed.POST("/file_list/", handler.FileList)
-		authed.POST("/music_id3/", handler.MusicID3)
 		authed.POST("/update_id3/", handler.UpdateID3)
 		authed.POST("/batch_update_id3/", handler.BatchUpdateID3)
 		authed.POST("/batch_auto_update_id3/", handler.BatchAutoUpdateID3)

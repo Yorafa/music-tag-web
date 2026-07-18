@@ -15,14 +15,24 @@ import (
 	"gorm.io/gorm"
 )
 
-// YouTubeDownloadHandler downloads a YouTube video as audio and persists a Folder.
-// Mirrors Django applications/task/services/youtube.py:
-//   - extract audio via yt-dlp
-//   - land under <music_root>/downloads/<video_id>.{ext}
-//   - write a Folder (file_type='audio'|'youtube') and one or more TaskRecords
+// YouTubeDownloadHandler downloads a YouTube video as audio into a tmp
+// staging dir shared with the gateway /api/stream youtube branch.
 //
-// SECURITY (P1.5 issue F): ExtraJSON is untrusted input (any client can
-// POST /api/youtube_download/). The pre-P1 code path called
+// Mirrors the Django applications/task/services/youtube.py happy path:
+//   - extract audio via yt-dlp
+//   - land under <YT_TMP_DIR>/<video_id>.{ext} (default /tmp/youtube_audio)
+//   - write a Folder (file_type='youtube') and one TaskRecord into the
+//     library DB so the existing /api/file_list/ picks the row up.
+//
+// The /tmp staging dir is a deliberate design choice: the user listens
+// to YouTube previews in-browser via the /api/stream proxy (Range
+// pass-through) without retaining them as permanent library files. After
+// the user likes a track, they scrape (TagEditor/SmartTagSearch) + add;
+// only then does the file land in the user's music library via the
+// conventional tag-write path.
+//
+// SECURITY: ExtraJSON is untrusted input (any client can POST
+// /api/youtube_download/). The previous code path called
 // fmt.Sprintf("...output_format=...%s") into the task payload and
 // subsequently into exec.CommandContext's argv. Today both the gateway
 // and the worker run each value through SanitizeYTDLPFormat/OutputFormat/
@@ -30,7 +40,7 @@ import (
 // refused at the boundary.
 type YouTubeDownloadHandler struct {
 	DB          *gorm.DB
-	MusicRoot   string
+	MusicRoot   string // unused for the file landing dir but kept so callers can stay agnostic; see youtubeTmpDir() below
 	YTDLPPath   string // absolute path inside worker image; default "yt-dlp"
 	Concurrency int
 }
@@ -45,6 +55,16 @@ func NewYouTubeDownloadHandler(gormDB *gorm.DB, musicRoot, ytdlpPath string) *Yo
 		YTDLPPath:   ytdlpPath,
 		Concurrency: 4,
 	}
+}
+
+// youtubeTmpDir returns the directory yt-dlp is expected to write to.
+// MUST stay in lockstep with internal/gateway/handler/stream.go's
+// youtubeTmpDir (same env var, same default).
+func youtubeTmpDir() string {
+	if v := os.Getenv("YT_TMP_DIR"); v != "" {
+		return v
+	}
+	return "/tmp/youtube_audio"
 }
 
 type youTubeDownloadExtra struct {
@@ -86,7 +106,7 @@ func (h *YouTubeDownloadHandler) ProcessTask(ctx context.Context, t Task) error 
 	}
 
 	// 1) ensure download dir
-	downloadsDir := filepath.Join(h.MusicRoot, "downloads")
+	downloadsDir := youtubeTmpDir()
 	if err := os.MkdirAll(downloadsDir, 0o755); err != nil {
 		return fmt.Errorf("youtube: mkdir downloads: %w", err)
 	}

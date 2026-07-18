@@ -36,14 +36,22 @@ type FileItem struct {
 func boolPtr(b bool) *bool { return &b }
 
 // FileListRequest is the expected POST body.
+//
+// NOTE: FilePath is intentionally NOT marked `binding:"required"` — the
+// frontend fires a mount-only `loadFiles()` with `useAppStore.filePath`
+// still `”` (initial state) to list the library root. Empty FilePath is
+// semantically "list MUSIC_DIR" and SafeJoin(MusicRoot, "") returns
+// MusicRoot, so we accept it as the canonical root-listing contract.
+// `SortedFields` likewise is optional: empty means no client-driven
+// reorder (server keeps os.ReadDir's natural order).
 type FileListRequest struct {
-	FilePath     string   `json:"file_path" binding:"required"`
-	SortedFields []string `json:"sorted_fields" binding:"required"`
+	FilePath     string   `json:"file_path"`
+	SortedFields []string `json:"sorted_fields"`
 }
 
 // FileList handles POST /api/file_list/ — lists directory contents.
 //
-// Security (P1.5 issue F): req.FilePath is joined into MUSIC_DIR via
+// Path-traversal guard: req.FilePath is joined into MUSIC_DIR via
 // utils.SafeJoin, refusing "../" or absolute traversal that escapes the
 // library root. The frontend contract is unchanged (it still receives a
 // file_path of its choice); we just enforce containment server-side.
@@ -160,57 +168,8 @@ func FileList(c *gin.Context) {
 	})
 }
 
-// MusicID3Request ...
-type MusicID3Request struct {
-	FilePath string `json:"file_path" binding:"required"`
-	FileName string `json:"file_name" binding:"required"`
-}
-
-// MusicID3 handles POST /api/music_id3/ — reads ID3 tags from a file.
-//
-// Security (P1.5 issue F): pre-P1 this handler concatenated
-// `fp + "/" + req.FileName` with no validation, so req.FileName like
-// "../../etc/foo.mp3" would escape the directory. We now join with
-// utils.SafeJoin inside MUSIC_DIR.
-func MusicID3(c *gin.Context) {
-	var req MusicID3Request
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Failure(c, "invalid request")
-		return
-	}
-
-	ext := strings.TrimPrefix(filepath.Ext(req.FileName), ".")
-	if lyricExts[ext] {
-		Success(c, "success", nil)
-		return
-	}
-
-	root := utils.MusicRoot()
-	dir, err := utils.SafeJoin(root, req.FilePath)
-	if err != nil {
-		Failure(c, "路径不安全: "+err.Error())
-		return
-	}
-	fullPath, err := utils.SafeJoin(dir, req.FileName)
-	if err != nil {
-		Failure(c, "路径不安全: "+err.Error())
-		return
-	}
-
-	// Existing edge-case parity: when the directory's basename matches
-	// the requested file name, treat it as a redundant request and
-	// return an empty success.
-	subPath := filepath.Base(dir)
-	if subPath == req.FileName {
-		Success(c, "success", nil)
-		return
-	}
-
-	tags, err := ReadMusicTags(fullPath)
-	if err != nil {
-		Failure(c, err.Error())
-		return
-	}
-
-	SuccessData(c, tags)
-}
+// MusicID3 handler removed — frontend now reads tags locally via
+// fetch(Range) + music-metadata (see frontend/src/lib/id3Reader.ts).
+// Backend keeps tag.Read around for internal use (worker batch
+// scrape + sidecar cover extraction in internal/tag/writer.go),
+// but no longer exposes it over HTTP.
