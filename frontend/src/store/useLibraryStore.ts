@@ -1,0 +1,222 @@
+// useLibraryStore — local play mode's persistent "trial-listen" library.
+//
+// DESIGN.md - local play mode:
+//   The user opens DirPickerDrawer -> multi-select dirs -> enqueueDirs ->
+//   files appear in PlayView as a table. Persisted to localStorage so it
+//   survives reloads. NOT a full music management layer — sized for
+//   "the handful of folders I'm tagging this session", not the whole library.
+//
+// Plan B of the frontend-layout-refactor. See:
+//   docs/plans/frontend-layout-refactor/Plan-B-Play-Mobile-Visual.md
+//
+// Directory expansion is delegated to Plan A's shared util
+// `expandDirsToAudioFiles` in `src/utils/expandDirs.ts` — same audio
+// extension whitelist and recursive sub-dir flattening as the scrape
+// Worklist so a file appears at the same `fullPath` (and dedupes correctly)
+// regardless of which mode added it. Mirrors useWorklistStore's dir-
+// granularity dedupe: a re-added directory collapses onto the existing
+// rows rather than producing duplicates.
+
+import { create } from 'zustand';
+import type { MusicTagInfo } from '@/types';
+import {
+  expandDirsToAudioFiles,
+  type ExpandedFile,
+} from '@/utils/expandDirs';
+import { readJson, writeJson, removeString } from '@/utils/persist';
+import { hydrateTagsBatched } from '@/lib/hydrateTags';
+
+export interface LibraryRow {
+  /** Stable id = the file's fullPath under MUSIC_DIR. Identical to the
+   *  Plan A's WorklistRow id convention so a file row has one identity
+   *  across modes (a row added in scrape mode and the same file added
+   *  in play mode share `id`, even though they live in separate stores).
+   *  Tied to re-expand stability: expandDirsToAudioFiles returns the
+   *  same fullPath for the same file on subsequent calls, so re-adding
+   *  a directory collapses to the same ids. */
+  id: string;
+  fullPath: string;    // relative to MUSIC_DIR — used for /media stream src
+  fileName: string;
+  /** Lazy tag preview populated on first read of the row's tag (optional,
+   *  unused by the current PlayView rendering but reserved so a future
+   *  one-tap "show id3" doesn't need a round-trip). */
+  musicInfo?: Partial<MusicTagInfo>;
+}
+
+interface PersistedShape {
+  rows: LibraryRow[];
+  dirs: string[];
+}
+
+const STORAGE_KEY = 'library.v1';
+
+function loadPersisted(): PersistedShape {
+  const v = readJson<PersistedShape>(STORAGE_KEY);
+  if (!v || !Array.isArray(v.rows) || !Array.isArray(v.dirs)) {
+    return { rows: [], dirs: [] };
+  }
+  return v;
+}
+
+function persist(state: PersistedShape): void {
+  try {
+    writeJson<PersistedShape>(STORAGE_KEY, state);
+  } catch {
+    // localStorage quota exceeded — trial-listen library is intentionally
+    // small. Silently swallow; user can hit 「清空」 to free up. We avoid
+    // calling useNoticeStore here to dodge a potential circular import.
+  }
+}
+
+/** Map ExpandedFile[] from expandDirsToAudioFiles into LibraryRow[]. The
+ *  id is the file's fullPath — same identity convention as
+ *  useWorklistStore.expandedToRows so a given file has one id across
+ *  both stores (see WorklistRow docstring in src/types/index.ts). */
+function expandedToRows(expanded: ExpandedFile[]): LibraryRow[] {
+  return expanded.map((e) => ({
+    id: e.fullPath,
+    fullPath: e.fullPath,
+    fileName: e.file.name,
+  }));
+}
+
+interface LibraryState {
+  rows: LibraryRow[];
+  /** Collated, deduped list of directories the library was built from.
+   *  Drives the Drawer's `existingDirs` 「already-added」 badges. */
+  dirs: string[];
+  /** In-memory search filter applied by getFiltered(). */
+  query: string;
+  enqueueDirs(dirs: string[]): Promise<{ added: number; skipped: number }>;
+  search(s: string): void;
+  remove(id: string): void;
+  clear(): void;
+  getFiltered(): LibraryRow[];
+  /** Lazy row-level musicInfo cache. Populated by PlayView's row
+   *  click handler after a successful /api/music_id3/ fetch so
+   *  subsequent clicks on the same row skip the round-trip and the
+   *  editor pre-resolves the cover + first-line preview instantly.
+   *  Mirrors useWorklistStore.setMusicInfo shape + indexed-by-id
+   *  dedupe semantics. */
+  setMusicInfo(id: string, info: Partial<MusicTagInfo>): void;
+}
+
+export const useLibraryStore = create<LibraryState>((set, get) => ({
+  rows: loadPersisted().rows,
+  dirs: loadPersisted().dirs,
+  query: '',
+
+  enqueueDirs: async (dirs) => {
+    if (dirs.length === 0) return { added: 0, skipped: 0 };
+
+    const expanded = await expandDirsToAudioFiles(dirs);
+    if (expanded.length === 0) return { added: 0, skipped: 0 };
+
+    // Dedupe at directory granularity: if ANY of an expanded file's
+    // fullPath already exists in `rows`, treat that file's entire
+    // source directory as already-collected and drop the whole dir
+    // batch. Mirrors useWorklistStore.enqueueDirs exactly so the two
+    // modes have identical dedupe behaviour (per Plan A/B contract).
+    const existingPaths = new Set(get().rows.map((r) => r.fullPath));
+    const dirHasOverlap = new Set<string>();
+    for (const e of expanded) {
+      if (existingPaths.has(e.fullPath)) {
+        dirHasOverlap.add(e.sourceDir);
+      }
+    }
+
+    const fresh = expanded.filter((e) => !dirHasOverlap.has(e.sourceDir));
+    const newRows = expandedToRows(fresh);
+
+    // Also dedupe within the returned batch by id (a file might appear
+    // twice if two input dirs share a child — pathological but cheap).
+    const idSeen = new Set<string>();
+    const dedupedNewRows: LibraryRow[] = [];
+    for (const r of newRows) {
+      if (idSeen.has(r.id)) continue;
+      idSeen.add(r.id);
+      dedupedNewRows.push(r);
+    }
+
+    // The set of newly-added source dirs = the input dirs that did NOT
+    // have any overlap with existing rows. These are bookkept in `dirs`
+    // for the drawer's existingDirs badges.
+    const inputDirSet = new Set(dirs);
+    const freshDirs = dirs.filter((d) => !dirHasOverlap.has(d));
+
+    const nextRows = [...get().rows, ...dedupedNewRows];
+    // Dedupe nextDirs against existing dirs (re-adding the same dir
+    // name twice should still only result in one badge).
+    const existingDirSet = new Set(get().dirs);
+    const nextDirs = [...get().dirs];
+    for (const d of freshDirs) {
+      if (!existingDirSet.has(d)) {
+        existingDirSet.add(d);
+        nextDirs.push(d);
+      }
+    }
+    // Guard against the (unusual) case where dirs contains duplicates.
+    void inputDirSet;
+
+    set({ rows: nextRows, dirs: nextDirs });
+    persist({ rows: nextRows, dirs: nextDirs });
+
+    // Background-fetch /api/music_id3/ for each newly-added row so the
+    // table immediately renders title/artist/album instead of showing
+    // bare filenames until the user clicks each one. Fire-and-forget.
+    //
+    // IMPORTANT — contract with the click path: hydrateTagsBatched
+    // writes the row's musicInfo ONLY when the response has at least
+    // one non-null field. Leave the implicit coupling intact: the
+    // PlayView.openEditorFor / WorklistRowView.openEditor click paths
+    // use `Object.values(musicInfo).some(v => v != null)` to decide
+    // whether to refetch; if a future change to hydrateTags writes
+    // unconditionally, that guard stops firing on truly empty-tag
+    // files and the user loses retry UX. See lib/hydrateTags.ts
+    // block comment §3 for the rationale.
+    void hydrateTagsBatched(
+      dedupedNewRows.map((r) => ({ id: r.id, fullPath: r.fullPath })),
+      (id, info) => useLibraryStore.getState().setMusicInfo(id, info),
+    );
+
+    return {
+      added: dedupedNewRows.length,
+      skipped: dirHasOverlap.size,
+    };
+  },
+
+  search: (s) => set({ query: s }),
+
+  remove: (id) => {
+    const nextRows = get().rows.filter((r) => r.id !== id);
+    const next: PersistedShape = { rows: nextRows, dirs: get().dirs };
+    set({ rows: nextRows });
+    persist(next);
+    // Note: we don't prune `dirs` here — a directory that no longer contains
+    // any files in the library still counts as "added" so the drawer badge
+    // stays consistent. Use clear() for a full reset.
+  },
+
+  clear: () => {
+    set({ rows: [], dirs: [], query: '' });
+    removeString(STORAGE_KEY);
+  },
+
+  getFiltered: () => {
+    const { rows, query } = get();
+    if (!query.trim()) return rows;
+    const needle = query.toLowerCase();
+    return rows.filter((r) => r.fileName.toLowerCase().includes(needle));
+  },
+
+  setMusicInfo: (id, info) => {
+    set((s) => ({
+      rows: s.rows.map((r) =>
+        r.id === id ? { ...r, musicInfo: { ...(r.musicInfo ?? {}), ...info } } : r,
+      ),
+    }));
+  },
+}));
+
+// Type exports for consumers.
+export type { LibraryState };
