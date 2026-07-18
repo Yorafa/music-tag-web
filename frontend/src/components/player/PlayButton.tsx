@@ -17,7 +17,7 @@ interface Props {
  *  /api/stream proxy (when source.supports_audio_url=true and the plugin
  *  GetAudioURL returned an empty url, which is the dominant path for the
  *  5 streaming plugins when their upstream audio endpoint hiccups AND
- *  for the YouTube source once /api/youtube_download/ has landed). */
+ *  for the YouTube source once /api/download/ has landed). */
 function useHasPlayableUrl(track: PlayerTrack): boolean {
   return useSourceStore((s) => {
     const r = resolveStreamUrl(track.id, track.source, track.url, s.sources);
@@ -32,7 +32,7 @@ function useHasPlayableUrl(track: PlayerTrack): boolean {
  *  the row's primary action (open editor / expand).
  *
  *  YouTube-source preview path:
- *   - First click per session → POST /api/youtube_download/ via
+ *   - First click per session → POST /api/download/ via
  *     useYoutubeStore.ensureDownload, wait for the 202 envelope, then
  *     commit audio.src = /api/stream?src=youtube&id=. Subsequent clicks
  *     short-circuit and skip the POST so the gateway streams the

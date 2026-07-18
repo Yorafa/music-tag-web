@@ -1,4 +1,4 @@
-// YouTube source on-click utility.
+// Download-source "ensure downloaded" utility.
 //
 // The user said:
 //   "前端加flag，如果第一次点击播放就去下载覆盖，如果不是就复用"
@@ -10,13 +10,13 @@
 //     (matches the in-memory "first click of a new session" semantic).
 //   - `inFlight: Map<string, Promise<void>>` deduplicates concurrent
 //     ensureDownload calls: a rapid double-click on PlayButton no longer
-//     fires two POSTs /api/youtube_download/ — both callers await the
+//     fires two POSTs /api/download/ — both callers await the
 //     same promise. (Round-3 review caught this; the Set-based
 //     downloading flag had a microtask race that allowed two onClick
 //     handlers to enter the POST branch concurrently.)
-//   - `ensureDownload(id)` POSTs /api/youtube_download/ only the FIRST
+//   - `ensureDownload(id)` POSTs /api/download/ only the FIRST
 //     time per session; on subsequent calls it returns immediately.
-//     The 202 returned by /api/youtube_download/ (task enqueued, may not
+//     The 202 returned by /api/download/ (task enqueued, may not
 //     yet have written the file) is treated as "download started" — the
 //     gateway /api/stream will glob for the file and return Failure
 //     until yt-dlp finishes. The <audio>.error in PlayerBar will then
@@ -28,29 +28,36 @@
 // we DON'T add the id to `downloaded` — subsequent calls will retry
 // the POST. The pre-existing <audio>.error path remains the user-facing
 // error report.
+//
+// NOTE: The store is named `useYoutubeStore` because YouTube is the only
+// registered DownloadSource today, but it posts to the generic
+// /api/download/ endpoint with `source: 'youtube'` in the body — a
+// future per-source sibling store (e.g. useSoundcloudStore) would post
+// to the same /api/download/ with its own `source` value. The endpoint
+// is unified; only the source identifier differs.
 
 import { create } from 'zustand';
 import axios from 'axios';
 
 interface YoutubeState {
-  /** video_ids that have had /api/youtube_download/ POST accept this session */
+  /** video_ids that have had /api/download/ POST accept this session */
   downloaded: Set<string>;
   /** In-flight POST promises, keyed by video_id. Rapid double-clicks share
    *  one POST instead of firing concurrent duplicates. */
   inFlight: Map<string, Promise<void>>;
-  /** First-call per session. POSTs /api/youtube_download/, marks the id as "started" on accept. */
+  /** First-call per session. POSTs /api/download/ (source=youtube), marks the id as "started" on accept. */
   ensureDownload: (videoId: string) => Promise<void>;
   /** Pure predicate — caller is free to invoke from getState() without subscription. */
   isDownloaded: (videoId: string) => boolean;
 }
 
 async function postDownload(videoId: string): Promise<void> {
-  // The gateway YoutubeDownload handler returns a Success envelope
+  // The gateway Download handler returns a Success envelope
   // once the asynq task is enqueued. We accept any 200 envelope as
   // "started"; downstream /api/stream will retry the actual file
   // presence via its glob, and PlayerBar's <audio>.error covers the
   // "still not ready" toast path.
-  await axios.post('/api/youtube_download/', { video_id: videoId });
+  await axios.post('/api/download/', { source: 'youtube', video_id: videoId });
 }
 
 export const useYoutubeStore = create<YoutubeState>((set, get) => ({
@@ -81,7 +88,7 @@ export const useYoutubeStore = create<YoutubeState>((set, get) => ({
         });
         // Preserve the original error as `cause` so console / downstream
         // toasts can introspect the axios status / network reason.
-        throw new Error(`youtube_download failed: ${videoId}`, { cause });
+        throw new Error(`download failed: ${videoId}`, { cause });
       }
       set((s) => {
         const inflight = new Map(s.inFlight);

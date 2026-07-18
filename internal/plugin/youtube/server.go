@@ -322,7 +322,7 @@ func (s *Server) Download(ctx context.Context, req *pb.DownloadRequest) (*pb.Dow
 	}
 
 	// The proto lets callers specify an optional download_dir, but the
-	// existing gateway handler at handler/youtube.go::YoutubeDownload
+	// existing gateway handler at handler/download.go::Download
 	// never sets it today. Pin the override to workDir anyway: allowing
 	// the caller to point into arbitrary filesystem locations would
 	// let a compromised gateway bushwack files outside workDir.

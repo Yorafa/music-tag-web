@@ -59,9 +59,19 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		authed.POST("/fetch_lyric/", handler.FetchLyric)
 		authed.POST("/tidy_folder/", handler.TidyFolder)
 		authed.POST("/upload_image/", handler.UploadImage)
-		authed.POST("/youtube_search/", handler.YoutubeSearch)
-		authed.POST("/youtube_download/", handler.YoutubeDownload)
+		// /api/search_music/ is the unified search endpoint for all
+		// registered tag- and download-source plugins (youtube search
+		// is already handled inside SearchMusic via DownloadSource.Search
+		// — no separate /youtube_search/ route exists anymore).
 		authed.POST("/search_music/", handler.SearchMusic)
+		// /api/download/ is the unified download endpoint for any
+		// registered DownloadSource. The client supplies `source` in
+		// the request body; the handler routes to the matching plugin.
+		authed.POST("/download/", handler.Download)
+		// /api/stream/ proxies audio playback for sources that advertise
+		// a playable URL (TagSource.GetAudioURL) or a local file
+		// (DownloadSource, e.g. a yt-dlp'd YouTube file on disk).
+		authed.GET("/stream/", handler.StreamAudio)
 		// GET /api/sources/ — Stage A of docs/plugable-plugins.md: exposes
 		// every registered tag- + download-source so the frontend can drive
 		// its source picker dynamically. Replaces the legacy hardcoded

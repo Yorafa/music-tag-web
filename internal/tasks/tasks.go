@@ -29,9 +29,10 @@ type FullScanPayload struct {
 }
 
 type BatchAutoTagPayload struct {
-	Batch      string   `json:"batch"`
-	SourceList []string `json:"source_list"`
-	SelectMode string   `json:"select_mode"`
+	Batch         string   `json:"batch"`
+	SourceList    []string `json:"source_list"`
+	SelectMode    string   `json:"select_mode"`
+	CheckDuplicate bool    `json:"check_duplicate,omitempty"` // TODO: dedup hook stubbed (h.Dedup); not yet wired end-to-end
 }
 
 type TidyFolderPayload struct {

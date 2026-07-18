@@ -32,7 +32,7 @@ import (
 // conventional tag-write path.
 //
 // SECURITY: ExtraJSON is untrusted input (any client can POST
-// /api/youtube_download/). The previous code path called
+// /api/download/). The previous code path called
 // fmt.Sprintf("...output_format=...%s") into the task payload and
 // subsequently into exec.CommandContext's argv. Today both the gateway
 // and the worker run each value through SanitizeYTDLPFormat/OutputFormat/
@@ -91,7 +91,7 @@ func (h *YouTubeDownloadHandler) ProcessTask(ctx context.Context, t Task) error 
 	}
 	// Sanitize re-checks the persisted values (defence-in-depth — covers
 	// task payload replay / DB tampering paths as well as gateway-vetting
-	// that already happens in handler.YoutubeDownload).
+	// that already happens in handler.Download).
 	cleanFmt, err := SanitizeYTDLPFormat(extra.Format)
 	if err != nil {
 		return fmt.Errorf("youtube: format: %w", err)

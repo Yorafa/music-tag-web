@@ -21,7 +21,7 @@ describe('useYoutubeStore', () => {
   it('ensureDownload POSTs on first call per video id', async () => {
     await useYoutubeStore.getState().ensureDownload('vid-1');
     expect(postMock).toHaveBeenCalledTimes(1);
-    expect(postMock).toHaveBeenCalledWith('/api/youtube_download/', { video_id: 'vid-1' });
+    expect(postMock).toHaveBeenCalledWith('/api/download/', { source: 'youtube', video_id: 'vid-1' });
     expect(useYoutubeStore.getState().downloaded.has('vid-1')).toBe(true);
     expect(useYoutubeStore.getState().inFlight.has('vid-1')).toBe(false);
   });

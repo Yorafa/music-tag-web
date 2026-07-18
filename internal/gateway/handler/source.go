@@ -79,33 +79,14 @@ func ListSources(c *gin.Context) {
 			Kind:        "download",
 			Searchable:  true,
 			Lyric:       false,
-			// YouTube is the only DownloadSource with a playback contract:
-			// the gateway serves its YT_TMP_DIR/<id>.* files via
-			// /api/stream?src=youtube once /api/youtube_download/ has
-			// landed the file. Other future download sources get false
-			// here unless they grow an analogous preview path.
-			SupportsAudioUrl: ds.Name() == "youtube",
-			DefaultOn:        true,
-		})
-	}
-
-	// Defensive fallback: ensure YouTube appears in /api/sources/ even
-	// when the gRPC plugin server hasn't registered — whether because
-	// PLUGIN_YOUTUBE_ADDR wasn't supplied in env, the first-boot dial
-	// hasn't completed yet, or the plugin container is unreachable.
-	// Without this, the frontend source picker would hide YouTube
-	// entirely instead of letting /api/youtube_search/ surface a
-	// readable "youtube plugin not available" error. The `seen[name]`
-	// guard above avoids duplicating the entry when the plugin IS
-	// registered via the registry.
-	if !seen["youtube"] {
-		out = append(out, SourceInfo{
-			Name:             "youtube",
-			DisplayName:      "YouTube",
-			Kind:             "download",
-			Searchable:       true,
-			Lyric:            false,
-			SupportsId3:      false,
+			// DownloadSource implementations (YouTube) serve their
+			// downloaded files via /api/stream once the /api/download/
+			// task has landed the file on disk. We surface this as a
+			// playable URL capability so the frontend's PlayButton
+			// routes to that proxy. A future DownloadSource that doesn't
+			// expose a preview path would override this here (or grow a
+			// SupportsAudioURL method — deferred to avoid the "radical
+			// rewrite" scope of the broader refactor).
 			SupportsAudioUrl: true,
 			DefaultOn:        true,
 		})

@@ -56,6 +56,7 @@ func (h *BatchAutoTagHandler) ProcessTask(ctx context.Context, t Task) error {
 		log.Printf("[batch_tag] dedup enabled for batch=%s (full hash + fingerprint + meta fallback)",
 			p.Batch)
 	}
+	_ = dedupEnabled // TODO: dedup hook stubbed, consumer not yet wired
 
 	// 1) lock
 	if err := h.DB.Model(&db.TaskRecord{}).

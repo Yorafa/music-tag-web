@@ -86,12 +86,17 @@ export type SelectMode = 'simple' | 'hard';
 /** Mirrors MusicSource but excludes acoustid/smart_tag which only return ID3
  *  via fingerprinting; they don't have a "search by title" UI. Also
  *  excludes `youtube` — YouTube is a DownloadSource on the backend, not a
- *  TagSource, so /api/search_music/ would silently fan out to nothing for
- *  that name. The audit flagged adding `youtube` here as a BROKEN entry:
- *  user-visible empty-results with no error. Use youtube results through
- *  /api/youtube_search/ directly (no frontend wrapper today; that's a
- *  separate feature). Returned source names from the backend are plain
- *  strings — cast to SearchSource when you want autocomplete narrowing. */
+ *  TagSource, but /api/search_music/ already handles DownloadSource.Search
+ *  internally, so `youtube` is a valid source name to include in the
+ *  `sources` array of a /api/search_music/ POST. However the frontend's
+ *  SearchSource union is used for narrowing the typed set of *TagSource*
+ *  names the user toggles; `youtube` lives in a separate source picker
+ *  (the DownloadSource list, also surfaced by /api/sources/). Keeping
+ *  this union TagSource-scoped lets the exhaustive switch on `SearchSource`
+ *  stay tight without a `default: never` fallback that would silently
+ *  accept new tag sources without explicit handling. Returned source
+ *  names from the backend are plain strings — cast to SearchSource when
+ *  you want autocomplete narrowing. */
 export type SearchSource = 'netease' | 'qmusic' | 'kugou' | 'kuwo' | 'migu' | 'musicbrainz';
 
 /** SourceInfo mirrors GET /api/sources/ — Stage A of
