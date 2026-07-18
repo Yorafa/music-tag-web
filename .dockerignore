@@ -22,7 +22,6 @@ venv
 db.sqlite3
 local_settings.py
 README.md
-readme_en.md
 images.txt
 .env
 *.bak

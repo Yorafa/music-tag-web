@@ -16,7 +16,11 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /plugin ./cmd/plugins/${PLUGIN}
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata
+# yt-dlp is included unconditionally so every plugin image is built from the
+# same Dockerfile template. Only the youtube plugin (~15 MB binary weight) uses
+# it; the other plugins (netease/kugou/...) carry the binary for image
+# uniformity. If space matters more than uniformity, gate with `ARG PLUGIN`.
+RUN apk add --no-cache ca-certificates tzdata yt-dlp yt-dlp
 ENV TZ=Asia/Shanghai
 
 COPY --from=builder /plugin /usr/local/bin/plugin

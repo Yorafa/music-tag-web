@@ -50,6 +50,20 @@ message FetchLyricResponse {
   string lyric = 1;
 }
 
+// GetAudioRequest / GetAudioResponse are the dynamic audio-stream URL
+// fetcher contract. Plugins know their own identity (each gRPC process
+// implements ONE source), so the request carries only the song id. The
+// response URL is usually short-lived and referer / cookie gated — the
+// gateway will re-fetch the upstream bytes on the user's behalf so a
+// browser can do Range scrubbing without CORS noise.
+message GetAudioRequest {
+  string id = 1;
+}
+
+message GetAudioResponse {
+  string url = 1;
+}
+
 message PluginInfoRequest {}
 
 message PluginInfoResponse {
@@ -58,6 +72,12 @@ message PluginInfoResponse {
   bool supports_search = 3;
   bool supports_lyric = 4;
   bool supports_id3 = 5;
+  // supports_audio_url is true if the source answers GetAudioURL with a
+  // playable upstream URL. Musicbrainz / AcoustID will report false; the
+  // remaining 5 mainstream sources report true once their implementation
+  // lands. Frontend can use this flag to choose between PlayButton
+  // (direct URL) and the /api/stream proxy fallback.
+  bool supports_audio_url = 6;
 }
 
 // TagSource handles metadata search + ID3 lookup + lyric fetch for a single
@@ -68,4 +88,8 @@ service TagSource {
   rpc Search(SearchRequest) returns (SearchResponse);
   rpc FetchId3ByTitle(FetchId3Request) returns (FetchId3Response);
   rpc FetchLyric(FetchLyricRequest) returns (FetchLyricResponse);
+  // GetAudioURL returns a short-lived upstream audio-stream URL (empty
+  // when the source is metadata-only, e.g. musicbrainz / acoustid, in
+  // which case PluginInfoResponse.supports_audio_url is false).
+  rpc GetAudioURL(GetAudioRequest) returns (GetAudioResponse);
 }

@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v3.21.12
-// source: api/proto/tag_source.proto
+// source: tag_source.proto
 
 package tagplugin
 
@@ -43,7 +43,7 @@ type Song struct {
 
 func (x *Song) Reset() {
 	*x = Song{}
-	mi := &file_api_proto_tag_source_proto_msgTypes[0]
+	mi := &file_tag_source_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -55,7 +55,7 @@ func (x *Song) String() string {
 func (*Song) ProtoMessage() {}
 
 func (x *Song) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tag_source_proto_msgTypes[0]
+	mi := &file_tag_source_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -68,7 +68,7 @@ func (x *Song) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Song.ProtoReflect.Descriptor instead.
 func (*Song) Descriptor() ([]byte, []int) {
-	return file_api_proto_tag_source_proto_rawDescGZIP(), []int{0}
+	return file_tag_source_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *Song) GetId() string {
@@ -173,7 +173,7 @@ type SearchRequest struct {
 
 func (x *SearchRequest) Reset() {
 	*x = SearchRequest{}
-	mi := &file_api_proto_tag_source_proto_msgTypes[1]
+	mi := &file_tag_source_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -185,7 +185,7 @@ func (x *SearchRequest) String() string {
 func (*SearchRequest) ProtoMessage() {}
 
 func (x *SearchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tag_source_proto_msgTypes[1]
+	mi := &file_tag_source_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -198,7 +198,7 @@ func (x *SearchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchRequest.ProtoReflect.Descriptor instead.
 func (*SearchRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_tag_source_proto_rawDescGZIP(), []int{1}
+	return file_tag_source_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *SearchRequest) GetQuery() string {
@@ -232,7 +232,7 @@ type SearchResponse struct {
 
 func (x *SearchResponse) Reset() {
 	*x = SearchResponse{}
-	mi := &file_api_proto_tag_source_proto_msgTypes[2]
+	mi := &file_tag_source_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -244,7 +244,7 @@ func (x *SearchResponse) String() string {
 func (*SearchResponse) ProtoMessage() {}
 
 func (x *SearchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tag_source_proto_msgTypes[2]
+	mi := &file_tag_source_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -257,7 +257,7 @@ func (x *SearchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchResponse.ProtoReflect.Descriptor instead.
 func (*SearchResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_tag_source_proto_rawDescGZIP(), []int{2}
+	return file_tag_source_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *SearchResponse) GetSongs() []*Song {
@@ -283,7 +283,7 @@ type FetchId3Request struct {
 
 func (x *FetchId3Request) Reset() {
 	*x = FetchId3Request{}
-	mi := &file_api_proto_tag_source_proto_msgTypes[3]
+	mi := &file_tag_source_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -295,7 +295,7 @@ func (x *FetchId3Request) String() string {
 func (*FetchId3Request) ProtoMessage() {}
 
 func (x *FetchId3Request) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tag_source_proto_msgTypes[3]
+	mi := &file_tag_source_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -308,7 +308,7 @@ func (x *FetchId3Request) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchId3Request.ProtoReflect.Descriptor instead.
 func (*FetchId3Request) Descriptor() ([]byte, []int) {
-	return file_api_proto_tag_source_proto_rawDescGZIP(), []int{3}
+	return file_tag_source_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *FetchId3Request) GetTitle() string {
@@ -327,7 +327,7 @@ type FetchId3Response struct {
 
 func (x *FetchId3Response) Reset() {
 	*x = FetchId3Response{}
-	mi := &file_api_proto_tag_source_proto_msgTypes[4]
+	mi := &file_tag_source_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -339,7 +339,7 @@ func (x *FetchId3Response) String() string {
 func (*FetchId3Response) ProtoMessage() {}
 
 func (x *FetchId3Response) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tag_source_proto_msgTypes[4]
+	mi := &file_tag_source_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -352,7 +352,7 @@ func (x *FetchId3Response) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchId3Response.ProtoReflect.Descriptor instead.
 func (*FetchId3Response) Descriptor() ([]byte, []int) {
-	return file_api_proto_tag_source_proto_rawDescGZIP(), []int{4}
+	return file_tag_source_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *FetchId3Response) GetSongs() []*Song {
@@ -371,7 +371,7 @@ type FetchLyricRequest struct {
 
 func (x *FetchLyricRequest) Reset() {
 	*x = FetchLyricRequest{}
-	mi := &file_api_proto_tag_source_proto_msgTypes[5]
+	mi := &file_tag_source_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -383,7 +383,7 @@ func (x *FetchLyricRequest) String() string {
 func (*FetchLyricRequest) ProtoMessage() {}
 
 func (x *FetchLyricRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tag_source_proto_msgTypes[5]
+	mi := &file_tag_source_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -396,7 +396,7 @@ func (x *FetchLyricRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchLyricRequest.ProtoReflect.Descriptor instead.
 func (*FetchLyricRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_tag_source_proto_rawDescGZIP(), []int{5}
+	return file_tag_source_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *FetchLyricRequest) GetSongId() string {
@@ -415,7 +415,7 @@ type FetchLyricResponse struct {
 
 func (x *FetchLyricResponse) Reset() {
 	*x = FetchLyricResponse{}
-	mi := &file_api_proto_tag_source_proto_msgTypes[6]
+	mi := &file_tag_source_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -427,7 +427,7 @@ func (x *FetchLyricResponse) String() string {
 func (*FetchLyricResponse) ProtoMessage() {}
 
 func (x *FetchLyricResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tag_source_proto_msgTypes[6]
+	mi := &file_tag_source_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -440,12 +440,106 @@ func (x *FetchLyricResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchLyricResponse.ProtoReflect.Descriptor instead.
 func (*FetchLyricResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_tag_source_proto_rawDescGZIP(), []int{6}
+	return file_tag_source_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *FetchLyricResponse) GetLyric() string {
 	if x != nil {
 		return x.Lyric
+	}
+	return ""
+}
+
+// GetAudioRequest / GetAudioResponse are the dynamic audio-stream URL
+// fetcher contract. Plugins know their own identity (each gRPC process
+// implements ONE source), so the request carries only the song id. The
+// response URL is usually short-lived and referer / cookie gated — the
+// gateway will re-fetch the upstream bytes on the user's behalf so a
+// browser can do Range scrubbing without CORS noise.
+type GetAudioRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetAudioRequest) Reset() {
+	*x = GetAudioRequest{}
+	mi := &file_tag_source_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetAudioRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAudioRequest) ProtoMessage() {}
+
+func (x *GetAudioRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_tag_source_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAudioRequest.ProtoReflect.Descriptor instead.
+func (*GetAudioRequest) Descriptor() ([]byte, []int) {
+	return file_tag_source_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *GetAudioRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+type GetAudioResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Url           string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetAudioResponse) Reset() {
+	*x = GetAudioResponse{}
+	mi := &file_tag_source_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetAudioResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAudioResponse) ProtoMessage() {}
+
+func (x *GetAudioResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_tag_source_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAudioResponse.ProtoReflect.Descriptor instead.
+func (*GetAudioResponse) Descriptor() ([]byte, []int) {
+	return file_tag_source_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GetAudioResponse) GetUrl() string {
+	if x != nil {
+		return x.Url
 	}
 	return ""
 }
@@ -458,7 +552,7 @@ type PluginInfoRequest struct {
 
 func (x *PluginInfoRequest) Reset() {
 	*x = PluginInfoRequest{}
-	mi := &file_api_proto_tag_source_proto_msgTypes[7]
+	mi := &file_tag_source_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -470,7 +564,7 @@ func (x *PluginInfoRequest) String() string {
 func (*PluginInfoRequest) ProtoMessage() {}
 
 func (x *PluginInfoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tag_source_proto_msgTypes[7]
+	mi := &file_tag_source_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -483,7 +577,7 @@ func (x *PluginInfoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginInfoRequest.ProtoReflect.Descriptor instead.
 func (*PluginInfoRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_tag_source_proto_rawDescGZIP(), []int{7}
+	return file_tag_source_proto_rawDescGZIP(), []int{9}
 }
 
 type PluginInfoResponse struct {
@@ -493,13 +587,19 @@ type PluginInfoResponse struct {
 	SupportsSearch bool                   `protobuf:"varint,3,opt,name=supports_search,json=supportsSearch,proto3" json:"supports_search,omitempty"`
 	SupportsLyric  bool                   `protobuf:"varint,4,opt,name=supports_lyric,json=supportsLyric,proto3" json:"supports_lyric,omitempty"`
 	SupportsId3    bool                   `protobuf:"varint,5,opt,name=supports_id3,json=supportsId3,proto3" json:"supports_id3,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// supports_audio_url is true if the source answers GetAudioURL with a
+	// playable upstream URL. Musicbrainz / AcoustID will report false; the
+	// remaining 5 mainstream sources report true once their implementation
+	// lands. Frontend can use this flag to choose between PlayButton
+	// (direct URL) and the /api/stream proxy fallback.
+	SupportsAudioUrl bool `protobuf:"varint,6,opt,name=supports_audio_url,json=supportsAudioUrl,proto3" json:"supports_audio_url,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *PluginInfoResponse) Reset() {
 	*x = PluginInfoResponse{}
-	mi := &file_api_proto_tag_source_proto_msgTypes[8]
+	mi := &file_tag_source_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -511,7 +611,7 @@ func (x *PluginInfoResponse) String() string {
 func (*PluginInfoResponse) ProtoMessage() {}
 
 func (x *PluginInfoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tag_source_proto_msgTypes[8]
+	mi := &file_tag_source_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -524,7 +624,7 @@ func (x *PluginInfoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginInfoResponse.ProtoReflect.Descriptor instead.
 func (*PluginInfoResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_tag_source_proto_rawDescGZIP(), []int{8}
+	return file_tag_source_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *PluginInfoResponse) GetName() string {
@@ -562,11 +662,18 @@ func (x *PluginInfoResponse) GetSupportsId3() bool {
 	return false
 }
 
-var File_api_proto_tag_source_proto protoreflect.FileDescriptor
+func (x *PluginInfoResponse) GetSupportsAudioUrl() bool {
+	if x != nil {
+		return x.SupportsAudioUrl
+	}
+	return false
+}
 
-const file_api_proto_tag_source_proto_rawDesc = "" +
+var File_tag_source_proto protoreflect.FileDescriptor
+
+const file_tag_source_proto_rawDesc = "" +
 	"\n" +
-	"\x1aapi/proto/tag_source.proto\x12\ttagplugin\"\xad\x02\n" +
+	"\x10tag_source.proto\x12\ttagplugin\"\xad\x02\n" +
 	"\x04Song\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
@@ -596,35 +703,41 @@ const file_api_proto_tag_source_proto_rawDesc = "" +
 	"\x11FetchLyricRequest\x12\x17\n" +
 	"\asong_id\x18\x01 \x01(\tR\x06songId\"*\n" +
 	"\x12FetchLyricResponse\x12\x14\n" +
-	"\x05lyric\x18\x01 \x01(\tR\x05lyric\"\x13\n" +
-	"\x11PluginInfoRequest\"\xbe\x01\n" +
+	"\x05lyric\x18\x01 \x01(\tR\x05lyric\"!\n" +
+	"\x0fGetAudioRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"$\n" +
+	"\x10GetAudioResponse\x12\x10\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\"\x13\n" +
+	"\x11PluginInfoRequest\"\xec\x01\n" +
 	"\x12PluginInfoResponse\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12'\n" +
 	"\x0fsupports_search\x18\x03 \x01(\bR\x0esupportsSearch\x12%\n" +
 	"\x0esupports_lyric\x18\x04 \x01(\bR\rsupportsLyric\x12!\n" +
-	"\fsupports_id3\x18\x05 \x01(\bR\vsupportsId32\xaf\x02\n" +
+	"\fsupports_id3\x18\x05 \x01(\bR\vsupportsId3\x12,\n" +
+	"\x12supports_audio_url\x18\x06 \x01(\bR\x10supportsAudioUrl2\xf7\x02\n" +
 	"\tTagSource\x12L\n" +
 	"\rGetPluginInfo\x12\x1c.tagplugin.PluginInfoRequest\x1a\x1d.tagplugin.PluginInfoResponse\x12=\n" +
 	"\x06Search\x12\x18.tagplugin.SearchRequest\x1a\x19.tagplugin.SearchResponse\x12J\n" +
 	"\x0fFetchId3ByTitle\x12\x1a.tagplugin.FetchId3Request\x1a\x1b.tagplugin.FetchId3Response\x12I\n" +
 	"\n" +
-	"FetchLyric\x12\x1c.tagplugin.FetchLyricRequest\x1a\x1d.tagplugin.FetchLyricResponseB\"Z go-music-tag/api/proto/tagpluginb\x06proto3"
+	"FetchLyric\x12\x1c.tagplugin.FetchLyricRequest\x1a\x1d.tagplugin.FetchLyricResponse\x12F\n" +
+	"\vGetAudioURL\x12\x1a.tagplugin.GetAudioRequest\x1a\x1b.tagplugin.GetAudioResponseB\"Z go-music-tag/api/proto/tagpluginb\x06proto3"
 
 var (
-	file_api_proto_tag_source_proto_rawDescOnce sync.Once
-	file_api_proto_tag_source_proto_rawDescData []byte
+	file_tag_source_proto_rawDescOnce sync.Once
+	file_tag_source_proto_rawDescData []byte
 )
 
-func file_api_proto_tag_source_proto_rawDescGZIP() []byte {
-	file_api_proto_tag_source_proto_rawDescOnce.Do(func() {
-		file_api_proto_tag_source_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_api_proto_tag_source_proto_rawDesc), len(file_api_proto_tag_source_proto_rawDesc)))
+func file_tag_source_proto_rawDescGZIP() []byte {
+	file_tag_source_proto_rawDescOnce.Do(func() {
+		file_tag_source_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_tag_source_proto_rawDesc), len(file_tag_source_proto_rawDesc)))
 	})
-	return file_api_proto_tag_source_proto_rawDescData
+	return file_tag_source_proto_rawDescData
 }
 
-var file_api_proto_tag_source_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
-var file_api_proto_tag_source_proto_goTypes = []any{
+var file_tag_source_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_tag_source_proto_goTypes = []any{
 	(*Song)(nil),               // 0: tagplugin.Song
 	(*SearchRequest)(nil),      // 1: tagplugin.SearchRequest
 	(*SearchResponse)(nil),     // 2: tagplugin.SearchResponse
@@ -632,47 +745,51 @@ var file_api_proto_tag_source_proto_goTypes = []any{
 	(*FetchId3Response)(nil),   // 4: tagplugin.FetchId3Response
 	(*FetchLyricRequest)(nil),  // 5: tagplugin.FetchLyricRequest
 	(*FetchLyricResponse)(nil), // 6: tagplugin.FetchLyricResponse
-	(*PluginInfoRequest)(nil),  // 7: tagplugin.PluginInfoRequest
-	(*PluginInfoResponse)(nil), // 8: tagplugin.PluginInfoResponse
+	(*GetAudioRequest)(nil),    // 7: tagplugin.GetAudioRequest
+	(*GetAudioResponse)(nil),   // 8: tagplugin.GetAudioResponse
+	(*PluginInfoRequest)(nil),  // 9: tagplugin.PluginInfoRequest
+	(*PluginInfoResponse)(nil), // 10: tagplugin.PluginInfoResponse
 }
-var file_api_proto_tag_source_proto_depIdxs = []int32{
-	0, // 0: tagplugin.SearchResponse.songs:type_name -> tagplugin.Song
-	0, // 1: tagplugin.FetchId3Response.songs:type_name -> tagplugin.Song
-	7, // 2: tagplugin.TagSource.GetPluginInfo:input_type -> tagplugin.PluginInfoRequest
-	1, // 3: tagplugin.TagSource.Search:input_type -> tagplugin.SearchRequest
-	3, // 4: tagplugin.TagSource.FetchId3ByTitle:input_type -> tagplugin.FetchId3Request
-	5, // 5: tagplugin.TagSource.FetchLyric:input_type -> tagplugin.FetchLyricRequest
-	8, // 6: tagplugin.TagSource.GetPluginInfo:output_type -> tagplugin.PluginInfoResponse
-	2, // 7: tagplugin.TagSource.Search:output_type -> tagplugin.SearchResponse
-	4, // 8: tagplugin.TagSource.FetchId3ByTitle:output_type -> tagplugin.FetchId3Response
-	6, // 9: tagplugin.TagSource.FetchLyric:output_type -> tagplugin.FetchLyricResponse
-	6, // [6:10] is the sub-list for method output_type
-	2, // [2:6] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+var file_tag_source_proto_depIdxs = []int32{
+	0,  // 0: tagplugin.SearchResponse.songs:type_name -> tagplugin.Song
+	0,  // 1: tagplugin.FetchId3Response.songs:type_name -> tagplugin.Song
+	9,  // 2: tagplugin.TagSource.GetPluginInfo:input_type -> tagplugin.PluginInfoRequest
+	1,  // 3: tagplugin.TagSource.Search:input_type -> tagplugin.SearchRequest
+	3,  // 4: tagplugin.TagSource.FetchId3ByTitle:input_type -> tagplugin.FetchId3Request
+	5,  // 5: tagplugin.TagSource.FetchLyric:input_type -> tagplugin.FetchLyricRequest
+	7,  // 6: tagplugin.TagSource.GetAudioURL:input_type -> tagplugin.GetAudioRequest
+	10, // 7: tagplugin.TagSource.GetPluginInfo:output_type -> tagplugin.PluginInfoResponse
+	2,  // 8: tagplugin.TagSource.Search:output_type -> tagplugin.SearchResponse
+	4,  // 9: tagplugin.TagSource.FetchId3ByTitle:output_type -> tagplugin.FetchId3Response
+	6,  // 10: tagplugin.TagSource.FetchLyric:output_type -> tagplugin.FetchLyricResponse
+	8,  // 11: tagplugin.TagSource.GetAudioURL:output_type -> tagplugin.GetAudioResponse
+	7,  // [7:12] is the sub-list for method output_type
+	2,  // [2:7] is the sub-list for method input_type
+	2,  // [2:2] is the sub-list for extension type_name
+	2,  // [2:2] is the sub-list for extension extendee
+	0,  // [0:2] is the sub-list for field type_name
 }
 
-func init() { file_api_proto_tag_source_proto_init() }
-func file_api_proto_tag_source_proto_init() {
-	if File_api_proto_tag_source_proto != nil {
+func init() { file_tag_source_proto_init() }
+func file_tag_source_proto_init() {
+	if File_tag_source_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_tag_source_proto_rawDesc), len(file_api_proto_tag_source_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_tag_source_proto_rawDesc), len(file_tag_source_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_api_proto_tag_source_proto_goTypes,
-		DependencyIndexes: file_api_proto_tag_source_proto_depIdxs,
-		MessageInfos:      file_api_proto_tag_source_proto_msgTypes,
+		GoTypes:           file_tag_source_proto_goTypes,
+		DependencyIndexes: file_tag_source_proto_depIdxs,
+		MessageInfos:      file_tag_source_proto_msgTypes,
 	}.Build()
-	File_api_proto_tag_source_proto = out.File
-	file_api_proto_tag_source_proto_goTypes = nil
-	file_api_proto_tag_source_proto_depIdxs = nil
+	File_tag_source_proto = out.File
+	file_tag_source_proto_goTypes = nil
+	file_tag_source_proto_depIdxs = nil
 }

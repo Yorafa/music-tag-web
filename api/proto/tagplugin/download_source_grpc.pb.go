@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v3.21.12
-// source: api/proto/download_source.proto
+// source: download_source.proto
 
 package tagplugin
 
@@ -197,5 +197,5 @@ var DownloadSource_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "api/proto/download_source.proto",
+	Metadata: "download_source.proto",
 }

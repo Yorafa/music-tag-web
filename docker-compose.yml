@@ -1,13 +1,12 @@
 # =============================================================================
-# Music Tag Web - Go backend (project root, gRPC plugin architecture)
-# Distributed layout: gateway + worker + 7 gRPC music-source plugins.
+# Music Tag Web - Go 后端（项目根，gRPC 插件架构）
+# 分布式布局：gateway + worker + 7 个 gRPC 音源插件。
 #
-# Services:
-#   gateway      - gin-gonic REST API server (port 8001)
-#   worker       - asynq background task processor
-#   redis        - message broker for asynq
-#   netease/kugou/kuwo/migu/qmusic/musicbrainz/acoustid - gRPC plugin servers
-#   nginx        - reverse proxy (port 9150)
+# 服务清单：
+#   gateway      - gin-gonic HTTP 服务器：API + 静态 SPA + 媒体（容器内端口 8001，通过 ${GATEWAY_PORT:-9150} 暴露到宿主机）
+#   worker       - asynq 后台任务处理器
+#   redis        - asynq 的消息代理
+#   netease/kugou/kuwo/migu/qmusic/musicbrainz/acoustid/youtube - 各音源的 gRPC 插件服务
 # =============================================================================
 
 services:
@@ -16,37 +15,49 @@ services:
       context: .
       dockerfile: Dockerfile.gateway
     container_name: go-music-gateway
-    expose:
-      - "8001"
+    # gateway 现在直接对外提供 API + 静态资源 + 媒体服务；宿主机侧端口经
+    # 环境变量 GATEWAY_PORT（默认 9150）映射。容器内端口保持 8001，因为
+    # healthcheck 中 /admin/login/ 使用的是该端口。
+    ports:
+      - "${GATEWAY_PORT:-9150}:8001"
     volumes:
-      - ${MUSIC_DIR:-./music}:/app/media:rw
-      - ${DATA_DIR:-./data}:/app/data:rw
+      - ./music:/app/media:rw
+      - ./data:/app/data:rw
+      - ./static:/app/static:ro
     environment:
-      GATEWAY_PORT: "8001"
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
-      # Read via os.Getenv() by handler/auth.go::loadUsers.
-      # Format: user:pass[,user:pass...] (use bcrypt hashes for prod).
-      ADMIN_USERS: ${ADMIN_USERS:-}
-      # Read via os.Getenv() by middleware/cors.go.
-      # Empty list blocks cross-origin requests entirely.
+      # JWT_SECRET / ADMIN_USERS / WEBHOOK_INTERNAL_TOKEN 故意默认为空，
+      # 让 gateway 在首次启动时执行自动引导（见 internal/config/bootstrap.go），
+      # 生成加密随机值并写入 /app/data/.bootstrap-creds（该目录 bind mount
+      # 自宿主机 ./data）。明文管理员密码会在启动日志里打印一次——
+      # `docker compose logs gateway | grep FIRST-BOOT`。若要手动固定
+      # 值，可以在 .env 中创建并取消下方对应行的注释；自动引导会
+      # 跳过任何已经有值的 env。
+      JWT_SECRET: ${JWT_SECRET:-}
+      # 由 handler/auth.go::loadUsers 通过 os.Getenv() 读取。
+      # 格式：user:pass[,user:pass...]（生产请使用 bcrypt 哈希）。
+      ADMIN_USERS: ${ADMIN_USERS:-admin:admin} # 首次启动自动生成一对 bcrypt admin:<随机密码>
+      # 由 middleware/cors.go 通过 os.Getenv() 读取。
+      # 空列表将完全屏蔽跨域请求。
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
-      # Read via os.Getenv() by plugin/grpc_adapter.go::DialOptions.
+      # 由 plugin/grpc_adapter.go::DialOptions 通过 os.Getenv() 读取。
       GRPC_USE_TLS: ${GRPC_USE_TLS:-0}
       GRPC_TLS_CA_FILE: ${GRPC_TLS_CA_FILE:-}
-      # Read via os.Getenv() by middleware/webhook_auth.go. Workers use this
-      # in the X-Internal-Token header when POSTing to /api/webhooks/*.
-      # Empty = fail-closed (403) unless ALLOW_INSECURE_DEFAULTS=1.
-      WEBHOOK_INTERNAL_TOKEN: ${WEBHOOK_INTERNAL_TOKEN:-}
-      # Read via os.Getenv() by config.Load(). Set to 1 only for explicit
-      # local dev to opt out of placeholder JWT / admin/admin fallbacks.
+      # 由 middleware/webhook_auth.go 通过 os.Getenv() 读取。
+      # worker 在向 /api/webhooks/* POST 时通过 X-Internal-Token 头带上。
+      # 空 = 默认拒绝（403）；除非 ALLOW_INSECURE_DEFAULTS=1 才会放行。
+      WEBHOOK_INTERNAL_TOKEN: ${WEBHOOK_INTERNAL_TOKEN:-} # 自动引导（32 字节 hex）；为空时默认拒绝
+      # 由 config.Load() 通过 os.Getenv() 读取。仅用于本地开发，
+      # 显式设为 1 以跳过占位 JWT / admin/admin 默认值。
       ALLOW_INSECURE_DEFAULTS: ${ALLOW_INSECURE_DEFAULTS:-}
+      # 与上方宿主机 ./music:/app/media 与 ./data:/app/data bind mount 对应；
+      # 修改请同步调整宿主机挂载目标。
       MUSIC_DIR: /app/media
       DATA_DIR: /app/data
       DB_DSN: /app/data/db.sqlite3
       DB_DRIVER: ${DB_DRIVER:-sqlite3}
       REDIS_ADDR: redis:6379
-      # Per-plugin gRPC addresses. The server reads these via parsePluginAddrs()
-      # at startup. Adjust if running plugins out-of-process or on different hosts.
+      # 各插件的 gRPC 地址。服务启动时通过 parsePluginAddrs() 读取。
+      # 若插件以独立进程或在不同宿主机上运行，请相应调整。
       PLUGIN_NETEASE_ADDR: ${PLUGIN_NETEASE_ADDR:-netease:50051}
       PLUGIN_KUGOU_ADDR: ${PLUGIN_KUGOU_ADDR:-kugou:50052}
       PLUGIN_KUWO_ADDR: ${PLUGIN_KUWO_ADDR:-kuwo:50053}
@@ -54,9 +65,11 @@ services:
       PLUGIN_QMUSIC_ADDR: ${PLUGIN_QMUSIC_ADDR:-qmusic:50055}
       PLUGIN_MUSICBRAINZ_ADDR: ${PLUGIN_MUSICBRAINZ_ADDR:-musicbrainz:50056}
       PLUGIN_ACOUSTID_ADDR: ${PLUGIN_ACOUSTID_ADDR:-acoustid:50057}
+      PLUGIN_YOUTUBE_ADDR: ${PLUGIN_YOUTUBE_ADDR:-youtube:50058}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8001/admin/login/"]
+      test:
+        ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8001/admin/login/"]
       interval: 10s
       timeout: 10s
       retries: 12
@@ -68,10 +81,12 @@ services:
       dockerfile: Dockerfile.worker
     container_name: go-music-worker
     volumes:
-      - ${MUSIC_DIR:-./music}:/app/media:rw
-      - ${DATA_DIR:-./data}:/app/data:rw
+      - ./music:/app/media:rw
+      - ./data:/app/data:rw
     environment:
       REDIS_ADDR: redis:6379
+      # 与上方宿主机 ./music:/app/media 与 ./data:/app/data bind mount 对应；
+      # 修改请同步调整宿主机挂载目标。
       MUSIC_DIR: /app/media
       DATA_DIR: /app/data
     restart: unless-stopped
@@ -164,18 +179,15 @@ services:
       - "50057"
     restart: unless-stopped
 
-  nginx:
-    image: nginx:1.25-alpine
-    container_name: go-music-nginx
-    ports:
-      - "${NGINX_PORT:-9150}:80"
-    depends_on:
-      gateway:
-        condition: service_healthy
-    volumes:
-      - ${MUSIC_DIR:-./music}:/app/media:ro
-      - ${STATIC_DIR:-./static}:/app/static:ro
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  youtube:
+    build:
+      context: .
+      dockerfile: Dockerfile.plugin
+      args:
+        PLUGIN: youtube
+    container_name: go-music-youtube
+    expose:
+      - "50058"
     restart: unless-stopped
 
 volumes:

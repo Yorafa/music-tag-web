@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v3.21.12
-// source: api/proto/tag_source.proto
+// source: tag_source.proto
 
 package tagplugin
 
@@ -23,6 +23,7 @@ const (
 	TagSource_Search_FullMethodName          = "/tagplugin.TagSource/Search"
 	TagSource_FetchId3ByTitle_FullMethodName = "/tagplugin.TagSource/FetchId3ByTitle"
 	TagSource_FetchLyric_FullMethodName      = "/tagplugin.TagSource/FetchLyric"
+	TagSource_GetAudioURL_FullMethodName     = "/tagplugin.TagSource/GetAudioURL"
 )
 
 // TagSourceClient is the client API for TagSource service.
@@ -37,6 +38,10 @@ type TagSourceClient interface {
 	Search(ctx context.Context, in *SearchRequest, opts ...grpc.CallOption) (*SearchResponse, error)
 	FetchId3ByTitle(ctx context.Context, in *FetchId3Request, opts ...grpc.CallOption) (*FetchId3Response, error)
 	FetchLyric(ctx context.Context, in *FetchLyricRequest, opts ...grpc.CallOption) (*FetchLyricResponse, error)
+	// GetAudioURL returns a short-lived upstream audio-stream URL (empty
+	// when the source is metadata-only, e.g. musicbrainz / acoustid, in
+	// which case PluginInfoResponse.supports_audio_url is false).
+	GetAudioURL(ctx context.Context, in *GetAudioRequest, opts ...grpc.CallOption) (*GetAudioResponse, error)
 }
 
 type tagSourceClient struct {
@@ -87,6 +92,16 @@ func (c *tagSourceClient) FetchLyric(ctx context.Context, in *FetchLyricRequest,
 	return out, nil
 }
 
+func (c *tagSourceClient) GetAudioURL(ctx context.Context, in *GetAudioRequest, opts ...grpc.CallOption) (*GetAudioResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetAudioResponse)
+	err := c.cc.Invoke(ctx, TagSource_GetAudioURL_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TagSourceServer is the server API for TagSource service.
 // All implementations must embed UnimplementedTagSourceServer
 // for forward compatibility.
@@ -99,6 +114,10 @@ type TagSourceServer interface {
 	Search(context.Context, *SearchRequest) (*SearchResponse, error)
 	FetchId3ByTitle(context.Context, *FetchId3Request) (*FetchId3Response, error)
 	FetchLyric(context.Context, *FetchLyricRequest) (*FetchLyricResponse, error)
+	// GetAudioURL returns a short-lived upstream audio-stream URL (empty
+	// when the source is metadata-only, e.g. musicbrainz / acoustid, in
+	// which case PluginInfoResponse.supports_audio_url is false).
+	GetAudioURL(context.Context, *GetAudioRequest) (*GetAudioResponse, error)
 	mustEmbedUnimplementedTagSourceServer()
 }
 
@@ -120,6 +139,9 @@ func (UnimplementedTagSourceServer) FetchId3ByTitle(context.Context, *FetchId3Re
 }
 func (UnimplementedTagSourceServer) FetchLyric(context.Context, *FetchLyricRequest) (*FetchLyricResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method FetchLyric not implemented")
+}
+func (UnimplementedTagSourceServer) GetAudioURL(context.Context, *GetAudioRequest) (*GetAudioResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetAudioURL not implemented")
 }
 func (UnimplementedTagSourceServer) mustEmbedUnimplementedTagSourceServer() {}
 func (UnimplementedTagSourceServer) testEmbeddedByValue()                   {}
@@ -214,6 +236,24 @@ func _TagSource_FetchLyric_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TagSource_GetAudioURL_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAudioRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TagSourceServer).GetAudioURL(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TagSource_GetAudioURL_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TagSourceServer).GetAudioURL(ctx, req.(*GetAudioRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TagSource_ServiceDesc is the grpc.ServiceDesc for TagSource service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -237,7 +277,11 @@ var TagSource_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "FetchLyric",
 			Handler:    _TagSource_FetchLyric_Handler,
 		},
+		{
+			MethodName: "GetAudioURL",
+			Handler:    _TagSource_GetAudioURL_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "api/proto/tag_source.proto",
+	Metadata: "tag_source.proto",
 }

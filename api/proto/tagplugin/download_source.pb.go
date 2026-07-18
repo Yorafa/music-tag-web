@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v3.21.12
-// source: api/proto/download_source.proto
+// source: download_source.proto
 
 package tagplugin
 
@@ -31,7 +31,7 @@ type DownloadSearchRequest struct {
 
 func (x *DownloadSearchRequest) Reset() {
 	*x = DownloadSearchRequest{}
-	mi := &file_api_proto_download_source_proto_msgTypes[0]
+	mi := &file_download_source_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -43,7 +43,7 @@ func (x *DownloadSearchRequest) String() string {
 func (*DownloadSearchRequest) ProtoMessage() {}
 
 func (x *DownloadSearchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_download_source_proto_msgTypes[0]
+	mi := &file_download_source_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -56,7 +56,7 @@ func (x *DownloadSearchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadSearchRequest.ProtoReflect.Descriptor instead.
 func (*DownloadSearchRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_download_source_proto_rawDescGZIP(), []int{0}
+	return file_download_source_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *DownloadSearchRequest) GetQuery() string {
@@ -87,7 +87,7 @@ type DownloadItem struct {
 
 func (x *DownloadItem) Reset() {
 	*x = DownloadItem{}
-	mi := &file_api_proto_download_source_proto_msgTypes[1]
+	mi := &file_download_source_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -99,7 +99,7 @@ func (x *DownloadItem) String() string {
 func (*DownloadItem) ProtoMessage() {}
 
 func (x *DownloadItem) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_download_source_proto_msgTypes[1]
+	mi := &file_download_source_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -112,7 +112,7 @@ func (x *DownloadItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadItem.ProtoReflect.Descriptor instead.
 func (*DownloadItem) Descriptor() ([]byte, []int) {
-	return file_api_proto_download_source_proto_rawDescGZIP(), []int{1}
+	return file_download_source_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *DownloadItem) GetId() string {
@@ -166,7 +166,7 @@ type DownloadSearchResponse struct {
 
 func (x *DownloadSearchResponse) Reset() {
 	*x = DownloadSearchResponse{}
-	mi := &file_api_proto_download_source_proto_msgTypes[2]
+	mi := &file_download_source_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -178,7 +178,7 @@ func (x *DownloadSearchResponse) String() string {
 func (*DownloadSearchResponse) ProtoMessage() {}
 
 func (x *DownloadSearchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_download_source_proto_msgTypes[2]
+	mi := &file_download_source_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -191,7 +191,7 @@ func (x *DownloadSearchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadSearchResponse.ProtoReflect.Descriptor instead.
 func (*DownloadSearchResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_download_source_proto_rawDescGZIP(), []int{2}
+	return file_download_source_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *DownloadSearchResponse) GetItems() []*DownloadItem {
@@ -211,7 +211,7 @@ type DownloadRequest struct {
 
 func (x *DownloadRequest) Reset() {
 	*x = DownloadRequest{}
-	mi := &file_api_proto_download_source_proto_msgTypes[3]
+	mi := &file_download_source_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -223,7 +223,7 @@ func (x *DownloadRequest) String() string {
 func (*DownloadRequest) ProtoMessage() {}
 
 func (x *DownloadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_download_source_proto_msgTypes[3]
+	mi := &file_download_source_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -236,7 +236,7 @@ func (x *DownloadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadRequest.ProtoReflect.Descriptor instead.
 func (*DownloadRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_download_source_proto_rawDescGZIP(), []int{3}
+	return file_download_source_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *DownloadRequest) GetVideoId() string {
@@ -265,7 +265,7 @@ type DownloadResponse struct {
 
 func (x *DownloadResponse) Reset() {
 	*x = DownloadResponse{}
-	mi := &file_api_proto_download_source_proto_msgTypes[4]
+	mi := &file_download_source_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -277,7 +277,7 @@ func (x *DownloadResponse) String() string {
 func (*DownloadResponse) ProtoMessage() {}
 
 func (x *DownloadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_download_source_proto_msgTypes[4]
+	mi := &file_download_source_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -290,7 +290,7 @@ func (x *DownloadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadResponse.ProtoReflect.Descriptor instead.
 func (*DownloadResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_download_source_proto_rawDescGZIP(), []int{4}
+	return file_download_source_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DownloadResponse) GetSuccess() bool {
@@ -329,7 +329,7 @@ type DownloadPluginInfoRequest struct {
 
 func (x *DownloadPluginInfoRequest) Reset() {
 	*x = DownloadPluginInfoRequest{}
-	mi := &file_api_proto_download_source_proto_msgTypes[5]
+	mi := &file_download_source_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -341,7 +341,7 @@ func (x *DownloadPluginInfoRequest) String() string {
 func (*DownloadPluginInfoRequest) ProtoMessage() {}
 
 func (x *DownloadPluginInfoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_download_source_proto_msgTypes[5]
+	mi := &file_download_source_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -354,7 +354,7 @@ func (x *DownloadPluginInfoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadPluginInfoRequest.ProtoReflect.Descriptor instead.
 func (*DownloadPluginInfoRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_download_source_proto_rawDescGZIP(), []int{5}
+	return file_download_source_proto_rawDescGZIP(), []int{5}
 }
 
 type DownloadPluginInfoResponse struct {
@@ -367,7 +367,7 @@ type DownloadPluginInfoResponse struct {
 
 func (x *DownloadPluginInfoResponse) Reset() {
 	*x = DownloadPluginInfoResponse{}
-	mi := &file_api_proto_download_source_proto_msgTypes[6]
+	mi := &file_download_source_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -379,7 +379,7 @@ func (x *DownloadPluginInfoResponse) String() string {
 func (*DownloadPluginInfoResponse) ProtoMessage() {}
 
 func (x *DownloadPluginInfoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_download_source_proto_msgTypes[6]
+	mi := &file_download_source_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -392,7 +392,7 @@ func (x *DownloadPluginInfoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadPluginInfoResponse.ProtoReflect.Descriptor instead.
 func (*DownloadPluginInfoResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_download_source_proto_rawDescGZIP(), []int{6}
+	return file_download_source_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *DownloadPluginInfoResponse) GetName() string {
@@ -409,11 +409,11 @@ func (x *DownloadPluginInfoResponse) GetDisplayName() string {
 	return ""
 }
 
-var File_api_proto_download_source_proto protoreflect.FileDescriptor
+var File_download_source_proto protoreflect.FileDescriptor
 
-const file_api_proto_download_source_proto_rawDesc = "" +
+const file_download_source_proto_rawDesc = "" +
 	"\n" +
-	"\x1fapi/proto/download_source.proto\x12\ttagplugin\"N\n" +
+	"\x15download_source.proto\x12\ttagplugin\"N\n" +
 	"\x15DownloadSearchRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x1f\n" +
 	"\vmax_results\x18\x02 \x01(\x05R\n" +
@@ -445,19 +445,19 @@ const file_api_proto_download_source_proto_rawDesc = "" +
 	"\rGetPluginInfo\x12$.tagplugin.DownloadPluginInfoRequest\x1a%.tagplugin.DownloadPluginInfoResponseB\"Z go-music-tag/api/proto/tagpluginb\x06proto3"
 
 var (
-	file_api_proto_download_source_proto_rawDescOnce sync.Once
-	file_api_proto_download_source_proto_rawDescData []byte
+	file_download_source_proto_rawDescOnce sync.Once
+	file_download_source_proto_rawDescData []byte
 )
 
-func file_api_proto_download_source_proto_rawDescGZIP() []byte {
-	file_api_proto_download_source_proto_rawDescOnce.Do(func() {
-		file_api_proto_download_source_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_api_proto_download_source_proto_rawDesc), len(file_api_proto_download_source_proto_rawDesc)))
+func file_download_source_proto_rawDescGZIP() []byte {
+	file_download_source_proto_rawDescOnce.Do(func() {
+		file_download_source_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_download_source_proto_rawDesc), len(file_download_source_proto_rawDesc)))
 	})
-	return file_api_proto_download_source_proto_rawDescData
+	return file_download_source_proto_rawDescData
 }
 
-var file_api_proto_download_source_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
-var file_api_proto_download_source_proto_goTypes = []any{
+var file_download_source_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_download_source_proto_goTypes = []any{
 	(*DownloadSearchRequest)(nil),      // 0: tagplugin.DownloadSearchRequest
 	(*DownloadItem)(nil),               // 1: tagplugin.DownloadItem
 	(*DownloadSearchResponse)(nil),     // 2: tagplugin.DownloadSearchResponse
@@ -466,7 +466,7 @@ var file_api_proto_download_source_proto_goTypes = []any{
 	(*DownloadPluginInfoRequest)(nil),  // 5: tagplugin.DownloadPluginInfoRequest
 	(*DownloadPluginInfoResponse)(nil), // 6: tagplugin.DownloadPluginInfoResponse
 }
-var file_api_proto_download_source_proto_depIdxs = []int32{
+var file_download_source_proto_depIdxs = []int32{
 	1, // 0: tagplugin.DownloadSearchResponse.items:type_name -> tagplugin.DownloadItem
 	0, // 1: tagplugin.DownloadSource.Search:input_type -> tagplugin.DownloadSearchRequest
 	3, // 2: tagplugin.DownloadSource.Download:input_type -> tagplugin.DownloadRequest
@@ -481,26 +481,26 @@ var file_api_proto_download_source_proto_depIdxs = []int32{
 	0, // [0:1] is the sub-list for field type_name
 }
 
-func init() { file_api_proto_download_source_proto_init() }
-func file_api_proto_download_source_proto_init() {
-	if File_api_proto_download_source_proto != nil {
+func init() { file_download_source_proto_init() }
+func file_download_source_proto_init() {
+	if File_download_source_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_download_source_proto_rawDesc), len(file_api_proto_download_source_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_download_source_proto_rawDesc), len(file_download_source_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_api_proto_download_source_proto_goTypes,
-		DependencyIndexes: file_api_proto_download_source_proto_depIdxs,
-		MessageInfos:      file_api_proto_download_source_proto_msgTypes,
+		GoTypes:           file_download_source_proto_goTypes,
+		DependencyIndexes: file_download_source_proto_depIdxs,
+		MessageInfos:      file_download_source_proto_msgTypes,
 	}.Build()
-	File_api_proto_download_source_proto = out.File
-	file_api_proto_download_source_proto_goTypes = nil
-	file_api_proto_download_source_proto_depIdxs = nil
+	File_download_source_proto = out.File
+	file_download_source_proto_goTypes = nil
+	file_download_source_proto_depIdxs = nil
 }
