@@ -160,8 +160,8 @@ func (s *Server) match(ctx context.Context, fingerprint string, duration int) ([
 	var data struct {
 		Results []struct {
 			Recordings []struct {
-				ID     string `json:"id"`
-				Title  string `json:"title"`
+				ID      string `json:"id"`
+				Title   string `json:"title"`
 				Artists []struct {
 					Name string `json:"name"`
 				} `json:"artists"`

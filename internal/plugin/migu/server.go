@@ -37,13 +37,14 @@ func (s *Server) GetPluginInfo(_ context.Context, _ *pb.PluginInfoRequest) (*pb.
 	return &pb.PluginInfoResponse{
 		Name: "migu", DisplayName: "咪咕音乐",
 		SupportsSearch: true, SupportsLyric: true, SupportsId3: true,
+		SupportsAudioUrl: true,
 	}, nil
 }
 
 func (s *Server) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchResponse, error) {
 	songs, hasMore, err := s.doSearch(ctx, req.Query, int(req.Page), int(req.Limit))
 	if err != nil {
-		return &pb.SearchResponse{}, nil
+		return nil, err
 	}
 	out := make([]*pb.Song, len(songs))
 	for i := range songs {
@@ -103,11 +104,11 @@ func (s song) toPB() *pb.Song {
 
 func (sv *Server) doSearch(ctx context.Context, title string, page, limit int) ([]song, bool, error) {
 	q := url.Values{
-		"ua":          {"Android_migu"},
-		"version":     {"5.0.1"},
-		"text":        {title},
-		"pageNo":      {strconv.Itoa(page)},
-		"pageSize":    {strconv.Itoa(limit)},
+		"ua":           {"Android_migu"},
+		"version":      {"5.0.1"},
+		"text":         {title},
+		"pageNo":       {strconv.Itoa(page)},
+		"pageSize":     {strconv.Itoa(limit)},
 		"searchSwitch": {`{"song":1,"album":0,"singer":0,"tagSong":0,"mvSong":0,"songlist":0,"bestShow":1}`},
 	}
 	httpReq, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/search_all.do", nil)
@@ -134,9 +135,9 @@ func (sv *Server) doSearch(ctx context.Context, title string, page, limit int) (
 	out := make([]song, 0, len(raw.SongResultData.Result))
 	for _, item := range raw.SongResultData.Result {
 		sg := song{
-			ID:    str(item["lyricUrl"]),
-			Name:  str(item["name"]),
-			Year:  "",
+			ID:   str(item["lyricUrl"]),
+			Name: str(item["name"]),
+			Year: "",
 		}
 		if singers, ok := item["singers"].([]interface{}); ok {
 			var names []string
@@ -183,4 +184,43 @@ func joinSlash(parts []string) string {
 		out += p
 	}
 	return out
+}
+
+// GetAudioURL fetches a short-lived upstream audio-stream URL for the given
+// migu songid. Best-effort: when the upstream returns empty url (paid track
+// or transient error), we propagate ("", nil) so callers fall back to the
+// gateway /api/stream proxy.
+//
+// Endpoint choice: pd.musicapp.migu.cn/MIGUM2.0/v1.0/content/audio_only/data
+// is the canonical 2024-era free-track fetcher for migu; it accepts a
+// `songid` parameter and returns `data.playUrl` (mp3/m4a direct CDN URL).
+// migu is one of the most permissive of the five mainland sources, so this
+// endpoint reliably returns non-empty urls for free tracks without anti-bot
+// sign-in requirements.
+const miguAudioURL = "http://pd.musicapp.migu.cn/MIGUM2.0/v1.0/content/audio_only/data?songid="
+
+func (s *Server) GetAudioURL(ctx context.Context, req *pb.GetAudioRequest) (*pb.GetAudioResponse, error) {
+	if req.Id == "" {
+		return &pb.GetAudioResponse{}, nil
+	}
+	httpReq, _ := http.NewRequestWithContext(ctx, "GET", miguAudioURL+req.Id, nil)
+	for k, v := range headers {
+		httpReq.Header.Set(k, v)
+	}
+	resp, err := s.client.Do(httpReq)
+	if err != nil {
+		return &pb.GetAudioResponse{}, nil
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	// Response shape: { "code": "000000", "data": { "playUrl": "https://..." } }
+	var raw struct {
+		Data struct {
+			PlayUrl string `json:"playUrl"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil || raw.Data.PlayUrl == "" {
+		return &pb.GetAudioResponse{}, nil
+	}
+	return &pb.GetAudioResponse{Url: raw.Data.PlayUrl}, nil
 }

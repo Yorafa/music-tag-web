@@ -40,18 +40,19 @@ func NewServer() *Server {
 
 func (s *Server) GetPluginInfo(ctx context.Context, _ *pb.PluginInfoRequest) (*pb.PluginInfoResponse, error) {
 	return &pb.PluginInfoResponse{
-		Name:           "kugou",
-		DisplayName:    "酷狗音乐",
-		SupportsSearch: true,
-		SupportsLyric:  true,
-		SupportsId3:    true,
+		Name:             "kugou",
+		DisplayName:      "酷狗音乐",
+		SupportsSearch:   true,
+		SupportsLyric:    true,
+		SupportsId3:      true,
+		SupportsAudioUrl: true,
 	}, nil
 }
 
 func (s *Server) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchResponse, error) {
 	songs, hasMore, err := s.doSearch(ctx, req.Query, int(req.Page), int(req.Limit))
 	if err != nil {
-		return &pb.SearchResponse{}, nil
+		return nil, err
 	}
 	pbSongs := make([]*pb.Song, len(songs))
 	for i, song := range songs {
@@ -108,7 +109,9 @@ func (s *Server) doSearch(ctx context.Context, title string, page, pagesize int)
 	defer resp.Body.Close()
 
 	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if derr := json.NewDecoder(resp.Body).Decode(&result); derr != nil {
+		return nil, false, fmt.Errorf("kg json decode: %w", derr)
+	}
 
 	data, _ := result["data"].(map[string]interface{})
 	lists, _ := data["lists"].([]interface{})
@@ -158,4 +161,40 @@ func mapToPBSong(m map[string]interface{}) *pb.Song {
 		AlbumImg: getStr("album_img"),
 		Year:     getStr("year"),
 	}
+}
+
+// GetAudioURL fetches a short-lived upstream audio-stream URL for the given
+// kugou song hash (id == FileHash from doSearch). Best-effort: when the
+// upstream returns empty url (anti-bot, paid track, mobile-only CDN), we
+// propagate ("", nil) so the gateway /api/stream proxy fallback can take
+// over.
+//
+// Endpoint choice: kugou.com/yy/index.php?r=play/getdata&hash={hash} returns
+// `data.play_url` (direct mp3 URL) for free tracks. Some intermediate kugou
+// responses require a `dfid` cookie primed from a homepage visit, but the
+// anonymous path is functional for the common case.
+const kgAudioURL = "https://www.kugou.com/yy/index.php?r=play/getdata"
+
+func (s *Server) GetAudioURL(ctx context.Context, req *pb.GetAudioRequest) (*pb.GetAudioResponse, error) {
+	if req.Id == "" {
+		return &pb.GetAudioResponse{}, nil
+	}
+	urlStr := fmt.Sprintf("%s&hash=%s", kgAudioURL, req.Id)
+	httpReq, _ := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
+	resp, err := s.client.Do(httpReq)
+	if err != nil {
+		return &pb.GetAudioResponse{}, nil
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var raw struct {
+		Data struct {
+			PlayURL string `json:"play_url"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil || raw.Data.PlayURL == "" {
+		return &pb.GetAudioResponse{}, nil
+	}
+	return &pb.GetAudioResponse{Url: raw.Data.PlayURL}, nil
 }

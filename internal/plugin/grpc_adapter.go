@@ -12,21 +12,38 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
 
 	pb "go-music-tag/api/proto/tagplugin"
 )
 
+// clientKeepaliveParams forces the gRPC client to ping its plugin server
+// every 30s with a 10s ping-ack timeout, even when no streams are open
+// (PermitWithoutStream). This is the configuration that prevents the
+// "long-lived channel goes Idle → next RPC hits Unavailable+EOF after
+// the plugin container restarts / network blips" symptom that users had
+// surfaced through [SearchMusic] log lines. Without PermitWithoutStream
+// the pings stop the moment the channel has no active streams, which is
+// the precise painpoint of stale-connection EOF on first-call-after-idle.
+var clientKeepaliveParams = keepalive.ClientParameters{
+	Time:                30 * time.Second,
+	Timeout:             10 * time.Second,
+	PermitWithoutStream: true,
+}
+
 // DialOptions configures how a gRPC client connects to a remote plugin.
 //
-// SECURITY (P1.5 issue F): until this commit, every gRPC connection from
-// gateway/worker used insecure.NewCredentials(). The previous code never
-// had a TLS toggle, so a deployment that exposed plugin ports on a
-// non-trusted network would have every Song/FetchLyric body in clear text
-// and was open to MITM tampering. UseTLS=true makes the dial use TLS;
-// CAFile (optional) overrides the system root pool with a private CA.
+// SECURITY: every gRPC connection from gateway/worker previously used
+// insecure.NewCredentials() unconditionally. UseTLS=true makes the dial
+// use TLS; CAFile (optional) overrides the system root pool with a
+// private CA. A deployment that exposes plugin ports on a non-trusted
+// network should set UseTLS=true so Song/FetchLyric bodies are not in
+// clear text and the channel is not open to MITM tampering.
 type DialOptions struct {
 	// UseTLS turns TLS on for the gRPC dial. Default false preserves the
 	// P1 behaviour (suitable for trusted docker-compose networks) but
@@ -100,6 +117,7 @@ func (g *GRPCTagSource) ensureConn() error {
 	conn, err := grpc.DialContext(ctx, g.addr,
 		grpc.WithTransportCredentials(creds),
 		grpc.WithBlock(),
+		grpc.WithKeepaliveParams(clientKeepaliveParams),
 	)
 	if err != nil {
 		return fmt.Errorf("grpc dial %s: %w", g.addr, err)
@@ -134,15 +152,21 @@ func (g *GRPCTagSource) Name() string {
 	return g.name
 }
 
-func (g *GRPCTagSource) DisplayName() string        { return g.displayName }
-func (g *GRPCTagSource) SupportsSearch() bool        { return g.info.SupportsSearch }
-func (g *GRPCTagSource) SupportsLyric() bool         { return g.info.SupportsLyric }
+func (g *GRPCTagSource) DisplayName() string  { return g.displayName }
+func (g *GRPCTagSource) SupportsSearch() bool { return g.info.SupportsSearch }
+func (g *GRPCTagSource) SupportsLyric() bool  { return g.info.SupportsLyric }
+
 // SupportsId3 answers whether the underlying plugin can answer FetchID3ByTitle
 // calls. Cached at first GetPluginInfo() round-trip (same as the other
 // Supports* gates), so we never re-dial just to evaluate this. The nil-guard
 // is a defense against early-callers that read the field before ensureConn()
 // has populated `g.info` from the gRPC handshake.
-func (g *GRPCTagSource) SupportsId3() bool           { return g.info != nil && g.info.SupportsId3 }
+func (g *GRPCTagSource) SupportsId3() bool { return g.info != nil && g.info.SupportsId3 }
+
+// SupportsAudioURL mirrors plugin.PluginInfoResponse.supports_audio_url
+// (gate set by the first GetPluginInfo round-trip). Cached via `g.info`,
+// so this is a pure memory read after init.
+func (g *GRPCTagSource) SupportsAudioURL() bool { return g.info != nil && g.info.SupportsAudioUrl }
 
 func (g *GRPCTagSource) Search(ctx context.Context, query string, page, limit int) (*SearchResult, error) {
 	if err := g.ensureConn(); err != nil {
@@ -189,6 +213,28 @@ func (g *GRPCTagSource) FetchLyric(ctx context.Context, songID string) (string, 
 	return resp.Lyric, nil
 }
 
+// GetAudioURL proxies the gRPC rpc to the upstream plugin. The ("", nil)
+// contract semantics are documented on plugin.TagSource (interface
+// docstring is the source of truth — don't restate them here).
+//
+// gRPC-specific note: pb.UnimplementedTagSourceServer.GetAudioURL answers
+// with codes.Unimplemented for plugins that haven't overridden this rpc
+// yet. We collapse that status to ("", nil) here so callers don't need to
+// re-implement gRPC status decoding at every site.
+func (g *GRPCTagSource) GetAudioURL(ctx context.Context, songID string) (string, error) {
+	if err := g.ensureConn(); err != nil {
+		return "", err
+	}
+	resp, err := g.client.GetAudioURL(ctx, &pb.GetAudioRequest{Id: songID})
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return "", nil
+		}
+		return "", err
+	}
+	return resp.Url, nil
+}
+
 // ─── gRPC DownloadSource adapter ───────────────────────────────────────────
 
 // GRPCDownloadSource wraps a remote gRPC DownloadSource service.
@@ -222,6 +268,7 @@ func (g *GRPCDownloadSource) ensureConn() error {
 	conn, err := grpc.DialContext(ctx, g.addr,
 		grpc.WithTransportCredentials(creds),
 		grpc.WithBlock(),
+		grpc.WithKeepaliveParams(clientKeepaliveParams),
 	)
 	if err != nil {
 		return fmt.Errorf("grpc dial %s: %w", g.addr, err)
@@ -241,7 +288,7 @@ func (g *GRPCDownloadSource) ensureConn() error {
 	return nil
 }
 
-func (g *GRPCDownloadSource) Name() string       { return g.name }
+func (g *GRPCDownloadSource) Name() string        { return g.name }
 func (g *GRPCDownloadSource) DisplayName() string { return g.displayName }
 
 func (g *GRPCDownloadSource) Search(ctx context.Context, query string, max int) ([]DownloadItem, error) {

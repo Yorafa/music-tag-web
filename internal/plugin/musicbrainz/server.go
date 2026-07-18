@@ -76,7 +76,7 @@ func (s *Server) GetPluginInfo(_ context.Context, _ *pb.PluginInfoRequest) (*pb.
 func (s *Server) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchResponse, error) {
 	songs, hasMore, err := s.doSearch(ctx, req.Query, int(req.Page), int(req.Limit))
 	if err != nil {
-		return &pb.SearchResponse{}, nil
+		return nil, err
 	}
 	out := make([]*pb.Song, len(songs))
 	for i := range songs {
@@ -153,8 +153,8 @@ func (sv *Server) doSearch(ctx context.Context, title string, page, limit int) (
 
 	var raw struct {
 		Recordings []struct {
-			ID    string `json:"id"`
-			Title string `json:"title"`
+			ID           string `json:"id"`
+			Title        string `json:"title"`
 			ArtistCredit []struct {
 				Name       string `json:"name"`
 				JoinPhrase string `json:"joinphrase"`

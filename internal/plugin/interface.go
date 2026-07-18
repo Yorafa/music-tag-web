@@ -45,6 +45,11 @@ type TagSource interface {
 	// answers true even though it doesn't answer Search — they are
 	// orthogonal capabilities and consumers may consult either or both.
 	SupportsId3() bool
+	// SupportsAudioURL reports whether the source can hand out a playable
+	// audio-stream URL for a known song id (e.g. netease / kuwo / kugou /
+	// migu / qmusic). Musicbrainz / AcoustID return false here because
+	// they only carry metadata — callers should pre-check and skip probing.
+	SupportsAudioURL() bool
 
 	// Search performs a paginated search for music tracks.
 	Search(ctx context.Context, query string, page, limit int) (*SearchResult, error)
@@ -52,6 +57,13 @@ type TagSource interface {
 	FetchID3ByTitle(ctx context.Context, title string) ([]Song, error)
 	// FetchLyric returns the lyric text for a song ID.
 	FetchLyric(ctx context.Context, songID string) (string, error)
+	// GetAudioURL returns a short-lived upstream audio-stream URL for the
+	// given song id. Plugins that don't implement SupportsAudioURL return
+	// ("", nil) rather than an error so the caller can treat empty as
+	// "not streamable" without distinguishing unimplemented from missing.
+	// Empty URL paired with SupportsAudioURL() == true signals a transient
+	// upstream failure (the gateway should fall back to /api/stream proxy).
+	GetAudioURL(ctx context.Context, songID string) (string, error)
 }
 
 // --- Download-source plugin ---

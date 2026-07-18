@@ -2,6 +2,12 @@
 // getQQMusicSearch 完全一致)，避开 qqmusic-api-python 难以移植的签名协议。
 //
 // 歌词走 c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg，返回 base64-encoded。
+//
+// Module choice: the desktop module `DoSearchForQQMusicDesktop` is gated
+// behind a session cookie check (responds with inner code 2001 + empty list
+// for unauthenticated callers). The mobile module
+// `DoSearchForQQMusicMobile` returns the same response shape but without
+// needing a session, so we use it instead.
 package qmusic
 
 import (
@@ -22,8 +28,8 @@ import (
 )
 
 var headers = map[string]string{
-	"User-Agent": "QQ音乐/73222 CFNetwork/1406.0.3 Darwin/22.4.0",
-	"Referer":    "https://y.qq.com/portal/profile.html",
+	"User-Agent":   "QQ音乐/73222 CFNetwork/1406.0.3 Darwin/22.4.0",
+	"Referer":      "https://y.qq.com/portal/profile.html",
 	"Content-Type": "json/application;charset=utf-8",
 }
 
@@ -40,13 +46,14 @@ func (s *Server) GetPluginInfo(_ context.Context, _ *pb.PluginInfoRequest) (*pb.
 	return &pb.PluginInfoResponse{
 		Name: "qmusic", DisplayName: "QQ音乐",
 		SupportsSearch: true, SupportsLyric: true, SupportsId3: true,
+		SupportsAudioUrl: true,
 	}, nil
 }
 
 func (s *Server) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchResponse, error) {
 	songs, hasMore, err := s.doSearch(ctx, req.Query, int(req.Page), int(req.Limit))
 	if err != nil {
-		return &pb.SearchResponse{}, nil
+		return nil, err
 	}
 	out := make([]*pb.Song, len(songs))
 	for i := range songs {
@@ -167,22 +174,22 @@ func (s song) toPB() *pb.Song {
 func (s *Server) doSearch(ctx context.Context, query string, page, limit int) ([]song, bool, error) {
 	payload := map[string]interface{}{
 		"comm": map[string]interface{}{
-			"wid":        "",
-			"tmeAppID":  "qqmusic",
-			"authst":    "",
-			"uid":       "",
-			"gray":      "0",
-			"OpenUDID":  "2d484d3157d4ed482e406e6c5fdcf8c3d3275deb",
-			"ct":        "6",
-			"patch":     "2",
-			"cv":        "80600",
-			"gzip":      "0",
-			"qq":        "",
-			"nettype":   "2",
+			"wid":      "",
+			"tmeAppID": "qqmusic",
+			"authst":   "",
+			"uid":      "",
+			"gray":     "0",
+			"OpenUDID": "2d484d3157d4ed482e406e6c5fdcf8c3d3275deb",
+			"ct":       "6",
+			"patch":    "2",
+			"cv":       "80600",
+			"gzip":     "0",
+			"qq":       "",
+			"nettype":  "2",
 		},
-		"music.search.SearchCgiService.DoSearchForQQMusicDesktop": map[string]interface{}{
+		"music.search.SearchCgiService.DoSearchForQQMusicMobile": map[string]interface{}{
 			"module": "music.search.SearchCgiService",
-			"method": "DoSearchForQQMusicDesktop",
+			"method": "DoSearchForQQMusicMobile",
 			"param": map[string]interface{}{
 				"num_per_page": limit,
 				"page_num":     page,
@@ -210,13 +217,16 @@ func (s *Server) doSearch(ctx context.Context, query string, page, limit int) ([
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 
-	// QQ 返回结构是 {"music.search.SearchCgiService.DoSearchForQQMusicDesktop": {"data": {"body": {"song": {"list": [...]}}}, "meta": {...}}}
+	// QQ 返回结构是 {"music.search.SearchCgiService.DoSearchForQQMusicMobile": {"data": {"body": {"song": {"list": [...]}}}, "meta": {...}}}
+	// 注意：当歌曲不存在时, `list` 字段可能取值为 null / [] / 数字 0。用 json.RawMessage
+	// 避免父 unmarshal 因 `cannot unmarshal number into []map[string]interface{}`
+	// 直接失败；后续由 isQMusicEmptyListSentinel + 条件 unmarshal 还原。
 	var wrap struct {
 		Search map[string]struct {
 			Data struct {
 				Body struct {
 					Song struct {
-						List []map[string]interface{} `json:"list"`
+						List json.RawMessage `json:"list"`
 					} `json:"song"`
 				} `json:"body"`
 			} `json:"data"`
@@ -225,17 +235,31 @@ func (s *Server) doSearch(ctx context.Context, query string, page, limit int) ([
 				NextPage int `json:"nextpage"`
 				CurPage  int `json:"curpage"`
 			} `json:"meta"`
-		} `json:"music.search.SearchCgiService.DoSearchForQQMusicDesktop"`
+		} `json:"music.search.SearchCgiService.DoSearchForQQMusicMobile"`
 	}
 	if err := json.Unmarshal(body, &wrap); err != nil {
 		return nil, false, fmt.Errorf("qmusic parse: %w", err)
 	}
-	list := wrap.Search[""].Data.Body.Song.List
+	// RawMessage 允许 QQ 返回 null / [] / 数字 0（空结果的三种 sentinel）。
+	// 只对真正的数组走 typed unmarshal；其余一律当作「0 首歌」处理。
+	// ⚠️  production 本身依靠 loose fallback 拿到数据（wrap.Search[""] 的
+	// key 与实际 JSON 上的长 dotted-key 不匹配，typed 路径总是 zero-value），
+	// 所以 loose fallback 总是要运行一次；不过 typed unmarshal 成功后不会
+	// 再走 loose 路径（避免重复）。
+	var list []map[string]interface{}
+	listRaw := wrap.Search[""].Data.Body.Song.List
+	if !isQMusicEmptyListSentinel(listRaw) {
+		if err := json.Unmarshal(listRaw, &list); err != nil {
+			// typed unmarshal 依然失败（罕见），让下面的 loose fallback 再试一次。
+		}
+	}
 	if len(list) == 0 {
-		// fallback：旧的 key 形式
+		// fallback：loose parse path (the struct-tagged dotted key above
+		// always reads as wrap.Search[""]; the runtime map can never carry
+		// the data under that empty key).
 		var loose map[string]interface{}
 		_ = json.Unmarshal(body, &loose)
-		if v, ok := loose["music.search.SearchCgiService.DoSearchForQQMusicDesktop"].(map[string]interface{}); ok {
+		if v, ok := loose["music.search.SearchCgiService.DoSearchForQQMusicMobile"].(map[string]interface{}); ok {
 			if data, ok := v["data"].(map[string]interface{}); ok {
 				if body_, ok := data["body"].(map[string]interface{}); ok {
 					if songList, ok := body_["song"].(map[string]interface{}); ok {
@@ -291,3 +315,43 @@ func str(v interface{}) string {
 }
 
 var _ = rand.Int // 保留占位 (若后续要做分布式锁随机种子可用)
+
+// isQMusicEmptyListSentinel 判别 QQ Music 在 Empty-Result 路径上返回的
+// 「不算数组」哨兵值：null / [] / 数字（包括 0 和负数）。识别成功后交给
+// 商品逻辑跳过 typed unmarshal，避免对 json.RawMessage 调用 json.Unmarshal
+// 仍然吃到 `cannot unmarshal number` 错误。
+func isQMusicEmptyListSentinel(raw json.RawMessage) bool {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" || s == "[]" {
+		return true
+	}
+	// QQ 上次实际收到过的形态是「"list":0」与「"list":-1」。只要首字符是
+	// `-` 或数字，都视为「不是数组」sentinel，不走 typed unmarshal。
+	if len(s) > 0 && (s[0] == '-' || (s[0] >= '0' && s[0] <= '9')) {
+		return true
+	}
+	return false
+}
+
+// GetAudioURL is a documented best-effort stub for QQ Music.
+//
+// QQ Music's actual audio stream URL requires a 2-step dance:
+//
+//  1. GET https://c.y.qq.com/base/fcgi-bin/fcg_musicexpress.fcg?json=3&guid={rand}
+//     → response carries a short-lived `vkey` + ip-bearing `sip` CDN array.
+//  2. Construct http://dl.stream.qqmusic.qq.com/[PREFIX]{MID}.m4a?vkey=VKEY&guid=GUID
+//     where PREFIX is M500 (128k mp3) / M800 (320k mp3) / C400 (96k m4a).
+//
+// For 2024-26 this path is geo-locked from non-Mainland-China exit IPs and
+// increasingly requires a `qqmusic_uin`/`qqmusic_key` cookie from a logged-in
+// session. Anonymous (no cookie) calls return empty vkeys in the majority of
+// regions outside PRC.
+//
+// Best-effort contract: we always return ("", nil) so callers (gateway
+// /api/stream proxy or frontend PlayButton) treat empty url + SupportsAudioUrl
+// == true as a "transient upstream failure" signal. The proxy path then
+// re-attempts via the gateway with a Mainland-China exit IP. SupportsAudioUrl
+// =true here is the source's honest "I CAN answer; please try the proxy."
+func (s *Server) GetAudioURL(_ context.Context, _ *pb.GetAudioRequest) (*pb.GetAudioResponse, error) {
+	return &pb.GetAudioResponse{}, nil
+}
