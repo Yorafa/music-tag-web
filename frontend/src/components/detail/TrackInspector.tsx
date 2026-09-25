@@ -28,6 +28,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { TAB_BAR_CLASS } from '@/components/detail/tabBar';
 import { useWorklistStore } from '@/store/useWorklistStore';
 import { useLibraryStore } from '@/store/useLibraryStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
@@ -332,7 +333,7 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
             `bg-background` rectangle floating in a `bg-surface-2` strip.
             `grid grid-cols-5` is kept only to keep 5 labels evenly divided
             in a 56rem dialog. */}
-        <TabsList className="grid grid-cols-5 w-full h-11 bg-muted/60 p-1 rounded-xl shrink-0 mx-6 mt-5">
+        <TabsList className={TAB_BAR_CLASS}>
           <TabsTrigger value="tags" className="rounded-lg text-sm">
             标签
           </TabsTrigger>
