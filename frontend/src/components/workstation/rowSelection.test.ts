@@ -86,7 +86,7 @@ describe('selectWorklistRow', () => {
 
   it('handles a row with no cached tags', () => {
     const setSelectedPath = vi.fn();
-    selectWorklistRow(row({ musicInfo: null }), {
+    selectWorklistRow(row({ musicInfo: undefined }), {
       inspectorVisible: false,
       setSelectedPath,
     });

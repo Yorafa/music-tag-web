@@ -25,6 +25,7 @@ import { PlayTopBar } from '@/components/play/PlayTopBar';
 import { DirPickerDrawer } from '@/components/scraper/DirPickerDrawer';
 import { CloudSearchDialog } from '@/components/search/CloudSearchDialog';
 import { useLibraryStore, type LibraryRow } from '@/store/useLibraryStore';
+import { openEditorForRow } from '@/components/editor/openEditor';
 import { usePlayerStore, type PlayerTrack } from '@/store/usePlayerStore';
 import { buildMediaUrl } from '@/lib/mediaUrl';
 import { COVER_PLACEHOLDER_GRADIENTS, resolveCoverSrc } from '@/utils/cover';

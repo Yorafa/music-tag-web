@@ -52,6 +52,7 @@ import {
   DropdownMenuItem,
 } from '@/components/ui/dropdown-menu';
 import { useWorklistStore, type WorklistGrouping } from '@/store/useWorklistStore';
+import { openEditorForRow } from '@/components/editor/openEditor';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import {
   COVER_PLACEHOLDER_GRADIENTS,
