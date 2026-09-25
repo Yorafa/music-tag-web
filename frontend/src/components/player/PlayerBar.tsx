@@ -4,7 +4,6 @@ import { usePlayerStore } from '@/store/usePlayerStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { sourceErrorMessage } from '@/lib/streamUrl';
 import { NowPlaying } from '@/components/player/NowPlaying';
-import { cn } from '@/lib/utils';
 
 function formatTime(s: number): string {
   if (!Number.isFinite(s) || s < 0) return '0:00';
@@ -61,7 +60,6 @@ export function PlayerBar() {
   const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
   const setDuration = usePlayerStore((s) => s.setDuration);
   const setIsBuffering = usePlayerStore((s) => s.setIsBuffering);
-  const floatOverDialog = usePlayerStore((s) => s.floatOverDialog);
 
   // Initial volume + reactive volume sync.
   useEffect(() => {
@@ -153,16 +151,7 @@ export function PlayerBar() {
 
   return (
     <>
-      {/* When cloud search (or any surface) sets floatOverDialog, pin the
-          whole bar above Dialog portals (overlay is z-50) so preview
-          transport stays visible/clickable over the dimmed sheet. */}
-      <div
-        className={cn(
-          'shrink-0',
-          floatOverDialog &&
-            'fixed bottom-0 left-0 right-0 z-[60] shadow-[0_-10px_36px_rgba(0,0,0,0.22)]',
-        )}
-      >
+      <div className="shrink-0">
       <div
         role="region"
         aria-label="播放器"

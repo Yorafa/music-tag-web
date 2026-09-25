@@ -24,7 +24,6 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { PlayTopBar } from '@/components/play/PlayTopBar';
 import { DirPickerDrawer } from '@/components/scraper/DirPickerDrawer';
-import { CloudSearchDialog } from '@/components/search/CloudSearchDialog';
 import { useLibraryStore, type LibraryRow } from '@/store/useLibraryStore';
 import { useDetailStore } from '@/store/useDetailStore';
 import { usePlayerStore, type PlayerTrack } from '@/store/usePlayerStore';
@@ -207,18 +206,13 @@ function EmptyState({ onAddMusic }: { onAddMusic: () => void }) {
 
 export function PlayView() {
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [cloudSearchOpen, setCloudSearchOpen] = useState(false);
   const rowcount = useLibraryStore((s) => s.rows.length);
 
   const openAddMusic = useCallback(() => setDrawerOpen(true), []);
-  const openCloudSearch = useCallback(() => setCloudSearchOpen(true), []);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-surface-1 min-h-0">
-      <PlayTopBar
-        onAddMusic={openAddMusic}
-        onCloudSearch={openCloudSearch}
-      />
+      <PlayTopBar onAddMusic={openAddMusic} />
       <main className="flex-1 min-h-0 overflow-hidden bg-surface-1">
         {rowcount > 0 ? <LibraryTable /> : <EmptyState onAddMusic={openAddMusic} />}
       </main>
@@ -234,12 +228,6 @@ export function PlayView() {
         open={drawerOpen}
         onOpenChange={setDrawerOpen}
         destination="library"
-      />
-      {/* 单源云音乐搜索，对应 PlayTopBar 的「搜索云音乐」按钮。
-          多源并搜请走全局 SearchPanel（PlayView 不接，避免重复入口）。 */}
-      <CloudSearchDialog
-        open={cloudSearchOpen}
-        onOpenChange={setCloudSearchOpen}
       />
     </div>
   );

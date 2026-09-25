@@ -26,7 +26,7 @@
 // how the user frees localStorage quota after a big tagging session.
 
 import { useState, useCallback, type KeyboardEvent } from 'react';
-import { Plus, Search, X, Eraser, Cloud } from 'lucide-react';
+import { Plus, Search, X, Eraser } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useLibraryStore } from '@/store/useLibraryStore';
@@ -38,13 +38,9 @@ interface Props {
    *  open state so it can mount the placeholder drawer OR Plan A's real
    *  DirPickerDrawer depending on integration stage. */
   onAddMusic: () => void;
-  /** Called when the user clicks 「搜索云音乐」. PlayView owns the
-   *  CloudSearchDialog mount + open state so the dialog can render
-   *  outside the TopBar strip. */
-  onCloudSearch: () => void;
 }
 
-export function PlayTopBar({ onAddMusic, onCloudSearch }: Props) {
+export function PlayTopBar({ onAddMusic }: Props) {
   const rowcount = useLibraryStore((s) => s.rows.length);
   const query = useLibraryStore((s) => s.query);
   const clear = useLibraryStore((s) => s.clear);
@@ -103,18 +99,6 @@ export function PlayTopBar({ onAddMusic, onCloudSearch }: Props) {
       >
         <Search className="w-3.5 h-3.5" />
         搜索本地音乐
-      </Button>
-
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={onCloudSearch}
-        className="gap-1.5"
-        title="从云端音乐源（网易云 / QQ / 酷狗 / 酷我 等）搜索新歌"
-      >
-        <Cloud className="w-3.5 h-3.5" />
-        搜索云音乐
       </Button>
 
       {searchOpen && (
