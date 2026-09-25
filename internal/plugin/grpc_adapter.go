@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -82,14 +83,19 @@ func (o DialOptions) Credentials() (credentials.TransportCredentials, error) {
 // GRPCTagSource wraps a remote gRPC TagSource service so it satisfies our
 // local plugin.TagSource interface.
 type GRPCTagSource struct {
-	name        string
-	displayName string
-	addr        string
-	opts        DialOptions
-	conn        *grpc.ClientConn
-	client      pb.TagSourceClient
-	mu          sync.Mutex
-	info        *pb.PluginInfoResponse // cached
+	addr string
+	opts DialOptions
+
+	mu     sync.Mutex
+	conn   *grpc.ClientConn
+	client pb.TagSourceClient
+
+	// info is read by Supports* / Name / DisplayName on request goroutines
+	// while ensureConn writes it, so it is atomic rather than a plain field
+	// (REVIEW.md P2-11). The old code wrote it under g.mu but read it with
+	// no lock at all — a genuine data race on the reconnect path, where a
+	// Shutdown-then-dial overlaps in-flight requests.
+	info atomic.Pointer[pb.PluginInfoResponse]
 }
 
 // NewGRPCTagSource creates a gRPC-backed tag source with the supplied
@@ -134,10 +140,10 @@ func (g *GRPCTagSource) ensureConn() error {
 	g.mu.Lock()
 	g.conn = conn
 	g.client = client
-	g.info = info
-	g.name = info.Name
-	g.displayName = info.DisplayName
 	g.mu.Unlock()
+	// Store the handshake result atomically. Name/DisplayName/Supports* read
+	// it without taking g.mu, which is why it cannot be a plain field.
+	g.info.Store(info)
 
 	// Register only on first successful handshake. Re-dials after a
 	// Shutdown/EOF must NOT re-register — RegisterTagSource panics on
@@ -148,29 +154,61 @@ func (g *GRPCTagSource) ensureConn() error {
 	return nil
 }
 
+// pluginInfo returns the cached handshake result, or nil before the first
+// successful GetPluginInfo. All accessors go through here.
+func (g *GRPCTagSource) pluginInfo() *pb.PluginInfoResponse { return g.info.Load() }
+
 func (g *GRPCTagSource) Name() string {
-	if g.name != "" {
-		return g.name
+	if info := g.pluginInfo(); info != nil {
+		return info.Name
 	}
 	_ = g.ensureConn()
-	return g.name
+	if info := g.pluginInfo(); info != nil {
+		return info.Name
+	}
+	return ""
 }
 
-func (g *GRPCTagSource) DisplayName() string  { return g.displayName }
-func (g *GRPCTagSource) SupportsSearch() bool { return g.info.SupportsSearch }
-func (g *GRPCTagSource) SupportsLyric() bool  { return g.info.SupportsLyric }
+func (g *GRPCTagSource) DisplayName() string {
+	if info := g.pluginInfo(); info != nil {
+		return info.DisplayName
+	}
+	return ""
+}
+
+// The Supports* gates all nil-guard (REVIEW.md P2-11). SupportsSearch and
+// SupportsLyric used to dereference g.info directly while their siblings
+// checked for nil; that only stayed safe because of an implicit invariant —
+// "nothing calls these before a successful handshake". Nothing enforced it,
+// and Name() above can return from a *failed* ensureConn with no info
+// cached, so the nil case is reachable.
+func (g *GRPCTagSource) SupportsSearch() bool {
+	info := g.pluginInfo()
+	return info != nil && info.SupportsSearch
+}
+
+func (g *GRPCTagSource) SupportsLyric() bool {
+	info := g.pluginInfo()
+	return info != nil && info.SupportsLyric
+}
 
 // SupportsId3 answers whether the underlying plugin can answer FetchID3ByTitle
 // calls. Cached at first GetPluginInfo() round-trip (same as the other
 // Supports* gates), so we never re-dial just to evaluate this. The nil-guard
 // is a defense against early-callers that read the field before ensureConn()
-// has populated `g.info` from the gRPC handshake.
-func (g *GRPCTagSource) SupportsId3() bool { return g.info != nil && g.info.SupportsId3 }
+// has populated the handshake result.
+func (g *GRPCTagSource) SupportsId3() bool {
+	info := g.pluginInfo()
+	return info != nil && info.SupportsId3
+}
 
 // SupportsAudioURL mirrors plugin.PluginInfoResponse.supports_audio_url
-// (gate set by the first GetPluginInfo round-trip). Cached via `g.info`,
-// so this is a pure memory read after init.
-func (g *GRPCTagSource) SupportsAudioURL() bool { return g.info != nil && g.info.SupportsAudioUrl }
+// (gate set by the first GetPluginInfo round-trip). Cached, so this is a
+// pure memory read after init.
+func (g *GRPCTagSource) SupportsAudioURL() bool {
+	info := g.pluginInfo()
+	return info != nil && info.SupportsAudioUrl
+}
 
 func (g *GRPCTagSource) Search(ctx context.Context, query string, page, limit int) (*SearchResult, error) {
 	if err := g.ensureConn(); err != nil {
@@ -243,13 +281,16 @@ func (g *GRPCTagSource) GetAudioURL(ctx context.Context, songID string) (string,
 
 // GRPCDownloadSource wraps a remote gRPC DownloadSource service.
 type GRPCDownloadSource struct {
-	name        string
-	displayName string
-	addr        string
-	opts        DialOptions
-	conn        *grpc.ClientConn
-	client      pb.DownloadSourceClient
-	mu          sync.Mutex
+	addr string
+	opts DialOptions
+
+	mu     sync.Mutex
+	conn   *grpc.ClientConn
+	client pb.DownloadSourceClient
+
+	// Same reasoning as GRPCTagSource.info (REVIEW.md P2-11): written by
+	// ensureConn under mu, read by Name/DisplayName without it.
+	info atomic.Pointer[pb.DownloadPluginInfoResponse]
 }
 
 // NewGRPCDownloadSource creates a gRPC-backed download source.
@@ -286,12 +327,11 @@ func (g *GRPCDownloadSource) ensureConn() error {
 		g.conn = nil
 		return fmt.Errorf("grpc get plugin info: %w", err)
 	}
-	g.name = info.Name
-	g.displayName = info.DisplayName
+	g.info.Store(info)
 	// Register only on first successful handshake. Re-dials after a
 	// Shutdown/EOF must NOT re-register — RegisterDownloadSource panics
 	// on duplicate names (same contract as RegisterTagSource).
-	if _, err := GetDownloadSource(g.name); err != nil {
+	if _, err := GetDownloadSource(info.Name); err != nil {
 		RegisterDownloadSource(g)
 	}
 	return nil
@@ -304,19 +344,25 @@ func (g *GRPCDownloadSource) ensureConn() error {
 // until process restart — and even a healthy youtube never registered
 // because Name() never dialed.
 func (g *GRPCDownloadSource) Name() string {
-	if g.name != "" {
-		return g.name
+	if info := g.info.Load(); info != nil {
+		return info.Name
 	}
 	_ = g.ensureConn()
-	return g.name
+	if info := g.info.Load(); info != nil {
+		return info.Name
+	}
+	return ""
 }
 
 func (g *GRPCDownloadSource) DisplayName() string {
-	if g.displayName != "" {
-		return g.displayName
+	if info := g.info.Load(); info != nil {
+		return info.DisplayName
 	}
 	_ = g.ensureConn()
-	return g.displayName
+	if info := g.info.Load(); info != nil {
+		return info.DisplayName
+	}
+	return ""
 }
 
 func (g *GRPCDownloadSource) Search(ctx context.Context, query string, max int) ([]DownloadItem, error) {
