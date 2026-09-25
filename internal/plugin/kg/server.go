@@ -11,6 +11,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,14 +20,38 @@ import (
 	"go-music-tag/internal/plugin"
 )
 
-const searchURL = "https://complexsearch.kugou.com/v2/search/song"
+// searchURL is the UNSIGNED mobile search endpoint.
+//
+// This used to be complexsearch.kugou.com/v2/search/song, which requires
+// a signature computed over a specific parameter concatenation. That
+// scheme no longer authenticates: the endpoint answers HTTP 200 with
+// `{"status":0,"error_code":20006,"error_msg":"err signature"}` and an
+// empty list for every signature we could construct (verified 2026-09
+// against the live service, five variants), so the plugin returned zero
+// songs for every query and logged a JSON decode error, because the error
+// body is an object where the code expected the results array.
+//
+// The mobile endpoint below needs no signature and returns the same
+// metadata under snake_case names. What it does NOT return is SingerId
+// or PublishTime, so artist id and release year are empty on these rows.
+const searchURL = "https://mobiles.kugou.com/api/v3/search/song"
 
-var keyCodeTemplate = "NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt" +
-	"bitrate=0clienttime={time}clientver=2000dfid=-" +
-	"inputtype=0iscorrection=1isfuzzy=0keyword={keyword}" +
-	"mid={time}page={page}pagesize={pagesize}" +
-	"platform=WebFilterprivilege_filter=0srcappid=2919tag=em" +
-	"userid=-1uuid={time}NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt"
+// kgMobileSong is one row of the mobile search response.
+//
+// The cover is not a top-level field: it lives inside trans_param as
+// `union_cover` and still carries the `{size}` placeholder the old
+// signed endpoint used, so the same substitution applies.
+type kgMobileSong struct {
+	Hash       string  `json:"hash"`
+	SongName   string  `json:"songname"`
+	SingerName string  `json:"singername"`
+	AlbumName  string  `json:"album_name"`
+	AlbumID    string  `json:"album_id"`
+	Duration   float64 `json:"duration"`
+	TransParam struct {
+		UnionCover string `json:"union_cover"`
+	} `json:"trans_param"`
+}
 
 // Server implements the TagSource gRPC service for KuGou.
 type Server struct {
@@ -88,71 +114,82 @@ func (s *Server) FetchLyric(ctx context.Context, req *pb.FetchLyricRequest) (*pb
 }
 
 func (s *Server) doSearch(ctx context.Context, title string, page, pagesize int) ([]map[string]interface{}, bool, error) {
-	millis := fmt.Sprintf("%d", time.Now().UnixMilli())
+	// url.Values percent-encodes the keyword. Interpolating it raw put
+	// UTF-8 bytes straight into the request line, which the upstream
+	// answered with a bare HTTP 400 for every non-ASCII query.
+	q := url.Values{}
+	q.Set("keyword", title)
+	q.Set("format", "json")
+	q.Set("page", strconv.Itoa(page))
+	q.Set("pagesize", strconv.Itoa(pagesize))
 
-	p := strings.NewReplacer(
-		"{time}", millis,
-		"{keyword}", title,
-		"{page}", fmt.Sprintf("%d", page),
-		"{pagesize}", fmt.Sprintf("%d", pagesize),
-	).Replace(keyCodeTemplate)
-	signature := kugouSignature(p)
-
-	reqURL := fmt.Sprintf(
-		"%s?keyword=%s&page=%d&pagesize=%d&bitrate=0&isfuzzy=0&tag=em&inputtype=0&platform=WebFilter&userid=-1&clientver=2000&iscorrection=1&privilege_filter=0&srcappid=2919&clienttime=%s&mid=%s&uuid=%s&dfid=-&signature=%s",
-		searchURL, title, page, pagesize, millis, millis, millis, signature,
-	)
-
-	httpReq, _ := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", searchURL+"?"+q.Encode(), nil)
+	if err != nil {
+		return nil, false, err
+	}
+	httpReq.Header.Set("User-Agent", kgUserAgent)
 	resp, err := s.client.Do(httpReq)
 	if err != nil {
 		return nil, false, err
 	}
 	defer resp.Body.Close()
 
-	var result map[string]interface{}
+	var result struct {
+		Status   int    `json:"status"`
+		ErrCode  int    `json:"errcode"`
+		ErrorMsg string `json:"error_msg"`
+		Data     struct {
+			Info []kgMobileSong `json:"info"`
+		} `json:"data"`
+	}
 	if derr := json.NewDecoder(resp.Body).Decode(&result); derr != nil {
 		return nil, false, fmt.Errorf("kg json decode: %w", derr)
 	}
 
-	data, _ := result["data"].(map[string]interface{})
-	lists, _ := data["lists"].([]interface{})
+	// The upstream reports failure in the body, not the status line: a
+	// rejected request is HTTP 200 with errcode set and no data. Without
+	// this check it decodes to zero songs and looks exactly like "no
+	// matches", so a rate-limit or geo-block produced no diagnostic at all.
+	if result.Status != 1 {
+		return nil, false, fmt.Errorf("kg search rejected: errcode=%d %s", result.ErrCode, result.ErrorMsg)
+	}
 
-	songs := make([]map[string]interface{}, 0, len(lists))
-	for _, l := range lists {
-		if m, ok := l.(map[string]interface{}); ok {
-			artists := strings.ReplaceAll(fmt.Sprintf("%v", m["SingerName"]), "<em>", "")
-			artists = strings.ReplaceAll(artists, "</em>", "")
-			m["artist"] = strings.ReplaceAll(artists, "、", ",")
-			m["id"] = m["FileHash"]
-			name := strings.ReplaceAll(fmt.Sprintf("%v", m["SongName"]), "<em>", "")
-			m["name"] = strings.ReplaceAll(name, "</em>", "")
-			m["artist_id"] = m["SingerId"]
-			m["album"] = m["AlbumName"]
-			m["album_id"] = m["AlbumID"]
-			if img, ok := m["Image"].(string); ok {
-				m["album_img"] = strings.ReplaceAll(img, "{size}", "150")
-			}
-			m["year"] = m["PublishTime"]
-			// Kugou's WebFilter search reports `Duration` in SECONDS
-			// (verified live: 119 for a 1:59 track — the same value
-			// NetEase sends as 119133 ms). Also accept `duration` in case
-			// the shape moves back to the mobile endpoint.
-			if d, ok := m["Duration"]; ok {
-				m["duration"] = plugin.DurationFromSeconds(d)
-			} else {
-				m["duration"] = plugin.DurationFromSeconds(m["duration"])
-			}
-			songs = append(songs, m)
+	songs := make([]map[string]interface{}, 0, len(result.Data.Info))
+	for _, row := range result.Data.Info {
+		if row.Hash == "" {
+			continue
 		}
+		m := map[string]interface{}{
+			"id":   row.Hash,
+			"name": kgStripHighlight(row.SongName),
+			// The web endpoint joined multiple artists with 、; keep the
+			// same normalisation so downstream splitting is unchanged.
+			"artist":   strings.ReplaceAll(kgStripHighlight(row.SingerName), "、", ","),
+			"album":    kgStripHighlight(row.AlbumName),
+			"album_id": row.AlbumID,
+			"duration": plugin.DurationFromSeconds(row.Duration),
+		}
+		if row.TransParam.UnionCover != "" {
+			m["album_img"] = strings.ReplaceAll(row.TransParam.UnionCover, "{size}", "150")
+		}
+		songs = append(songs, m)
 	}
 
 	return songs, len(songs) >= pagesize, nil
 }
 
-func kugouSignature(text string) string {
-	h := md5.Sum([]byte(text))
-	return strings.ToUpper(hex.EncodeToString(h[:]))
+// kgUserAgent is a plain Android UA. The mobile endpoint serves the
+// search response to it without a signature; the desktop UA on the old
+// signed endpoint is not required here.
+const kgUserAgent = "Mozilla/5.0 (Linux; Android 10)"
+
+// kgStripHighlight removes the <em> match highlighting the search
+// endpoints wrap query matches in. The mobile endpoint returns plain
+// names today, but stripping is cheap and a match landing inside a title
+// would otherwise show raw markup in the UI.
+func kgStripHighlight(s string) string {
+	s = strings.ReplaceAll(s, "<em>", "")
+	return strings.ReplaceAll(s, "</em>", "")
 }
 
 func mapToPBSong(m map[string]interface{}) *pb.Song {
@@ -331,8 +368,8 @@ func pickKgURL(v interface{}) string {
 	return ""
 }
 
-// kgMD5 returns the lowercase hex md5 of s (the tracker API keys are
-// lowercase; kugouSignature above stays uppercase for the search API).
+// kgMD5 returns the lowercase hex md5 of s, which is how the
+// trackercdn mirror keys its responses (md5(hash + "kgcloud")).
 func kgMD5(s string) string {
 	h := md5.Sum([]byte(s))
 	return hex.EncodeToString(h[:])

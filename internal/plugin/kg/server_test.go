@@ -28,21 +28,22 @@ func jsonResp(code int, body string) *http.Response {
 	}
 }
 
-// kgSearchBody is in the shape doSearch unmarshals: {"data":{"lists":[...]}}.
-// Each lists element carries FileHash/SongName/SingerName/SingerId/AlbumName/
-// AlbumID/Image/PublishTime — every key the mapToPBSong m-To-PB mapping reads.
+// kgSearchBody is in the shape doSearch unmarshals. The endpoint is the
+// unsigned mobile API (see searchURL); the per-field contract is pinned in
+// mobilesearch_test.go.
 const kgSearchBody = `{
+  "status": 1,
+  "errcode": 0,
   "data": {
-    "lists": [
+    "info": [
       {
-        "FileHash": "abc123",
-        "SongName": "Hello <em>remix</em>",
-        "SingerName": "Adele、Beat",
-        "SingerId": 100,
-        "AlbumName": "25",
-        "AlbumID": 200,
-        "Image": "https://example/{size}.jpg",
-        "PublishTime": "2015-03-01"
+        "hash": "abc123",
+        "songname": "Hello <em>remix</em>",
+        "singername": "Adele、Beat",
+        "album_name": "25",
+        "album_id": "200",
+        "duration": 119,
+        "trans_param": { "union_cover": "https://example/{size}.jpg" }
       }
     ]
   }
@@ -104,12 +105,12 @@ func TestServer_Search_HappyPath(t *testing.T) {
 func TestServer_Search_HasMoreWhenFullPage(t *testing.T) {
 	srv := NewServer()
 	var b strings.Builder
-	b.WriteString(`{"data":{"lists":[`)
+	b.WriteString(`{"status":1,"errcode":0,"data":{"info":[`)
 	for i := 0; i < 10; i++ {
 		if i > 0 {
 			b.WriteString(",")
 		}
-		b.WriteString(`{"FileHash":"h","SongName":"s","SingerName":"a","SingerId":1,"AlbumName":"al","AlbumID":2,"Image":"","PublishTime":""}`)
+		b.WriteString(`{"hash":"h","songname":"s","singername":"a","album_name":"al","album_id":"2","duration":100}`)
 	}
 	b.WriteString(`]}}`)
 	srv.client.Transport = &kgRT{fn: func(*http.Request) (*http.Response, error) {
@@ -138,7 +139,7 @@ func TestServer_Search_NetworkErrorReturnsErr(t *testing.T) {
 func TestServer_Search_EmptyResult(t *testing.T) {
 	srv := NewServer()
 	srv.client.Transport = &kgRT{fn: func(*http.Request) (*http.Response, error) {
-		return jsonResp(200, `{"data":{"lists":[]}}`), nil
+		return jsonResp(200, `{"status":1,"errcode":0,"data":{"info":[]}}`), nil
 	}}
 	resp, _ := srv.Search(context.Background(), &pb.SearchRequest{Page: 1, Limit: 10})
 	if len(resp.Songs) != 0 || resp.HasMore {
@@ -271,21 +272,9 @@ func TestServer_FetchLyric_Happy(t *testing.T) {
 
 // ─── Pure helper ───────────────────────────────────────────────────────────
 
-func TestKugouSignature_KnownVector(t *testing.T) {
-	// MD5("abc") → "900150983cd24fb0d6963f7d28e17f72", uppercased as
-	// kugouSignature does.
-	const want = "900150983CD24FB0D6963F7D28E17F72"
-	if got := kugouSignature("abc"); got != want {
-		t.Errorf("kugouSignature(\"abc\") = %q, want %q", got, want)
-	}
-}
-
-func TestKugouSignature_StableForFixedInput(t *testing.T) {
-	// Whether or not we ship the correct hash, signatures must be stable for
-	// the same input across calls (catches any `time.Now()` leak).
-	a := kugouSignature("hello")
-	b := kugouSignature("hello")
-	if a != b {
-		t.Errorf("signature not stable: %q vs %q", a, b)
-	}
-}
+// The search signature is gone with the signed endpoint it belonged to.
+// It used to be pinned here by TestKugouSignature_KnownVector, which
+// asserted plain uppercased md5("abc") — i.e. it asserted the exact
+// algorithm that no longer authenticates, so the test suite reported the
+// broken search path as green while the plugin returned zero songs for
+// every query. See mobilesearch_test.go for the replacement contract.
