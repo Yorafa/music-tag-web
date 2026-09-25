@@ -18,6 +18,7 @@ import (
 	"time"
 
 	pb "go-music-tag/api/proto/tagplugin"
+	"go-music-tag/internal/plugin"
 )
 
 // baseURL is the public migu CDN root for search/audio/lyric endpoints.
@@ -261,6 +262,15 @@ var miguListenURL = "http://pd.musicapp.migu.cn/MIGUM3.0/v1.0/content/sub/listen
 // data/sources/migu.yaml are silently no-ops in
 // (*plugin.Registry).RefreshOverrides.
 func (s *Server) SetAPIBase(apiBase string) {
+	// Reject anything that is not https (REVIEW.md P1-4): both baseURL and
+	// miguListenURL feed requests carrying the user's search term and the
+	// signed audio URL, so an unvalidated override would expose both in
+	// transit and redirect them to a caller-chosen host. Checked before any
+	// mutation so a rejected value cannot leave the two vars inconsistent.
+	if err := plugin.ValidateAPIBase(apiBase); err != nil {
+		log.Printf("[migu] SetAPIBase rejected: %v (keeping %q)", err, baseURL)
+		return
+	}
 	baseURL = apiBase
 	// listen.do lives under the MIGUM3.0 CDN root, a sibling of the
 	// MIGUM2.0 base Search uses. Rebuild the path explicitly instead of

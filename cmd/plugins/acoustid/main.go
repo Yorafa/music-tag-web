@@ -11,9 +11,8 @@ import (
 	"net"
 	"os"
 
-	"google.golang.org/grpc"
-
 	pb "go-music-tag/api/proto/tagplugin"
+	"go-music-tag/internal/plugin"
 	"go-music-tag/internal/plugin/acoustid"
 )
 
@@ -26,8 +25,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("acoustid listen: %v", err)
 	}
-	srv := grpc.NewServer()
+	srv := plugin.NewGRPCServer()
 	pb.RegisterTagSourceServer(srv, acoustid.NewServer())
+	plugin.StartHealthServer(os.Getenv("ACOUSTID_HEALTH_PORT"))
+
 	log.Printf("[acoustid] gRPC server listening on :%s (requires fpcalc on PATH or FPCALC_BIN)", port)
 	if err := srv.Serve(lis); err != nil {
 		log.Fatalf("acoustid serve: %v", err)

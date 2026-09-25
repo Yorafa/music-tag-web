@@ -15,6 +15,7 @@ import (
 	"time"
 
 	pb "go-music-tag/api/proto/tagplugin"
+	"go-music-tag/internal/plugin"
 )
 
 const searchURL = "https://complexsearch.kugou.com/v2/search/song"
@@ -202,7 +203,16 @@ var (
 
 // SetAPIBase overwrites the package-level kgAudioURL for the plugin YAML
 // override flow.
+// SetAPIBase repoints the upstream. Rejects anything that is not https
+// (REVIEW.md P1-4): kgAudioURL is concatenated into every subsequent
+// request, so an unvalidated override could both downgrade the connection
+// and redirect it to an attacker-controlled host. On rejection the previous
+// value is kept — a bad config file must not break a running plugin.
 func (s *Server) SetAPIBase(apiBase string) {
+	if err := plugin.ValidateAPIBase(apiBase); err != nil {
+		log.Printf("[kg] SetAPIBase rejected: %v (keeping %q)", err, kgAudioURL)
+		return
+	}
 	kgAudioURL = apiBase
 }
 

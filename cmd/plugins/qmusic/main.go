@@ -10,9 +10,8 @@ import (
 	"net"
 	"os"
 
-	"google.golang.org/grpc"
-
 	pb "go-music-tag/api/proto/tagplugin"
+	"go-music-tag/internal/plugin"
 	"go-music-tag/internal/plugin/qmusic"
 )
 
@@ -25,8 +24,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("qmusic listen: %v", err)
 	}
-	srv := grpc.NewServer()
+	srv := plugin.NewGRPCServer()
 	pb.RegisterTagSourceServer(srv, qmusic.NewServer())
+	plugin.StartHealthServer(os.Getenv("QMUSIC_HEALTH_PORT"))
+
 	log.Printf("[qmusic] gRPC server listening on :%s", port)
 	if err := srv.Serve(lis); err != nil {
 		log.Fatalf("qmusic serve: %v", err)

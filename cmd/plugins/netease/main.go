@@ -10,9 +10,8 @@ import (
 	"net"
 	"os"
 
-	"google.golang.org/grpc"
-
 	pb "go-music-tag/api/proto/tagplugin"
+	"go-music-tag/internal/plugin"
 	netease "go-music-tag/internal/plugin/netease"
 )
 
@@ -32,8 +31,10 @@ func main() {
 		log.Fatalf("failed to create server: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := plugin.NewGRPCServer()
 	pb.RegisterTagSourceServer(grpcServer, srv)
+
+	plugin.StartHealthServer(os.Getenv("NETEASE_HEALTH_PORT"))
 
 	log.Printf("[netease] gRPC server listening on :%s", port)
 	if err := grpcServer.Serve(lis); err != nil {

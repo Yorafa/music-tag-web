@@ -35,7 +35,11 @@ const baseURL = "https://music.163.com"
 // The body is an AES-128-ECB-encrypted `eparams` envelope pointing at the
 // cloudsearch endpoint (see crypto.go::encryptLinux). Response is the plain
 // cloudsearch JSON shape (result.songs[].ar/al).
-const forwardURL = "http://music.163.com/api/linux/forward"
+//
+// https, not http (REVIEW.md P1-4): this carries the user's search term and
+// the returned song metadata, both of which were plaintext on the wire and
+// modifiable in transit.
+const forwardURL = "https://music.163.com/api/linux/forward"
 
 // searchURL is the legacy unencrypted search endpoint, kept as a fallback
 // when the forward pipeline is unreachable or returns an empty result.
@@ -43,7 +47,11 @@ const searchURL = baseURL + "/api/search/get"
 
 // weapiURL is the weapi audio-stream endpoint used by GetAudioURL
 // (AES-128-CBC + RSA form body, see crypto.go::encryptWeapi).
-const weapiURL = "http://music.163.com/weapi/song/enhance/player/url"
+//
+// https, not http (REVIEW.md P1-4): the response carries the signed CDN
+// audio URL, so plaintext here let a network position swap the stream for
+// one of their choosing.
+const weapiURL = "https://music.163.com/weapi/song/enhance/player/url"
 
 var defaultHeaders = map[string]string{
 	"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -146,7 +154,12 @@ func (s *Server) doSearch(ctx context.Context, title string, offset, limit int) 
 func (s *Server) doLinuxForwardSearch(ctx context.Context, title string, offset, limit int) ([]map[string]interface{}, error) {
 	ep := map[string]interface{}{
 		"method": "POST",
-		"url":    "http://music.163.com/api/cloudsearch/pc",
+		// Left as http: this is a *parameter* naming the endpoint that
+		// netease's own forward service will call on our behalf, not a URL
+		// we dial. It travels inside the AES-128-ECB envelope, so it is not
+		// plaintext on the wire. The request we actually make is forwardURL,
+		// which is https.
+		"url": "http://music.163.com/api/cloudsearch/pc",
 		"params": map[string]interface{}{
 			"s":      title,
 			"type":   1,

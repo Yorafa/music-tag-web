@@ -11,9 +11,8 @@ import (
 	"net"
 	"os"
 
-	"google.golang.org/grpc"
-
 	pb "go-music-tag/api/proto/tagplugin"
+	"go-music-tag/internal/plugin"
 	kugou "go-music-tag/internal/plugin/kg"
 )
 
@@ -28,8 +27,10 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := plugin.NewGRPCServer()
 	pb.RegisterTagSourceServer(grpcServer, kugou.NewServer())
+
+	plugin.StartHealthServer(os.Getenv("KUGOU_HEALTH_PORT"))
 
 	log.Printf("[kugou] gRPC server listening on :%s", port)
 	fmt.Printf("[kugou] gRPC server listening on :%s\n", port)

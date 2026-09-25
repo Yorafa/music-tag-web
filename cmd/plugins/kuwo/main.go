@@ -10,9 +10,8 @@ import (
 	"net"
 	"os"
 
-	"google.golang.org/grpc"
-
 	pb "go-music-tag/api/proto/tagplugin"
+	"go-music-tag/internal/plugin"
 	"go-music-tag/internal/plugin/kuwo"
 )
 
@@ -25,8 +24,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("kuwo listen: %v", err)
 	}
-	srv := grpc.NewServer()
+	srv := plugin.NewGRPCServer()
 	pb.RegisterTagSourceServer(srv, kuwo.NewServer())
+	plugin.StartHealthServer(os.Getenv("KUWO_HEALTH_PORT"))
+
 	log.Printf("[kuwo] gRPC server listening on :%s", port)
 	if err := srv.Serve(lis); err != nil {
 		log.Fatalf("kuwo serve: %v", err)

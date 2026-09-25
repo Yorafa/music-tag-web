@@ -10,9 +10,8 @@ import (
 	"net"
 	"os"
 
-	"google.golang.org/grpc"
-
 	pb "go-music-tag/api/proto/tagplugin"
+	"go-music-tag/internal/plugin"
 	"go-music-tag/internal/plugin/migu"
 )
 
@@ -25,8 +24,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("migu listen: %v", err)
 	}
-	srv := grpc.NewServer()
+	srv := plugin.NewGRPCServer()
 	pb.RegisterTagSourceServer(srv, migu.NewServer())
+	plugin.StartHealthServer(os.Getenv("MIGU_HEALTH_PORT"))
+
 	log.Printf("[migu] gRPC server listening on :%s", port)
 	if err := srv.Serve(lis); err != nil {
 		log.Fatalf("migu serve: %v", err)

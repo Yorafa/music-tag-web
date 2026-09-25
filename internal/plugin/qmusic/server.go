@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 
 	pb "go-music-tag/api/proto/tagplugin"
+	"go-music-tag/internal/plugin"
 )
 
 // qmusicSearchURL is the public QQ Music musicu.fcg POST endpoint that
@@ -42,7 +43,15 @@ var qmusicSearchURL = "https://u.y.qq.com/cgi-bin/musicu.fcg"
 
 // SetAPIBase overwrites the package-level qmusicSearchURL for the
 // plugin YAML override flow.
+// SetAPIBase repoints the search endpoint. Rejects anything that is not
+// https (REVIEW.md P1-4): qmusicSearchURL receives the user's search term,
+// so a plaintext override would expose it in transit. On rejection the
+// previous value is kept.
 func (s *Server) SetAPIBase(apiBase string) {
+	if err := plugin.ValidateAPIBase(apiBase); err != nil {
+		log.Printf("[qmusic] SetAPIBase rejected: %v (keeping %q)", err, qmusicSearchURL)
+		return
+	}
 	qmusicSearchURL = apiBase
 }
 

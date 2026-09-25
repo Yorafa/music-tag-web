@@ -74,6 +74,30 @@ services:
       PLUGIN_ACOUSTID_ADDR: ${PLUGIN_ACOUSTID_ADDR:-acoustid:50057}
       PLUGIN_YOUTUBE_ADDR: ${PLUGIN_YOUTUBE_ADDR:-youtube:50058}
     restart: unless-stopped
+    # REVIEW.md P1-5: the gateway registers tag sources at boot with a
+    # single 5s blocking dial per plugin. A plugin not yet accepting is
+    # skipped for the rest of the process lifetime — ListTagSources()
+    # reports only registered keys, so nothing retries. Waiting on
+    # service_healthy makes the ordering explicit instead of racy.
+    depends_on:
+      redis:
+        condition: service_started
+      netease:
+        condition: service_healthy
+      kugou:
+        condition: service_healthy
+      kuwo:
+        condition: service_healthy
+      migu:
+        condition: service_healthy
+      qmusic:
+        condition: service_healthy
+      musicbrainz:
+        condition: service_healthy
+      acoustid:
+        condition: service_healthy
+      youtube:
+        condition: service_healthy
     healthcheck:
       test:
         ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8001/admin/login/"]
@@ -116,8 +140,31 @@ services:
       WEBHOOK_INTERNAL_TOKEN: ${WEBHOOK_INTERNAL_TOKEN:-}
       ALLOW_INSECURE_DEFAULTS: ${ALLOW_INSECURE_DEFAULTS:-}
     restart: unless-stopped
+    # REVIEW.md P1-5: wait for every plugin to report healthy before the
+    # worker registers sources. Registration dials each plugin once with a
+    # 5s blocking dial; a plugin that is not yet accepting is skipped
+    # permanently, because ListTagSources() reports only registered keys
+    # and no lazy retry path ever revisits it. service_healthy on a real
+    # /healthz is what turns that race into an ordering guarantee.
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      netease:
+        condition: service_healthy
+      kugou:
+        condition: service_healthy
+      kuwo:
+        condition: service_healthy
+      migu:
+        condition: service_healthy
+      qmusic:
+        condition: service_healthy
+      musicbrainz:
+        condition: service_healthy
+      acoustid:
+        condition: service_healthy
+      youtube:
+        condition: service_healthy
 
   redis:
     image: redis:7-alpine
@@ -137,6 +184,23 @@ services:
     container_name: go-music-netease
     expose:
       - "50051"
+    # REVIEW.md P1-5: without this the container reports "running" the
+    # moment the process exists, which is before Serve() accepts and with
+    # no signal at all if the plugin then dies on a bad config. gateway and
+    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
+    # plugin that misses that window is absent from the registry for the
+    # rest of the process lifetime, because ListTagSources() reports only
+    # registered keys and nothing retries. The health endpoint
+    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
+    # below waits on.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18081/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    environment:
+      NETEASE_HEALTH_PORT: "18081"
     restart: unless-stopped
 
   kugou:
@@ -148,6 +212,23 @@ services:
     container_name: go-music-kugou
     expose:
       - "50052"
+    # REVIEW.md P1-5: without this the container reports "running" the
+    # moment the process exists, which is before Serve() accepts and with
+    # no signal at all if the plugin then dies on a bad config. gateway and
+    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
+    # plugin that misses that window is absent from the registry for the
+    # rest of the process lifetime, because ListTagSources() reports only
+    # registered keys and nothing retries. The health endpoint
+    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
+    # below waits on.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18082/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    environment:
+      KUGOU_HEALTH_PORT: "18082"
     restart: unless-stopped
 
   kuwo:
@@ -159,6 +240,23 @@ services:
     container_name: go-music-kuwo
     expose:
       - "50053"
+    # REVIEW.md P1-5: without this the container reports "running" the
+    # moment the process exists, which is before Serve() accepts and with
+    # no signal at all if the plugin then dies on a bad config. gateway and
+    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
+    # plugin that misses that window is absent from the registry for the
+    # rest of the process lifetime, because ListTagSources() reports only
+    # registered keys and nothing retries. The health endpoint
+    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
+    # below waits on.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18083/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    environment:
+      KUWO_HEALTH_PORT: "18083"
     restart: unless-stopped
 
   migu:
@@ -170,6 +268,23 @@ services:
     container_name: go-music-migu
     expose:
       - "50054"
+    # REVIEW.md P1-5: without this the container reports "running" the
+    # moment the process exists, which is before Serve() accepts and with
+    # no signal at all if the plugin then dies on a bad config. gateway and
+    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
+    # plugin that misses that window is absent from the registry for the
+    # rest of the process lifetime, because ListTagSources() reports only
+    # registered keys and nothing retries. The health endpoint
+    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
+    # below waits on.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18084/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    environment:
+      MIGU_HEALTH_PORT: "18084"
     restart: unless-stopped
 
   qmusic:
@@ -181,6 +296,23 @@ services:
     container_name: go-music-qmusic
     expose:
       - "50055"
+    # REVIEW.md P1-5: without this the container reports "running" the
+    # moment the process exists, which is before Serve() accepts and with
+    # no signal at all if the plugin then dies on a bad config. gateway and
+    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
+    # plugin that misses that window is absent from the registry for the
+    # rest of the process lifetime, because ListTagSources() reports only
+    # registered keys and nothing retries. The health endpoint
+    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
+    # below waits on.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18085/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    environment:
+      QMUSIC_HEALTH_PORT: "18085"
     restart: unless-stopped
 
   musicbrainz:
@@ -192,6 +324,23 @@ services:
     container_name: go-music-musicbrainz
     expose:
       - "50056"
+    # REVIEW.md P1-5: without this the container reports "running" the
+    # moment the process exists, which is before Serve() accepts and with
+    # no signal at all if the plugin then dies on a bad config. gateway and
+    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
+    # plugin that misses that window is absent from the registry for the
+    # rest of the process lifetime, because ListTagSources() reports only
+    # registered keys and nothing retries. The health endpoint
+    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
+    # below waits on.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18086/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    environment:
+      MUSICBRAINZ_HEALTH_PORT: "18086"
     restart: unless-stopped
 
   acoustid:
@@ -203,6 +352,23 @@ services:
     container_name: go-music-acoustid
     expose:
       - "50057"
+    # REVIEW.md P1-5: without this the container reports "running" the
+    # moment the process exists, which is before Serve() accepts and with
+    # no signal at all if the plugin then dies on a bad config. gateway and
+    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
+    # plugin that misses that window is absent from the registry for the
+    # rest of the process lifetime, because ListTagSources() reports only
+    # registered keys and nothing retries. The health endpoint
+    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
+    # below waits on.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18087/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    environment:
+      ACOUSTID_HEALTH_PORT: "18087"
     restart: unless-stopped
 
   youtube:
@@ -231,6 +397,22 @@ services:
       # MUST match gateway + worker (and the audioCacheDir defaults in
       # internal/tasks/yt_dl.go / internal/gateway/handler/stream.go).
       AUDIO_CACHE_DIR: /tmp/audio_cache
+      YOUTUBE_HEALTH_PORT: "18088"
+    # REVIEW.md P1-5: without this the container reports "running" the
+    # moment the process exists, which is before Serve() accepts and with
+    # no signal at all if the plugin then dies on a bad config. gateway and
+    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
+    # plugin that misses that window is absent from the registry for the
+    # rest of the process lifetime, because ListTagSources() reports only
+    # registered keys and nothing retries. The health endpoint
+    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
+    # below waits on.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18088/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
     restart: unless-stopped
 
 volumes:

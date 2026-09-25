@@ -15,9 +15,8 @@ import (
 	"net"
 	"os"
 
-	"google.golang.org/grpc"
-
 	pb "go-music-tag/api/proto/tagplugin"
+	"go-music-tag/internal/plugin"
 	youtube "go-music-tag/internal/plugin/youtube"
 )
 
@@ -37,8 +36,10 @@ func main() {
 		log.Fatalf("failed to create server: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := plugin.NewGRPCServer()
 	pb.RegisterDownloadSourceServer(grpcServer, srv)
+
+	plugin.StartHealthServer(os.Getenv("YOUTUBE_HEALTH_PORT"))
 
 	log.Printf("[youtube] gRPC DownloadSource listening on :%s", port)
 	if err := grpcServer.Serve(lis); err != nil {
