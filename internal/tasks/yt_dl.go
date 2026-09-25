@@ -19,6 +19,7 @@ import (
 	"go-music-tag/internal/db"
 	"go-music-tag/internal/netguard"
 	"go-music-tag/internal/plugin"
+	"go-music-tag/internal/utils"
 	"go-music-tag/internal/ytdlp"
 	"gorm.io/gorm"
 )
@@ -266,11 +267,14 @@ func (h *DownloadHandler) runDownloadSource(ctx context.Context, payload *Downlo
 	//    Preview cache keeps its transient `<id>.ext` copy for stream.
 	libraryPath := dlFile
 	if payload.DestDir != "" && h.MusicRoot != "" {
-		cleanDest := filepath.Clean(payload.DestDir)
-		if strings.Contains(cleanDest, "..") || filepath.IsAbs(payload.DestDir) {
+		cleanDest, destErr := utils.SafeRelPath(payload.DestDir)
+		if destErr != nil {
 			return fmt.Errorf("download: dest_dir must be relative path under music root, got %q", payload.DestDir)
 		}
-		destPath := resolveLibraryDest(h.MusicRoot, cleanDest, dlFile)
+		destPath, destErr := resolveLibraryDest(h.MusicRoot, cleanDest, dlFile)
+		if destErr != nil {
+			return fmt.Errorf("download: dest_dir %q: %w", payload.DestDir, destErr)
+		}
 		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 			return fmt.Errorf("download: mkdir dest %q: %w", filepath.Dir(destPath), err)
 		}
@@ -409,11 +413,14 @@ func (h *DownloadHandler) runTagSource(ctx context.Context, payload *DownloadPay
 	// Copy into library if requested.
 	libraryPath := cachePath
 	if payload.DestDir != "" && h.MusicRoot != "" {
-		cleanDest := filepath.Clean(payload.DestDir)
-		if strings.Contains(cleanDest, "..") || filepath.IsAbs(payload.DestDir) {
+		cleanDest, destErr := utils.SafeRelPath(payload.DestDir)
+		if destErr != nil {
 			return fmt.Errorf("download: dest_dir must be relative path under music root, got %q", payload.DestDir)
 		}
-		destPath := resolveLibraryDest(h.MusicRoot, cleanDest, cachePath)
+		destPath, destErr := resolveLibraryDest(h.MusicRoot, cleanDest, cachePath)
+		if destErr != nil {
+			return fmt.Errorf("download: dest_dir %q: %w", payload.DestDir, destErr)
+		}
 		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 			return fmt.Errorf("download: mkdir dest %q: %w", filepath.Dir(destPath), err)
 		}
@@ -618,7 +625,11 @@ func copyFile(src, dst string) error {
 // When dest carries a different extension than the actual cache file
 // (e.g. frontend asks for .ogg but yt-dlp kept .opus), the real cache
 // extension wins so the on-disk file stays playable.
-func resolveLibraryDest(musicRoot, dest, cachePath string) string {
+//
+// The join goes through utils.SafeJoin (REVIEW.md P3-7) so containment is
+// proven where the path is built rather than inferred from a check that ran
+// somewhere else on a possibly different string.
+func resolveLibraryDest(musicRoot, dest, cachePath string) (string, error) {
 	base := filepath.Base(cachePath)
 	cacheExt := filepath.Ext(base)
 	destExt := strings.ToLower(filepath.Ext(dest))
@@ -628,8 +639,8 @@ func resolveLibraryDest(musicRoot, dest, cachePath string) string {
 		if cacheExt != "" && !strings.EqualFold(destExt, cacheExt) {
 			dest = strings.TrimSuffix(dest, filepath.Ext(dest)) + cacheExt
 		}
-		return filepath.Join(musicRoot, dest)
+		return utils.SafeJoin(musicRoot, dest)
 	}
 	// Directory (legacy settings-only path): keep the cache basename.
-	return filepath.Join(musicRoot, dest, base)
+	return utils.SafeJoin(musicRoot, filepath.Join(dest, base))
 }

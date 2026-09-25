@@ -241,10 +241,6 @@ func SmartTagSearch(ctx context.Context, title, fullPath string) ([]plugin.Song,
 			}
 		}
 	}
-	if title == "" {
-		title = strings.TrimSpace(strings.TrimSuffix(fullPath, "")) // fallback
-	}
-
 	sources := smartTagSources()
 	if len(sources) == 0 {
 		return nil, nil

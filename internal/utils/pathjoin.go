@@ -93,3 +93,37 @@ func SafeAbs(root, absPath string) (string, error) {
 	}
 	return candidate, nil
 }
+
+// SafeRelPath validates a caller-supplied path that is meant to be RELATIVE
+// to a root, and returns it cleaned.
+//
+// It refuses absolute paths outright — SafeJoin deliberately treats a
+// leading "/" as a separator and folds it into the root, which is the right
+// default for internal callers but the wrong one for a user-supplied
+// "relative under the library" field, where an absolute value means the
+// caller is confused or hostile rather than that they meant a subpath.
+//
+// It refuses any ".." PATH SEGMENT. The segment test is the whole point:
+// the check this replaces was strings.Contains(cleaned, ".."), which
+// rejected the perfectly ordinary directory name "Album..Deluxe" and
+// "1997..2000 Remaster" while every real traversal — "../x", "a/../../x" —
+// is segment-shaped and caught either way (REVIEW.md P3-7).
+//
+// This validates the SHAPE of the path. Containment is proved separately by
+// joining through SafeJoin at the point of use, so the check at the request
+// boundary and the check where the file is written cannot drift apart.
+func SafeRelPath(p string) (string, error) {
+	if p == "" {
+		return "", errors.New("utils: SafeRelPath: path is empty")
+	}
+	if filepath.IsAbs(p) {
+		return "", fmt.Errorf("utils: SafeRelPath: %q is absolute, want a relative path", p)
+	}
+	cleaned := filepath.Clean(p)
+	for _, seg := range strings.Split(cleaned, string(filepath.Separator)) {
+		if seg == ".." {
+			return "", fmt.Errorf("utils: SafeRelPath: %q escapes upward", p)
+		}
+	}
+	return cleaned, nil
+}

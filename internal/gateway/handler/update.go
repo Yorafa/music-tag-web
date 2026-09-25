@@ -196,13 +196,13 @@ func BatchUpdateID3(c *gin.Context) {
 				})
 				if err := applyFileUpdate(stringValue(merged["file_full_path"]), merged); err != nil {
 					if dupErr, ok := err.(ErrDuplicateSkipped); ok {
-						report.addSkipped(leaf, dupErr.Dup)
+						report.addSkipped(relToMusicRoot(leaf), dupErr.Dup)
 						continue
 					}
 					Failure(c, err.Error())
 					return
 				}
-				report.addDone(leaf)
+				report.addDone(relToMusicRoot(leaf))
 			}
 			continue
 		}
@@ -216,13 +216,13 @@ func BatchUpdateID3(c *gin.Context) {
 		})
 		if err := applyFileUpdate(stringValue(merged["file_full_path"]), merged); err != nil {
 			if dupErr, ok := err.(ErrDuplicateSkipped); ok {
-				report.addSkipped(leaf, dupErr.Dup)
+				report.addSkipped(relToMusicRoot(leaf), dupErr.Dup)
 				continue
 			}
 			Failure(c, err.Error())
 			return
 		}
-		report.addDone(leaf)
+		report.addDone(relToMusicRoot(leaf))
 	}
 	status := audit.StatusSuccess
 	if len(report.skipped) > 0 && len(report.done) > 0 {
@@ -351,6 +351,26 @@ func (e ErrDuplicateSkipped) Error() string {
 }
 
 // ─── internal ─────────────────────────────────────────────────────────────
+
+// relToMusicRoot converts a path under MUSIC_DIR back into the relative form
+// this API speaks everywhere else (REVIEW.md P3-9).
+//
+// UpdateID3 echoed back the relative path the client had sent, while
+// BatchUpdateID3 echoed the absolute leaf it built internally from
+// SafeJoin — so `done[].file_full_path` meant two different things
+// depending on which endpoint answered, and a caller that round-tripped
+// the value into the other endpoint got a path rejected for being
+// absolute. Nothing consumed the field, which is why it went unnoticed.
+func relToMusicRoot(abs string) string {
+	root := utils.MusicRoot()
+	rel, err := filepath.Rel(root, abs)
+	if err != nil {
+		// Different volumes / unresolvable root: the absolute value is
+		// still more useful than an error the caller cannot act on.
+		return abs
+	}
+	return rel
+}
 
 // applyFileUpdate 每个文件按 MusicIDS 流：模板 → 写 tag → sidecar → 文件名模板 → 改名。
 //
@@ -587,6 +607,3 @@ func fetchRemoteBytes(rawURL string) ([]byte, error) {
 	}
 	return buf, nil
 }
-
-// _ 保留 import encoding/json 入口以备 stringValue 的 json.Number 分支使用
-var _ = json.Marshal

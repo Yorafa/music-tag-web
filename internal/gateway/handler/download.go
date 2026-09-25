@@ -15,6 +15,7 @@ import (
 	"go-music-tag/internal/plugin"
 	"go-music-tag/internal/taskclient"
 	"go-music-tag/internal/tasks"
+	"go-music-tag/internal/utils"
 	"go-music-tag/internal/ytdlp"
 )
 
@@ -115,8 +116,13 @@ func Download(c *gin.Context) {
 	// is refused outright so a malicious `download_path` can't write
 	// outside MUSIC_DIR. Empty is fine (cache-only path, no library cp).
 	if req.DestDir != "" {
-		cleaned := filepath.Clean(req.DestDir)
-		if filepath.IsAbs(req.DestDir) || strings.Contains(cleaned, "..") {
+		// utils.SafeRelPath checks path SEGMENTS, not substrings: the old
+		// strings.Contains(cleaned, "..") refused "Album..Deluxe/x.ogg"
+		// while every real traversal is segment-shaped anyway
+		// (REVIEW.md P3-7). Containment is proved again in
+		// resolveLibraryDestPath via SafeJoin.
+		cleaned, err := utils.SafeRelPath(req.DestDir)
+		if err != nil {
 			Failure(c, "download_path must be a relative path under the music library root")
 			return
 		}
@@ -245,7 +251,10 @@ func persistCacheToLibrary(cachePath, downloadPath string) (string, error) {
 		// to wire MUSIC_DIR — refuse the cp path so the user knows.
 		return "", fmt.Errorf("MUSIC_DIR env not set; add-to-library requires it")
 	}
-	destPath := resolveLibraryDestPath(musicRoot, downloadPath, cachePath)
+	destPath, err := resolveLibraryDestPath(musicRoot, downloadPath, cachePath)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 		return "", fmt.Errorf("mkdir %q: %w", filepath.Dir(destPath), err)
 	}
@@ -268,7 +277,15 @@ func persistCacheToLibrary(cachePath, downloadPath string) (string, error) {
 // resolveLibraryDestPath is the gateway twin of tasks.resolveLibraryDest:
 // file-path vs directory semantics for download_path. Kept local so the
 // gateway package does not need to export the worker helper.
-func resolveLibraryDestPath(musicRoot, dest, cachePath string) string {
+//
+// It joins through utils.SafeJoin rather than filepath.Join (REVIEW.md
+// P3-7). A bare Join makes the containment guarantee depend entirely on
+// the request-boundary check having run, in the right order, with the
+// right value — and the destination is computed here from a *second*
+// argument, so "the same string that was checked" is an assumption rather
+// than a fact. Proving containment where the path is built makes that
+// assumption disappear.
+func resolveLibraryDestPath(musicRoot, dest, cachePath string) (string, error) {
 	base := filepath.Base(cachePath)
 	cacheExt := filepath.Ext(base)
 	destExt := strings.ToLower(filepath.Ext(dest))
@@ -276,8 +293,8 @@ func resolveLibraryDestPath(musicRoot, dest, cachePath string) string {
 		if cacheExt != "" && !strings.EqualFold(destExt, cacheExt) {
 			dest = strings.TrimSuffix(dest, filepath.Ext(dest)) + cacheExt
 		}
-		return filepath.Join(musicRoot, dest)
+		return utils.SafeJoin(musicRoot, dest)
 	}
 	// Directory (legacy settings-only path): keep the cache basename.
-	return filepath.Join(musicRoot, dest, base)
+	return utils.SafeJoin(musicRoot, filepath.Join(dest, base))
 }
