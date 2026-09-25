@@ -447,14 +447,28 @@ func applyFileUpdate(filePath string, info map[string]interface{}) error {
 		newName = utils.SanitizePath(newName)
 		parent := filepath.Dir(filePath)
 		target := filepath.Join(parent, newName)
-		// Single-arm SafeJoin: refuse the rename if the resolved target
-		// escapes MUSIC_DIR (defence-in-depth against any future change to
-		// upstream SanitizePath). No fallback to the unsafe target.
-		safeTarget, sErr := utils.SafeJoin(utils.MusicRoot(), strings.TrimPrefix(target, utils.MusicRoot()))
+		// SafeAbs, not SafeJoin(TrimPrefix(...)) (REVIEW.md P2-6).
+		// TrimPrefix returns its input unchanged when the prefix does not
+		// match — which is exactly what happens when MUSIC_DIR is a
+		// symlink, a relative path, or differs in case. SafeJoin then
+		// treats the resulting absolute path as relative and produces
+		// `/app/media/app/media/foo.mp3` without raising anything.
+		safeTarget, sErr := utils.SafeAbs(utils.MusicRoot(), target)
 		if sErr != nil {
 			return fmt.Errorf("rename target unsafe: %w", sErr)
 		}
 		if safeTarget != filePath {
+			// os.Rename silently REPLACES an existing destination. Two
+			// tracks whose filename templates render to the same name
+			// would lose one file with no error and no trace, so the
+			// collision has to be caught before the rename.
+			if _, statErr := os.Stat(safeTarget); statErr == nil {
+				return fmt.Errorf("rename target already exists: %s", filepath.Base(safeTarget))
+			} else if !os.IsNotExist(statErr) {
+				// A permission error or I/O failure on the destination is
+				// not evidence that it is free.
+				return fmt.Errorf("rename target stat: %w", statErr)
+			}
 			if err := os.Rename(filePath, safeTarget); err != nil {
 				return fmt.Errorf("rename: %w", err)
 			}

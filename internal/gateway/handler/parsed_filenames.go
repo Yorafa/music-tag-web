@@ -162,10 +162,12 @@ func ApplyParsedFilenames(c *gin.Context) {
 	root := utils.MusicRoot()
 	finalRows := make([]cache.ParsedResult, 0, len(bundle.Results))
 	for _, row := range bundle.Results {
-		// Defence-in-depth: re-SafeJoin even though preview did it.
-		// Cheap; runs once per row.
-		rel := strings.TrimPrefix(row.Path, root)
-		safe, sErr := utils.SafeJoin(root, rel)
+		// Defence-in-depth: re-validate even though preview did it. Cheap;
+		// runs once per row. SafeAbs rather than SafeJoin(TrimPrefix(...))
+		// for the reason in update.go — TrimPrefix is a no-op when the
+		// prefix does not match, and SafeJoin would then treat the
+		// absolute path as relative (REVIEW.md P2-6).
+		safe, sErr := utils.SafeAbs(root, row.Path)
 		if sErr != nil {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{
 				"error":  "unsafe_path",
