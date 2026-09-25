@@ -180,15 +180,13 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     // table immediately renders title/artist/album instead of showing
     // bare filenames until the user clicks each one. Fire-and-forget.
     //
-    // IMPORTANT — contract with the click path: hydrateTagsBatched
+    // Contract with the boot hydration below: hydrateTagsBatched
     // writes the row's musicInfo ONLY when the response has at least
-    // one non-null field. Leave the implicit coupling intact: the
-    // PlayView.openEditorFor / WorklistRowView.openEditor click paths
-    // use `Object.values(musicInfo).some(v => v != null)` to decide
-    // whether to refetch; if a future change to hydrateTags writes
-    // unconditionally, that guard stops firing on truly empty-tag
-    // files and the user loses retry UX. See lib/hydrateTags.ts
-    // block comment §3 for the rationale.
+    // one non-null field, so a row with genuinely empty tags stays in
+    // the `needsMusicInfoRefetch` set and gets retried on the next page
+    // load. If a future change to hydrateTags wrote unconditionally,
+    // that retry would stop firing and the user would lose it. See
+    // lib/hydrateTags.ts block comment steps 3-4 for the rationale.
     void hydrateTagsBatched(
       dedupedNewRows.map((r) => ({ id: r.id, fullPath: r.fullPath })),
       (id, info) => useLibraryStore.getState().setMusicInfo(id, info),

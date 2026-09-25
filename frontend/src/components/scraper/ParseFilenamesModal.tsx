@@ -6,7 +6,7 @@
  * initialisation) collapses cleanly.
  */
 
-// C.2 Filename Parse round-trip modal. Triggered from ScrapeTopBar's
+// C.2 Filename Parse round-trip modal. Triggered from the worklist's
 // "解析文件名" button. The flow:
 //
 //   1. Mount → POST /api/tag/preview_parse_filenames/ for every

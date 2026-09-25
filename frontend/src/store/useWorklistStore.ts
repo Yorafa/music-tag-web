@@ -100,8 +100,9 @@ interface WorklistState {
   remove: (ids: string[]) => void;
   setStatus: (id: string, status: ScrapeStatus) => void;
   setFilter: (f: WorklistFilter) => void;
-  /** Lazy row-level musicInfo cache. Used by TagEditor when it
-   *  hydrates from a row click. Indexed by row id (== fullPath) so
+  /** Lazy row-level musicInfo cache. Populated by the boot hydration
+   *  below, by enqueueDirs, and by the detail dialog when it saves.
+   *  Indexed by row id (== fullPath) so
    *  two rows with the same filename in different dirs stay
    *  independent. */
   setMusicInfo: (id: string, info: Partial<MusicTagInfo>) => void;
@@ -261,12 +262,13 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
     // /api/music_id3/ so the Worklist rows render with title/artist
     // instead of bare fileName as soon as the user drops a directory.
     //
-    // IMPORTANT — contract with the click path: hydrateTagsBatched
-    // writes row musicInfo ONLY when the response has ≥1 non-null
-    // field. WorklistRowView.openEditor's `cacheHasAnyValue` guard
-    // relies on that — if hydrateTags ever writes `{}` instead of
-    // skipping, this row's click will silently skip the refetch on
-    // truly-empty tags. See lib/hydrateTags.ts block §3.
+    // Contract with the boot hydration at the bottom of this file:
+    // hydrateTagsBatched writes row musicInfo ONLY when the response
+    // has ≥1 non-null field, so a row with genuinely empty tags stays
+    // in the `needsMusicInfoRefetch` set and is retried on the next
+    // page load. If hydrateTags ever wrote `{}` instead of skipping,
+    // that retry would stop firing. See lib/hydrateTags.ts block
+    // comment steps 3-4.
     void hydrateTagsBatched(
       newRows.map((r) => ({ id: r.id, fullPath: r.fullPath })),
       (id, info) => useWorklistStore.getState().setMusicInfo(id, info),

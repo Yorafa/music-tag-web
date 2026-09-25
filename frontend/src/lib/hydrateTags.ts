@@ -6,19 +6,23 @@
 // this hydrator the table renders raw filenames until each row is
 // clicked — slow UX for any directory with > a handful of files.
 //
-// Wire shape (mirrors the existing single-row click path in
-// WorklistRowView.openEditor / PlayView.openEditorFor):
+// Wire shape:
 //   1. POST /api/music_id3/ for each item (via readTagsFromPath → getMusicId3)
-//   2. On SUCCESS WITH at least one non-null field → call the writer;
-//      `cacheHasAnyValue` in the click paths then turns true and the
-//      next click skips refetching — this is the same guard the click
-//      path uses, so no new state field is needed.
-//   3. On EMPTY result or FAILURE envelope → skip the write so the
-//      click path's cacheHasAnyValue stays false and the user can
-//      retry on demand. This is deliberate: empty-tag files are rare
-//      but real (raw compact discs, lossy files with stripped tags),
-//      and silently pretending we tried them would mask editing UX.
-//   4. On NETWORK error → same as 3 — defer to click.
+//   2. On SUCCESS WITH at least one non-null field → call the writer.
+//   3. On EMPTY result or FAILURE envelope → skip the write, leaving
+//      `musicInfo` undefined.
+//   4. On NETWORK error → same as 3.
+//
+// Steps 3 and 4 exist for the boot hydration in useWorklistStore /
+// useLibraryStore, which re-runs this helper for every persisted row
+// where `needsMusicInfoRefetch` is true. A row left unwritten stays in
+// that set, so a transient network failure retries on the next page
+// load instead of pinning the row to a permanently empty cache. This
+// is deliberate: empty-tag files are rare but real (raw compact discs,
+// lossy files with stripped tags), and silently pretending we tried
+// them would mask editing UX. (The old reason for this guard — the
+// per-row click path's cacheHasAnyValue check — is gone; the detail
+// dialog refetches on its own when the cover is missing.)
 //
 // Concurrency: bounded at 4 to avoid hammering the Go gateway when a
 // user drops a 1000-file library. The bounded worker pool runs through

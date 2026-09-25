@@ -1,6 +1,7 @@
 /**
  * Cover-rendering helpers shared by the row-level `CoverThumb`
- * (SearchResults.tsx) and the detail-level `DetailCover` (TagEditor.tsx).
+ * (SearchResults.tsx) and the detail dialog's hero + 封面 tab
+ * (TrackInspector.tsx).
  *
  * A typical mutagen base64 cover is well under 100 KB; payloads above
  * ~300 KB chars (~225 KB binary after base64 padding) almost always

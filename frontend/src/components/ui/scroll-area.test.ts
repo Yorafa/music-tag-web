@@ -33,13 +33,13 @@ describe('ScrollArea root classes', () => {
   });
 
   it('keeps min-h-0 when the caller passes a flex-1 usage', () => {
-    // The ScrapeResults case: <ScrollArea className="flex-1">.
+    // The 候选 tab case: <ScrollArea className="flex-1">.
     expect(cn(SCROLL_AREA_BASE_CLASS, 'flex-1')).toContain('min-h-0');
   });
 
   it('keeps min-h-0 when the caller passes a height class', () => {
-    // The h-full callers (TagEditor, PlayView, TrackInspector,
-    // CloudSearchView) are flex children in practice too.
+    // The h-full callers (PlayView, TrackInspector, CloudSearchView)
+    // are flex children in practice too.
     expect(cn(SCROLL_AREA_BASE_CLASS, 'h-full')).toContain('min-h-0');
   });
 

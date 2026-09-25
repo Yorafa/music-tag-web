@@ -12,8 +12,8 @@ export interface SongInfo {
   /** Lyric body for a scrape candidate — populated whenever the scrape
    *  call answered. Both keys are accepted because upstream is mixed: some
    *  plugins emit `lyric` (singular, e.g. Kuwo's [cover] appendix), others
-   *  emit `lyrics`. ScrapeResults normalises across both with a fallback
-   *  read in the per-card apply-all handler. */
+   *  emit `lyrics`. TrackInspector's 候选 tab normalises across both when
+   *  it applies a candidate. */
   lyric?: string;
   lyrics?: string;
 }
@@ -76,7 +76,7 @@ export type LyricResult = LyricText;
  *  the synthetic `smart_tag` resource. `smart_tag` is NOT a registered
  *  plugin and will never appear in /api/sources/, but it IS a valid
  *  fetch_id3_by_title request value that triggers the backend's
- *  SmartTagSearch logic; TagEditor exposes it as '智能刮削' and
+ *  SmartTagSearch logic; TrackInspector exposes it as '智能刮削' and
  *  useAppStore.resource persists the user's choice. Don't reuse this
  *  type for plugin-only contexts — use a stricter PluginSource type
  *  there. */
@@ -110,7 +110,7 @@ export interface SourceInfo {
   searchable: boolean;
   lyric: boolean;
   /** Distinguishes sources that answer `FetchID3ByTitle` (which the
-   *  TagEditor uses for tag-by-title scraping) from search-only /
+   *  detail dialog uses for tag-by-title scraping) from search-only /
    *  download-only sources. Always `false` for `kind: "download"`. */
   supports_id3: boolean;
   /** Mirror of proto PluginInfoResponse.supports_audio_url — true if the

@@ -182,32 +182,46 @@ Response: { result, data: { songs[], pages{}, has_more{} } }
 
 ### AppShell (`src/components/layout/AppShell.tsx`)
 
-Two-mode UI shell driven by `AppMode` (`'play' | 'scrape'`).
+Section shell. The current section and sidebar state persist to
+localStorage (`appShell.section`, `appShell.sidebarCollapsed`).
 
-- **Scrape mode** (`ScrapeView`): Three-column — Toolbar (left, collapsible) + FileBrowser (center) + SearchResults (right, draggable width, persisted to `appShell.rightWidth`)
-- **Play mode** (`LocalView`): Two-column — FileBrowser (left) + SearchPanel (right, draggable width, persisted to `appShell.localRightWidth`)
-- **PlayerBar**: Persistent bottom bar (h-16), shared across modes, visible when a song plays
-- **Dialog**: Song detail — TagEditor + ScrapeResults dual-panel with ResizeHandle (width persisted to `appShell.scrapeRightWidth`)
-- **Header** (`HomePage`): Title + SettingsButton + ThemeToggle + Logout
+- **Sidebar** (desktop) / **nav drawer** (mobile): the 5 sections
+- **Sections**: `PlayView` (library) · `WorkstationView` (scraper) ·
+  `CloudSearchView` (search) · `AuditLogView` (audit) · `SettingsView`
+- **TopHeader** + **PlayerBar**: persistent across every section
+- **TrackDetailDialog**: the song-detail surface, mounted at root so a
+  section switch does not unmount a half-edited dialog
+
+### 智能刮削 (`src/components/workstation/`)
+
+Two-column: `FileTreeBrowser` (left, draggable, persisted to
+`workstation.leftWidth`) + `WorkstationToolbar` / `WorkstationTable`
+(center).
+
+**There is no song-detail column.** Detail is a dialog at every viewport
+width — a row tap in 智能刮削 and in 音乐库 both call `openDetail()` and
+get the identical surface. `selectWorklistRow` must not grow a viewport
+branch: an earlier version did, which is how the phone and the desktop
+ended up with two different detail UIs, each correct against its own
+spec.
 
 ### Key Components
 
 | Component | File | Purpose |
 |---|---|---|
-| `AppShell` | `layout/AppShell.tsx` | Mode routing, Dialog, PlayerBar |
-| `ScrapeView` | `layout/ScrapeView.tsx` | Toolbar + FileBrowser + SearchResults |
-| `LocalView` | `layout/LocalView.tsx` | FileBrowser + SearchPanel |
-| `Toolbar` | `layout/Toolbar.tsx` | Collapsible left bar (scan, queue) |
-| `FileBrowser` | `files/FileBrowser.tsx` | Directory tree + file list, sort, select, play |
-| `SearchResults` | `search/SearchResults.tsx` | Current dir audio files (scrape right panel) |
-| `SearchPanel` | `search/SearchPanel.tsx` | Global search (play right panel) |
-| `TagEditor` | `editor/TagEditor.tsx` | Single/batch tag edit form |
-| `ScrapeResults` | `editor/ScrapeResults.tsx` | Scrape candidate list |
-| `PlayerBar` | `player/PlayerBar.tsx` | Bottom playback bar |
-| `PlayButton` | `player/PlayButton.tsx` | Inline row play button |
-| `SourcePickerModal` | `search/SourcePickerModal.tsx` | Source selection modal |
-| `SettingsModal` | `settings/SettingsModal.tsx` | Settings (download dir, sources) |
+| `AppShell` | `layout/AppShell.tsx` | Section routing, sidebar, dialog host, PlayerBar |
+| `Sidebar` / `TopHeader` | `layout/Sidebar.tsx`, `layout/TopHeader.tsx` | Nav + mobile drawer |
 | `ResizeHandle` | `layout/ResizeHandle.tsx` | Draggable split bar |
+| `PlayView` | `play/PlayView.tsx` | 音乐库: library table |
+| `WorkstationView` | `workstation/WorkstationView.tsx` | 智能刮削: file tree + worklist |
+| `selectWorklistRow` | `workstation/rowSelection.ts` | Row tap → select + `openDetail` |
+| `TrackDetailDialog` | `detail/TrackDetailDialog.tsx` | The song-detail dialog, all widths |
+| `TrackInspector` | `detail/TrackInspector.tsx` | 标签 / 候选 / 歌词 / 封面 / 指纹 + 智能刮削 |
+| `CloudSearchView` | `search/CloudSearchView.tsx` | Cloud multi-source search |
+| `AuditLogView` | `audit/AuditLogView.tsx` | Operation history |
+| `SettingsView` | `settings/SettingsView.tsx` | Paths, sources, hot reload |
+| `PlayerBar` | `player/PlayerBar.tsx` | Bottom playback bar |
+| `DirPickerDrawer` | `scraper/DirPickerDrawer.tsx` | Directory picker (library or worklist) |
 
 ## Local Development
 

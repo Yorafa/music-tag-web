@@ -11,8 +11,8 @@
 //   - JWT still flows via api/client axios interceptor (Authorization:
 //     JWT <token>) — no manual fetch header path.
 //
-// Returns Partial<MusicTagInfo> so hydrateTags / openEditor keep the
-// same cacheHasAnyValue contract as before.
+// Returns Partial<MusicTagInfo> so hydrateTags keeps the same
+// cacheHasAnyValue contract as before.
 
 import { getMusicId3 } from '@/api/client';
 import type { MusicTagInfo } from '@/types';

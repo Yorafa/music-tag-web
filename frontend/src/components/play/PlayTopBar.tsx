@@ -1,5 +1,5 @@
 // Play-mode top action bar — the single horizontal strip header above the
-// PlayView main area. The layout matches the scrape-mode ScrapeTopBar
+// PlayView main area. The layout matches the scraper's worklist toolbar
 // (Plan B decision #9: independent bars, same layout tokens — `flex
 // items-center gap-2 px-3 py-2 border-b border-border bg-surface-2
 // shrink-0`) so both modes share a visual rhythm at the top of the
