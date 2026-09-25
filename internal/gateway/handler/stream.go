@@ -16,6 +16,7 @@ import (
 	"github.com/hibiken/asynq"
 
 	"go-music-tag/internal/audioext"
+	"go-music-tag/internal/netguard"
 	"go-music-tag/internal/plugin"
 	"go-music-tag/internal/taskclient"
 	"go-music-tag/internal/tasks"
@@ -108,6 +109,65 @@ func audioCacheDir(source string) string {
 		root = "/tmp/audio_cache"
 	}
 	return filepath.Join(root, source)
+}
+
+// streamGuard is the SSRF guard for upstream audio URLs (REVIEW.md P1-2).
+//
+// upstreamURL is whatever the plugin's GetAudioURL returned, so it is
+// plugin-controlled input: a compromised or buggy plugin could point the
+// gateway at 127.0.0.1, a link-local metadata address, or an RFC1918 host
+// and have the gateway fetch it on its behalf. The cover-art path already
+// guarded this (fetchRemoteBytes -> remoteGuard); the audio path did not.
+//
+// Same default-deny stance as remoteGuard: private / loopback / link-local
+// are rejected outright, because there is no realistic legitimate reason
+// for a music-source CDN to resolve there.
+var streamGuard = netguard.NewGuard()
+
+// streamPassthroughHeaders is the allowlist for upstream response headers
+// copied to the client (REVIEW.md P1-2).
+//
+// The previous code forwarded every header verbatim:
+//
+//	for k, v := range resp.Header { c.Writer.Header()[k] = v }
+//
+// which let the upstream set Set-Cookie, Content-Security-Policy,
+// X-Frame-Options and friends on OUR origin — a CDN that returned
+// Set-Cookie could plant a cookie for the gateway's own domain.
+//
+// These are the headers <audio> actually needs: metadata about the byte
+// range we are proxying, plus validators for conditional re-fetch.
+// Content-Disposition is deliberately absent — the browser download path
+// sets its own filename, and echoing the upstream's would let a source
+// choose what the user's file is called.
+var streamPassthroughHeaders = map[string]bool{
+	"Accept-Ranges":  true,
+	"Cache-Control":  true,
+	"Content-Length": true,
+	"Content-Range":  true,
+	"Content-Type":   true,
+	"ETag":           true,
+	"Last-Modified":  true,
+}
+
+// copyStreamHeaders copies only allowlisted upstream headers onto w.
+// Header names are canonicalised by textproto so the map lookup is
+// case-insensitive in effect (resp.Header keys are already canonical).
+func copyStreamHeaders(dst http.Header, src http.Header) {
+	for k, v := range src {
+		if !streamPassthroughHeaders[k] {
+			continue
+		}
+		for _, vv := range v {
+			dst.Add(k, vv)
+		}
+	}
+}
+
+// validateStreamUpstream applies the SSRF guard to a plugin-supplied URL.
+// Returns a non-nil error when the URL must not be fetched.
+func validateStreamUpstream(ctx context.Context, upstreamURL string) error {
+	return streamGuard.Validate(ctx, upstreamURL)
 }
 
 // streamUpstreamClient is the http.Client used by streamFromPlugin.
@@ -549,6 +609,18 @@ func streamFromPlugin(c *gin.Context, src, id string) {
 	if method != http.MethodGet && method != http.MethodHead {
 		method = http.MethodGet
 	}
+
+	// SSRF gate (REVIEW.md P1-2): upstreamURL is plugin-supplied, so refuse
+	// anything that resolves to a private / loopback / link-local address
+	// before we spend a request on it. Done before the request is built so
+	// a rejected URL never reaches the transport at all.
+	if gErr := validateStreamUpstream(c.Request.Context(), upstreamURL); gErr != nil {
+		log.Printf("[stream] 502 src=%s id=%s reason=ssrf_blocked err=%v upstream_url=%s",
+			src, sanitizeLogField(id, 64), gErr, sanitizeLogField(upstreamURL, 128))
+		FailureStatus(c, http.StatusBadGateway, "upstream rejected by SSRF guard")
+		return
+	}
+
 	req, err := http.NewRequestWithContext(c.Request.Context(), method, upstreamURL, nil)
 	if err != nil {
 		// 500 — we cannot even build the upstream request; that's a
@@ -622,9 +694,7 @@ func streamFromPlugin(c *gin.Context, src, id string) {
 	if resp.ContentLength > streamBodyCapBytes {
 		resp.Header.Del("Content-Length")
 	}
-	for k, v := range resp.Header {
-		c.Writer.Header()[k] = v
-	}
+	copyStreamHeaders(c.Writer.Header(), resp.Header)
 	c.Writer.WriteHeader(resp.StatusCode)
 
 	// HEAD preflight carries no body — net/http already gives us NoBody for

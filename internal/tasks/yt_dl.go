@@ -16,6 +16,7 @@ import (
 	"go-music-tag/internal/audioext"
 	"go-music-tag/internal/audit"
 	"go-music-tag/internal/db"
+	"go-music-tag/internal/netguard"
 	"go-music-tag/internal/plugin"
 	"go-music-tag/internal/ytdlp"
 	"gorm.io/gorm"
@@ -257,14 +258,21 @@ func (h *DownloadHandler) runDownloadSource(ctx context.Context, payload *Downlo
 	return nil
 }
 
+// downloadGuard is the SSRF guard applied to plugin-supplied audio URLs
+// in runTagSource (REVIEW.md P1-2). Package-level so the resolver is
+// resolved once; tests inject their own via downloadGuard.Resolver.
+var downloadGuard = netguard.NewGuard()
+
 // runTagSource downloads a TagSource track by asking the plugin for a
 // short-lived audio URL and saving the bytes. This lets users "加入库"
 // from sources like migu / kugou / kuwo, not just YouTube.
 //
-// Security: we use an explicit outbound client with a timeout and a
-// 50 MiB body cap so a malicious upstream can't exhaust the worker. We
-// send a generic browser User-Agent and a music-platform Referer because
-// several CDNs 403 without them.
+// Security: audioURL is plugin-supplied, so it is SSRF-relevant input —
+// the guard below rejects private / loopback / link-local targets before
+// we connect (REVIEW.md P1-2). We also use an explicit outbound client
+// with a timeout and a 50 MiB body cap so a malicious upstream can't
+// exhaust the worker. We send a generic browser User-Agent and a
+// music-platform Referer because several CDNs 403 without them.
 func (h *DownloadHandler) runTagSource(ctx context.Context, payload *DownloadPayload, ts plugin.TagSource) error {
 	// Resolve the upstream audio URL.
 	audioURL, err := ts.GetAudioURL(ctx, payload.VideoID)
@@ -281,6 +289,14 @@ func (h *DownloadHandler) runTagSource(ctx context.Context, payload *DownloadPay
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("download: unsupported audio URL scheme %q", u.Scheme)
+	}
+
+	// SSRF gate (REVIEW.md P1-2). audioURL came from the plugin's
+	// GetAudioURL, so a buggy or compromised plugin could aim the worker at
+	// 127.0.0.1 or a link-local metadata endpoint. Default-deny, matching
+	// the gateway's stream handler and the cover-art fetch path.
+	if err := downloadGuard.Validate(ctx, audioURL); err != nil {
+		return fmt.Errorf("download: audio URL rejected by SSRF guard (%s): %w", payload.Source, err)
 	}
 
 	// Fetch the audio bytes. Cap redirects so a misbehaving upstream can't

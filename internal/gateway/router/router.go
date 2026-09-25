@@ -115,11 +115,20 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// the modal can show a clean "re-preview" prompt.
 		authed.POST("/tag/preview_parse_filenames/", handler.PreviewParseFilenames)
 		authed.POST("/tag/apply_parsed_filenames/", handler.ApplyParsedFilenames)
-		authed.GET("/clear_celery/", handler.ClearAsyncTasks)
-		authed.GET("/active_queue/", handler.ActiveQueue)
-		authed.GET("/task1/", handler.TaskScan)
-		authed.GET("/task2/", handler.TaskClear)
-		authed.GET("/full_scan_folder/", handler.FullScanFolder)
+		// Side-effecting task routes are POST, not GET (REVIEW.md P1-1).
+		// JWTAuth also accepts the JWT from an AUTHORIZATION cookie (the
+		// frontend writes a JS-readable one so <audio> can authenticate),
+		// and SameSite=Lax still sends that cookie on a top-level GET
+		// navigation. With GET, one induced click on a crafted link could
+		// clear the task queue or wipe the database. POST requires a
+		// cross-origin form/fetch to pass a preflight, which we do not
+		// satisfy for these routes. The frontend client already POSTs
+		// these three; /task2/ has no in-app caller and is POST-only now.
+		authed.POST("/clear_celery/", handler.ClearAsyncTasks)
+		authed.GET("/active_queue/", handler.ActiveQueue) // read-only
+		authed.POST("/task1/", handler.TaskScan)
+		authed.POST("/task2/", handler.TaskClear)
+		authed.POST("/full_scan_folder/", handler.FullScanFolder)
 		// Task record list
 		authed.GET("/record/", handler.ListTaskRecords)
 		// Operation history audit log endpoints

@@ -13,7 +13,9 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -49,6 +51,18 @@ func TestMain(m *testing.M) {
 	if dir, err := os.MkdirTemp("", "mtw-testbootstrap-*"); err == nil {
 		config.OverrideBootstrapPathForTest(filepath.Join(dir, ".bootstrap-creds"))
 	}
+
+	// REVIEW.md P1-2: the stream handler now runs every plugin-supplied
+	// upstream URL through netguard, which default-denies loopback. The
+	// stream specs deliberately point at httptest servers on 127.0.0.1, so
+	// the guard has to resolve to a public IP for this test binary only.
+	// The deny path is not lost — TestStreamAudio_SSRFGuardRejectsPrivateUpstream
+	// pins it explicitly rather than relying on every other test happening
+	// to use a private address.
+	streamGuard.Resolver = func(_ context.Context, _ string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("93.184.216.34")}, nil
+	}
+
 	os.Exit(m.Run())
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -516,4 +517,102 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// ─── SSRF guard (REVIEW.md P1-2) ───────────────────────────────────────────
+
+// TestStreamAudio_SSRFGuardRejectsPrivateUpstream pins the deny path.
+//
+// TestMain overrides streamGuard.Resolver so the other stream specs can
+// reach their 127.0.0.1 httptest servers. Without a test that exercises the
+// rejection itself, that override would quietly turn the guard into a no-op
+// for the whole package — this restores the assertion by installing a
+// resolver that reports a loopback address, exactly what production DNS
+// would return for a URL aimed at 127.0.0.1.
+//
+// The threat: upstreamURL comes from a plugin's GetAudioURL, so a buggy or
+// compromised plugin could point the gateway at an internal address and
+// have it fetch on the plugin's behalf.
+func TestStreamAudio_SSRFGuardRejectsPrivateUpstream(t *testing.T) {
+	plugin.ResetForTesting()
+	t.Cleanup(plugin.ResetForTesting)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// If the guard ever regresses to allow, the handler would proxy
+		// this body — so make it unmistakably wrong.
+		_, _ = w.Write([]byte("SHOULD-NEVER-BE-PROXIED"))
+	}))
+	t.Cleanup(upstream.Close)
+
+	plugin.InstallMockTagSource("testplugin", &fakeTagSource{
+		name: "testplugin", displayName: "Test",
+		audioURL: upstream.URL,
+	})
+
+	// Resolve everything to loopback, as real DNS would for 127.0.0.1.
+	orig := streamGuard.Resolver
+	streamGuard.Resolver = func(_ context.Context, _ string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("127.0.0.1")}, nil
+	}
+	t.Cleanup(func() { streamGuard.Resolver = orig })
+
+	r := newStreamTestRouter()
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/stream/?src=testplugin&id=track1", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d (want 502 for a guard-rejected upstream)", w.Code)
+	}
+	if contains(w.Body.String(), "SHOULD-NEVER-BE-PROXIED") {
+		t.Fatal("guard did not block: upstream body reached the client")
+	}
+}
+
+// TestStreamAudio_DropsNonAllowlistedUpstreamHeaders pins the response-header
+// allowlist. The old code copied every upstream header onto our response,
+// which let a source CDN set Set-Cookie (and friends) for the gateway's own
+// origin. Only the headers <audio> needs may survive.
+func TestStreamAudio_DropsNonAllowlistedUpstreamHeaders(t *testing.T) {
+	plugin.ResetForTesting()
+	t.Cleanup(plugin.ResetForTesting)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Set-Cookie", "session=attacker-controlled; Path=/")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'")
+		w.Header().Set("X-Frame-Options", "DENY")
+		_, _ = w.Write([]byte("audio"))
+	}))
+	t.Cleanup(upstream.Close)
+
+	plugin.InstallMockTagSource("testplugin", &fakeTagSource{
+		name: "testplugin", displayName: "Test",
+		audioURL: upstream.URL,
+	})
+
+	r := newStreamTestRouter()
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/stream/?src=testplugin&id=track1", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status=%d (want 200)", w.Code)
+	}
+
+	// Allowlisted: <audio> needs these to play and seek.
+	if got := w.Header().Get("Content-Type"); got != "audio/mpeg" {
+		t.Errorf("Content-Type=%q (want audio/mpeg)", got)
+	}
+	if got := w.Header().Get("Accept-Ranges"); got != "bytes" {
+		t.Errorf("Accept-Ranges=%q (want bytes)", got)
+	}
+
+	// Not allowlisted: an upstream must not set these on our origin.
+	for _, h := range []string{"Set-Cookie", "Content-Security-Policy", "X-Frame-Options"} {
+		if got := w.Header().Get(h); got != "" {
+			t.Errorf("%s was proxied from upstream (=%q); it is not on the allowlist", h, got)
+		}
+	}
 }
