@@ -143,8 +143,13 @@ func Login(c *gin.Context) {
 
 	cfg := config.Current()
 
-	accessToken, _ := generateJWT(cfg.JWTSecret, req.Username)
-	refreshToken, _ := generateJWT(cfg.JWTSecret, req.Username)
+	// Two genuinely different tokens (REVIEW.md P2-8). Both used to be
+	// generateJWT(secret, username) with identical claims and a 7-day TTL,
+	// so the refresh token WAS the access token: leaking either gave full
+	// access for a week, and the refresh endpoint bought no extra security
+	// boundary at all.
+	accessToken, _ := generateAccessToken(cfg.JWTSecret, req.Username)
+	refreshToken, _ := generateRefreshToken(cfg.JWTSecret, req.Username)
 
 	SuccessData(c, gin.H{
 		"access":  accessToken,
@@ -178,8 +183,17 @@ func RefreshToken(c *gin.Context) {
 		FailureStatus(c, http.StatusUnauthorized, "Invalid token claims")
 		return
 	}
+	// A refresh endpoint that accepts an ACCESS token is not a refresh
+	// endpoint: an attacker holding only the short-lived access token
+	// could mint a week-long one for themselves. Enforce the typ claim.
+	// Legacy tokens issued before this change have no "typ" and are
+	// rejected here, which just means one re-login after upgrade.
+	if typ, _ := claims[claimTokenType].(string); typ != tokenTypeRefresh {
+		FailureStatus(c, http.StatusUnauthorized, "Not a refresh token")
+		return
+	}
 	username, _ := claims["sub"].(string)
-	access, _ := generateJWT(cfg.JWTSecret, username)
+	access, _ := generateAccessToken(cfg.JWTSecret, username)
 	SuccessData(c, gin.H{"access": access})
 }
 
@@ -203,14 +217,51 @@ func VerifyToken(c *gin.Context) {
 		FailureStatus(c, http.StatusUnauthorized, "Invalid token")
 		return
 	}
+	// A refresh token must not pass as a bearer credential, or the 2h/7d
+	// split buys nothing — an attacker holding the refresh token could
+	// just present it here.
+	if claims, ok := token.Claims.(jwt.MapClaims); ok {
+		if typ, _ := claims[claimTokenType].(string); typ == tokenTypeRefresh {
+			FailureStatus(c, http.StatusUnauthorized, "Refresh token cannot be used as an access token")
+			return
+		}
+	}
 	SuccessData(c, gin.H{})
 }
 
-func generateJWT(secret, username string) (string, error) {
+// Token lifetimes and the discriminator claim (REVIEW.md P2-8).
+//
+// The access token is what the browser sends on every request, including
+// from the JS-readable cookie, so it is deliberately short-lived. The
+// refresh token is longer-lived but is now only accepted by
+// POST /api/token/refresh/ — never as a bearer credential.
+const (
+	accessTokenTTL  = 2 * time.Hour
+	refreshTokenTTL = 7 * 24 * time.Hour
+
+	claimTokenType   = "typ"
+	tokenTypeAccess  = "access"
+	tokenTypeRefresh = "refresh"
+)
+
+// generateAccessToken mints a short-lived bearer token.
+func generateAccessToken(secret, username string) (string, error) {
+	return generateJWT(secret, username, tokenTypeAccess, accessTokenTTL)
+}
+
+// generateRefreshToken mints the long-lived token accepted only by the
+// refresh endpoint.
+func generateRefreshToken(secret, username string) (string, error) {
+	return generateJWT(secret, username, tokenTypeRefresh, refreshTokenTTL)
+}
+
+func generateJWT(secret, username, tokenType string, ttl time.Duration) (string, error) {
+	now := time.Now()
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": username,
-		"iat": time.Now().Unix(),
-		"exp": time.Now().Add(7 * 24 * time.Hour).Unix(), // 7 days, matching Python
+		"sub":          username,
+		"iat":          now.Unix(),
+		"exp":          now.Add(ttl).Unix(),
+		claimTokenType: tokenType,
 	})
 	return token.SignedString([]byte(secret))
 }

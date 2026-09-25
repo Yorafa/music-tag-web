@@ -122,13 +122,19 @@ func craftAlgNoneToken(subject string) string {
 
 // craftHS256Token signs an HS256 JWT using the given key (used by both
 // happy-path tests AND alg-mismatch tests so we can isolate the alg gate
-// from key validity).
-func craftHS256Token(secret []byte, method jwt.SigningMethod, subject string) string {
-	t := jwt.NewWithClaims(method, jwt.MapClaims{
+// from key validity). The token type claim is written verbatim, so specs
+// can exercise both the typed path and the legacy no-typ path that
+// VerifyToken still tolerates (REVIEW.md P2-8); pass "" to omit it.
+func craftHS256Token(secret []byte, method jwt.SigningMethod, subject, typ string) string {
+	claims := jwt.MapClaims{
 		"sub": subject,
 		"iat": time.Now().Unix(),
 		"exp": time.Now().Add(time.Hour).Unix(),
-	})
+	}
+	if typ != "" {
+		claims[claimTokenType] = typ
+	}
+	t := jwt.NewWithClaims(method, claims)
 	signed, err := t.SignedString(secret)
 	if err != nil {
 		panic(err)
@@ -174,14 +180,73 @@ func TestRefreshToken_AcceptsValidHS256(t *testing.T) {
 		"ALLOW_INSECURE_DEFAULTS": "",
 	})
 	r := newAuthRouter(t)
-	tok := craftHS256Token([]byte("unit-test-secret-do-not-use"), jwt.SigningMethodHS256, "alice")
+	tok := craftHS256Token([]byte("unit-test-secret-do-not-use"), jwt.SigningMethodHS256, "alice", tokenTypeRefresh)
 	body, _ := json.Marshal(map[string]string{"refresh": tok})
 	req := httptest.NewRequest(http.MethodPost, "/api/token/refresh/", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("valid HS256 rejected; status=%d body=%s", w.Code, w.Body.String())
+		t.Fatalf("valid HS256 refresh rejected; status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestRefreshToken_RejectsAccessToken pins P2-8's core property: an access
+// token must not be usable at the refresh endpoint, or the 2h/7d split
+// buys nothing — a leaked short-lived token could be traded for a
+// week-long one.
+func TestRefreshToken_RejectsAccessToken(t *testing.T) {
+	withEnv(t, map[string]string{
+		"JWT_SECRET":              "unit-test-secret-do-not-use",
+		"ALLOW_INSECURE_DEFAULTS": "",
+	})
+	r := newAuthRouter(t)
+	tok := craftHS256Token([]byte("unit-test-secret-do-not-use"), jwt.SigningMethodHS256, "alice", tokenTypeAccess)
+	body, _ := json.Marshal(map[string]string{"refresh": tok})
+	req := httptest.NewRequest(http.MethodPost, "/api/token/refresh/", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("access token accepted at the refresh endpoint; status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestVerifyToken_RejectsRefreshToken is the mirror: a refresh token must
+// not work as a bearer credential.
+func TestVerifyToken_RejectsRefreshToken(t *testing.T) {
+	withEnv(t, map[string]string{
+		"JWT_SECRET":              "unit-test-secret-do-not-use",
+		"ALLOW_INSECURE_DEFAULTS": "",
+	})
+	r := newAuthRouter(t)
+	tok := craftHS256Token([]byte("unit-test-secret-do-not-use"), jwt.SigningMethodHS256, "alice", tokenTypeRefresh)
+	body, _ := json.Marshal(map[string]string{"token": tok})
+	req := httptest.NewRequest(http.MethodPost, "/api/token/verify/", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("refresh token accepted by VerifyToken; status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestVerifyToken_AcceptsAccessToken is the positive control for the
+// check above — otherwise a blanket rejection would also pass it.
+func TestVerifyToken_AcceptsAccessToken(t *testing.T) {
+	withEnv(t, map[string]string{
+		"JWT_SECRET":              "unit-test-secret-do-not-use",
+		"ALLOW_INSECURE_DEFAULTS": "",
+	})
+	r := newAuthRouter(t)
+	tok := craftHS256Token([]byte("unit-test-secret-do-not-use"), jwt.SigningMethodHS256, "alice", tokenTypeAccess)
+	body, _ := json.Marshal(map[string]string{"token": tok})
+	req := httptest.NewRequest(http.MethodPost, "/api/token/verify/", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("access token rejected by VerifyToken; status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 
@@ -223,7 +288,7 @@ func TestRefreshToken_RejectsHS256WithWrongSecret(t *testing.T) {
 		"JWT_SECRET":              "real-secret",
 		"ALLOW_INSECURE_DEFAULTS": "",
 	})
-	tok := craftHS256Token([]byte("different-secret"), jwt.SigningMethodHS256, "alice")
+	tok := craftHS256Token([]byte("different-secret"), jwt.SigningMethodHS256, "alice", tokenTypeRefresh)
 	r := newAuthRouter(t)
 	body, _ := json.Marshal(map[string]string{"refresh": tok})
 	req := httptest.NewRequest(http.MethodPost, "/api/token/refresh/", bytes.NewReader(body))
