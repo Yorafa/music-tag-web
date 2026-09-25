@@ -1,0 +1,73 @@
+#!/bin/sh
+#
+# commit-msg gate — see docs/agents/commit-convention.md for the standard.
+#
+# Rejects two things:
+#   1. Agent attribution trailers ("🤖 Generated with <tool>" /
+#      "Co-Authored-By: <bot>"). Commit messages in this repo describe the
+#      change and its rationale, nothing else.
+#   2. A subject line that does not match `type(scope): summary`.
+#
+# The subject check runs on the first line only, so multi-paragraph bodies
+# are unaffected. Merge commits and amends of existing commits are exempt:
+# `git commit --amend` must not be blocked by a rule the original commit
+# predates, and rebase-generated merge commits carry no authored subject.
+#
+# Install: git config core.hooksPath .githooks
+# (documented in docs/agents/commit-convention.md; the repo does not set it
+# automatically so that a plain `git clone` cannot write to .git/config
+# without the operator asking for it.)
+
+set -eu
+
+msg_file="$1"
+[ -n "${msg_file:-}" ] || exit 0
+
+# Reword-only paths that must not be gated.
+case "${msg_file}" in
+*.COMMIT_EDITMSG|*.MERGE_MSG|*.TAG_EDITMSG) exit 0 ;;
+esac
+
+fail() {
+	echo "" >&2
+	echo "commit rejected: $1" >&2
+	echo "" >&2
+	echo "  expected subject:  type(scope): imperative summary" >&2
+	echo "  e.g.  fix(gateway): fail closed when config write is denied" >&2
+	echo "  e.g.  feat(plugins): add kugou provider" >&2
+	echo "" >&2
+	echo "  types:    feat fix frontend backend infra docs chore polish refactor" >&2
+	echo "            perf test build ci style revert" >&2
+	echo "  no agent attribution trailers (🤖 Generated with / Co-Authored-By: <bot>)" >&2
+	echo "" >&2
+	echo "  full standard: docs/agents/commit-convention.md" >&2
+	echo "  bypass once:   git commit --no-verify" >&2
+	echo "" >&2
+	exit 1
+}
+
+subject="$(sed -n '1p' "$msg_file")"
+
+# --- 1. no agent attribution -------------------------------------------------
+# Matched case-insensitively so "Codex"/"CODEX"/"codebuff" are all caught, and
+# anchored to a line start so prose like "the generated with clause" in a body
+# is not a false positive.
+if grep -qiE '^[[:space:]]*(🤖|Generated with (Codebuff|Claude|ChatGPT|Copilot)|Co-Authored-By:[[:space:]]*(Codebuff|Claude|ChatGPT|Copilot|.*@.*bot))' "$msg_file"; then
+	fail "agent attribution trailer present — commit messages carry no bot provenance"
+fi
+
+# --- 2. subject shape --------------------------------------------------------
+# type(scope): summary   or   type: summary
+#
+# The type list mixes conventional-commit names (feat/fix/docs/chore) with
+# the layer names this repo has actually used for the last ~30 commits
+# (frontend/backend/infra/polish). Both are in the allowlist so the gate
+# enforces *shape and consistency* rather than dictating a vocabulary the
+# project does not otherwise follow. Commits older than the conventional
+# era (freeform Chinese subjects) predate this hook and are never re-checked:
+# commit-msg only runs on new commits.
+if ! printf '%s' "$subject" | grep -qE '^(feat|fix|frontend|backend|infra|docs|chore|polish|refactor|perf|test|build|ci|style|revert)(\([a-z0-9._/-]+\))?: [^ ].*'; then
+	fail "subject does not match type(scope): summary"
+fi
+
+exit 0
