@@ -409,10 +409,14 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
                     setFormData({ ...formData, filename: e.target.value })
                   }
                   className="h-9 text-sm font-mono"
-                  placeholder="支持 $artist / $title 模板；扩展名自动补全"
+                  placeholder="支持 ${artist} / ${title} 模板；扩展名自动补全"
                 />
                 <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                  保存时会同时重命名磁盘上的文件；与当前文件名相同则不做任何改动。
+                  保存时会同时重命名磁盘上的文件；与当前文件名相同则不做任何改动。模板需写成
+                  {' '}
+                  <code className="font-mono">{'${title}'}</code>
+                  {' '}
+                  这样带花括号的形式，写成 $title 会被当作字面量。
                 </p>
               </div>
 

@@ -405,57 +405,6 @@ func applyFileUpdate(filePath string, info map[string]interface{}, renamedTo *st
 	}
 	tmplVars := readFileContext(filePath)
 
-	// Resolve and validate the rename target BEFORE any mutation.
-	//
-	// The collision check used to run at the very end of this function,
-	// after tag.Write and HandleSidecars. That made a doomed rename a
-	// partial one: the file's tags were rewritten and its .lrc / cover
-	// sidecars dropped, and only then did the function report "rename
-	// target already exists" and change nothing about the name. The user
-	// sees a failure but the file has already been modified.
-	//
-	// The rename itself still happens last, because the sidecars are
-	// written next to filePath and the target is always in the same
-	// parent directory.
-	var (
-		renameTarget string
-		renameWanted bool
-	)
-	if v := stringValue(info["filename"]); v != "" {
-		newName := applyTemplate(v, tmplVars)
-		if !strings.HasSuffix(strings.ToLower(newName), strings.ToLower(filepath.Ext(filePath))) {
-			newName = newName + filepath.Ext(filePath)
-		}
-		newName = utils.SanitizePath(newName)
-		parent := filepath.Dir(filePath)
-		target := filepath.Join(parent, newName)
-		// SafeAbs, not SafeJoin(TrimPrefix(...)) (REVIEW.md P2-6).
-		// TrimPrefix returns its input unchanged when the prefix does not
-		// match — which is exactly what happens when MUSIC_DIR is a
-		// symlink, a relative path, or differs in case. SafeJoin then
-		// treats the resulting absolute path as relative and produces
-		// `/app/media/app/media/foo.mp3` without raising anything.
-		safeTarget, sErr := utils.SafeAbs(utils.MusicRoot(), target)
-		if sErr != nil {
-			return fmt.Errorf("rename target unsafe: %w", sErr)
-		}
-		if safeTarget != filePath {
-			// os.Rename silently REPLACES an existing destination. Two
-			// tracks whose filename templates render to the same name
-			// would lose one file with no error and no trace, so the
-			// collision has to be caught before the rename.
-			if _, statErr := os.Stat(safeTarget); statErr == nil {
-				return fmt.Errorf("rename target already exists: %s", filepath.Base(safeTarget))
-			} else if !os.IsNotExist(statErr) {
-				// A permission error or I/O failure on the destination is
-				// not evidence that it is free.
-				return fmt.Errorf("rename target stat: %w", statErr)
-			}
-			renameTarget = safeTarget
-			renameWanted = true
-		}
-	}
-
 	upd := &tag.TagUpdate{}
 	if v := stringValue(info["title"]); v != "" {
 		v = applyTemplate(v, tmplVars)
@@ -510,6 +459,61 @@ func applyFileUpdate(filePath string, info map[string]interface{}, renamedTo *st
 		}
 	}
 
+	// Resolve and validate the rename target BEFORE any mutation.
+	//
+	// The collision check used to run at the very end of this function,
+	// after tag.Write and HandleSidecars. That made a doomed rename a
+	// partial one: the file's tags were rewritten and its .lrc / cover
+	// sidecars dropped, and only then did the function report "rename
+	// target already exists" and change nothing about the name. The user
+	// sees a failure but the file has already been modified.
+	//
+	// It runs here, after `upd` is built but before tag.Write, because
+	// the template has to be expanded against the tags this request is
+	// about to write — see renameTemplateVars.
+	//
+	// The rename itself still happens last, because the sidecars are
+	// written next to filePath and the target is always in the same
+	// parent directory.
+	var (
+		renameTarget string
+		renameWanted bool
+	)
+	if v := stringValue(info["filename"]); v != "" {
+		newName := applyTemplate(v, renameTemplateVars(tmplVars, upd))
+		if !strings.HasSuffix(strings.ToLower(newName), strings.ToLower(filepath.Ext(filePath))) {
+			newName = newName + filepath.Ext(filePath)
+		}
+		newName = utils.SanitizePath(newName)
+		parent := filepath.Dir(filePath)
+		target := filepath.Join(parent, newName)
+		// SafeAbs, not SafeJoin(TrimPrefix(...)) (REVIEW.md P2-6).
+		// TrimPrefix returns its input unchanged when the prefix does not
+		// match — which is exactly what happens when MUSIC_DIR is a
+		// symlink, a relative path, or differs in case. SafeJoin then
+		// treats the resulting absolute path as relative and produces
+		// `/app/media/app/media/foo.mp3` without raising anything.
+		safeTarget, sErr := utils.SafeAbs(utils.MusicRoot(), target)
+		if sErr != nil {
+			return fmt.Errorf("rename target unsafe: %w", sErr)
+		}
+		if safeTarget != filePath {
+			// os.Rename silently REPLACES an existing destination. Two
+			// tracks whose filename templates render to the same name
+			// would lose one file with no error and no trace, so the
+			// collision has to be caught before the rename.
+			if _, statErr := os.Stat(safeTarget); statErr == nil {
+				return fmt.Errorf("rename target already exists: %s", filepath.Base(safeTarget))
+			} else if !os.IsNotExist(statErr) {
+				// A permission error or I/O failure on the destination is
+				// not evidence that it is free.
+				return fmt.Errorf("rename target stat: %w", statErr)
+			}
+			renameTarget = safeTarget
+			renameWanted = true
+		}
+	}
+
 	if err := tag.Write(filePath, upd); err != nil {
 		return fmt.Errorf("write tags: %w", err)
 	}
@@ -546,17 +550,54 @@ func applyTemplate(tmpl string, vars map[string]string) string {
 	return utils.RenderTemplate(tmpl, vars)
 }
 
+// renameTemplateVars returns the template variables for the NEW filename,
+// with the tags this request is about to write laid over the ones read off
+// disk.
+//
+// The detail dialog submits the whole form at once — the corrected title
+// AND the requested filename — so expanding `filename` against the
+// on-disk tags names the file after the value the user just replaced. In
+// the common case (fix a typo, ask for `${artist} - ${title}`) the
+// rendered name then equals the file's current path, the handler sees a
+// no-op, and the rename silently does nothing.
+//
+// Fields the request leaves empty are absent from upd and so keep the
+// on-disk value, matching how tag.Write treats them: an empty string
+// means "leave this tag alone", not "clear it".
+//
+// `filename` is deliberately not overlaid — $filename means the file's
+// CURRENT name, which is what readFileContext already holds.
+func renameTemplateVars(onDisk map[string]string, upd *tag.TagUpdate) map[string]string {
+	vars := make(map[string]string, len(onDisk)+6)
+	for k, v := range onDisk {
+		vars[k] = v
+	}
+	if upd.Title != nil {
+		vars["title"] = *upd.Title
+	}
+	if upd.Artist != nil {
+		vars["artist"] = strings.Join(upd.Artist, ", ")
+	}
+	if upd.Album != nil {
+		vars["album"] = *upd.Album
+	}
+	if upd.AlbumArtist != nil {
+		vars["albumartist"] = *upd.AlbumArtist
+	}
+	if upd.DiscNumber != nil {
+		vars["discnumber"] = firstBeforeSlash(*upd.DiscNumber)
+	}
+	if upd.TrackNumber != nil {
+		vars["tracknumber"] = firstBeforeSlash(*upd.TrackNumber)
+	}
+	return vars
+}
+
 // readFileContext 与 Django MusicIDS.var_dict() 字段对齐。
 func readFileContext(path string) map[string]string {
 	info, err := tag.Read(path)
 	if err != nil {
 		return map[string]string{}
-	}
-	idx := func(s string) string {
-		if i := strings.Index(s, "/"); i >= 0 {
-			return strings.TrimSpace(s[:i])
-		}
-		return strings.TrimSpace(s)
 	}
 	return map[string]string{
 		"title":       info.Title,
@@ -564,9 +605,18 @@ func readFileContext(path string) map[string]string {
 		"albumartist": info.AlbumArtist,
 		"album":       info.Album,
 		"filename":    info.Filename,
-		"discnumber":  idx(info.DiscNumber),
-		"tracknumber": idx(info.TrackNumber),
+		"discnumber":  firstBeforeSlash(info.DiscNumber),
+		"tracknumber": firstBeforeSlash(info.TrackNumber),
 	}
+}
+
+// firstBeforeSlash 取 "3/12" 里的 "3"：Vorbis 的 disc/track 编号常写成
+// "总数/本盘" 形式，模板里要的是前者。
+func firstBeforeSlash(s string) string {
+	if i := strings.Index(s, "/"); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return strings.TrimSpace(s)
 }
 
 func mergeInfo(base, override map[string]interface{}) map[string]interface{} {
