@@ -178,8 +178,15 @@ cp .env.example .env           # 与 docker-compose.yml 同目录，Compose 才�
 
 ```bash
 mkdir -p ./music ./data         # 首次需要（相对仓库根路径）
+# 容器以 uid/gid 10001 非 root 运行（REVIEW.md P3-2）；bind mount 的属主
+# 来自宿主机，镜像里改不了，所以这两个目录必须交给 10001。
+# 从旧版本（root 运行）升级时这一步是必须的，否则 gateway 会 FATAL。
+sudo chown -R 10001:10001 ./music ./data
 docker compose up -d --build    # 后续只要不加 plugin / 不改 .env，重启即可跳过 --build
 ```
+
+> 不想改宿主机目录属主？也可以在 compose 里给 `gateway` / `worker` 加 `user: "${UID}:${GID}"`（用你自己在宿主机上的 uid），但那样容器内就是你的 uid 而不是 10001 了。
+> `audio-cache` 是 named volume，首次创建时 Docker 会从镜像里的 `/tmp/audio_cache` 目录（含属主）拷贝内容，不需要任何额外操作。
 
 不用 Docker 时才需要手动构建前端：`cd frontend && npm install && npm run build`，产物落盘到仓库根 `./static/dist/`，再把 `STATIC_DIR` 指向仓库根 `./static`。
 
@@ -203,6 +210,7 @@ docker compose up -d --build    # 后续只要不加 plugin / 不改 .env，重�
 - **yt-dlp 参数 sanitize**：`internal/ytdlp` 阻止 `--exec=` 注入，format / quality / output 走 enum；三层防线（gateway 预校验 → worker 重放校验 → youtube 插件拼 argv 前再校验）。
 - **admin / JWT 默认值 Fail-closed**：`config.Load()` 看到占位 `JWT_SECRET` 会 `log.Fatalf`；`ADMIN_USERS` 未设且无 dev flag → `loadUsers()` 返回空。
 - **gRPC TLS 可选**：插件间互联走 plaintext 或 TLS，env 控制 `GRPC_USE_TLS=1` + 可选 `GRPC_TLS_CA_FILE`。
+- **容器非 root**：gateway / worker / plugin 镜像均以 uid/gid 10001 运行（REVIEW.md P3-2），不再以 root 挂载整个曲库。升级时需 `chown -R 10001:10001 ./music ./data`。
 
 这些项的测试分别落在 `internal/utils/pathjoin_test.go`、`internal/netguard/ssrf_test.go`、`internal/ytdlp/sanitize_test.go`、`internal/gateway/middleware/cors_test.go`。
 

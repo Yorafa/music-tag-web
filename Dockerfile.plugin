@@ -11,10 +11,11 @@
 FROM golang:alpine AS builder
 
 ARG PLUGIN=netease
-# upx compresses the static Go binary (~16 MB → ~6 MB) in the builder
-# stage; the runtime stage copies the packed file. Verified safe for the
-# CGO_ENABLED=0 static plugin binaries.
-RUN apk add --no-cache git upx
+#
+# REVIEW.md P3-3: UPX is gone. Packing Go binaries is fragile (a packed
+# binary that traps in the wrong place is undebuggable) and it disables the
+# profiler for a ~10 MB saving.
+RUN apk add --no-cache git
 
 WORKDIR /build
 
@@ -27,8 +28,7 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /plugin ./cmd/plugins/${PLUGIN} \
-    && upx -q /plugin
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /plugin ./cmd/plugins/${PLUGIN}
 
 FROM alpine:3.20
 # Only the youtube plugin shells out to yt-dlp (search + download with
@@ -40,8 +40,13 @@ FROM alpine:3.20
 # by skipping the Python/ffmpeg runtime entirely (previously every plugin
 # image carried yt-dlp + its dependency tree → ~220 MB each).
 #
-# yt-dlp is installed fresh via pip (nightly) rather than Alpine's frozen
-# 2024.x package, which breaks YouTube signature extraction weekly.
+# yt-dlp is installed fresh via pip rather than Alpine's frozen 2024.x
+# package, which breaks YouTube signature extraction weekly — but the
+# version is PINNED (REVIEW.md P3-10). `--pre` used to pull the nightly, so
+# two builds of the same commit shipped different binaries and a nightly
+# regression was indistinguishable from a code change. Bump YTDLP_VERSION
+# deliberately; it is a build arg, so pinning it in CI is one --build-arg
+# away rather than an edit.
 # ffmpeg is required by yt-dlp's --extract-audio post-processor (the worker
 # forwards output_format mp3/m4a/vorbis/wav from the frontend).
 #
@@ -54,6 +59,9 @@ FROM alpine:3.20
 # worker image, which already has ffmpeg, so there it is only +96 KB). That
 # cost lands on this one plugin image; the other six stay ~13 MB.
 ARG PLUGIN=netease
+# REVIEW.md P3-10. Latest stable at the time of writing; Alpine 3.20 ships
+# Python 3.12, which yt-dlp supports.
+ARG YTDLP_VERSION=2026.8.19
 RUN apk add --no-cache ca-certificates tzdata \
     && if [ "${PLUGIN}" = "acoustid" ]; then \
          apk add --no-cache chromaprint \
@@ -61,24 +69,53 @@ RUN apk add --no-cache ca-certificates tzdata \
        fi \
     && if [ "${PLUGIN}" = "youtube" ]; then \
          apk add --no-cache python3 py3-pip ffmpeg \
-         && pip3 install --no-cache-dir --break-system-packages -U --pre "yt-dlp[default]" \
+         && pip3 install --no-cache-dir --break-system-packages \
+              "yt-dlp[default]==${YTDLP_VERSION}" \
          && yt-dlp --version \
          # pip / setuptools / pkg_resources are build-time only; yt-dlp is a
          # self-contained script, so strip them + bytecode caches from the
-         # runtime image (~24 MB saved).
-         && rm -rf /usr/lib/python3.12/site-packages/pip \
-                   /usr/lib/python3.12/site-packages/setuptools* \
-                   /usr/lib/python3.12/site-packages/pkg_resources* \
-                   /usr/lib/python3.12/site-packages/_distutils_hack \
+         # runtime image (~24 MB saved). The site-packages path is asked of
+         # the interpreter rather than hardcoded — the previous
+         # /usr/lib/python3.12/... literally stopped matching anything the
+         # day Alpine moved its Python, and `rm -rf` on a stale path fails
+         # silently, so the "optimisation" would just quietly stop
+         # happening (REVIEW.md P3-10).
+         && PYSITE="$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" \
+         && rm -rf "${PYSITE}/pip" "${PYSITE}"/setuptools* \
+                   "${PYSITE}"/pkg_resources* "${PYSITE}"/_distutils_hack \
                    # remove this too — it imports _distutils_hack at startup,
                    # which would print a warning on every yt-dlp invocation.
-                   /usr/lib/python3.12/site-packages/distutils-precedence.pth \
-                   /usr/bin/pip*; \
-         find /usr/lib/python3.12 -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true; \
+                   "${PYSITE}"/distutils-precedence.pth \
+                   /usr/bin/pip* \
+         # belt and braces: a nonsense PYSITE means the rm above silently
+         # did nothing, so at least say so out loud.
+         && test -d "${PYSITE}" \
+         && { test ! -e "${PYSITE}/pip" \
+              || echo "WARNING: pip survived at ${PYSITE}/pip; image is ~24MB larger than expected"; } \
+         ; \
+         find /usr/lib -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true; \
        fi
 ENV TZ=Asia/Shanghai
 
-COPY --from=builder /plugin /usr/local/bin/plugin
+# REVIEW.md P3-2: run unprivileged. A plugin is the least trusted process in
+# the stack — it parses third-party API responses and shells out to yt-dlp —
+# and the youtube one writes into the shared audio cache, so root here is
+# root on the host.
+#
+# See Dockerfile.gateway for why the uid is fixed and what the operator has
+# to chown on the host. The audio cache is a NAMED volume, so Docker seeds a
+# fresh one from this directory with its ownership intact and no host-side
+# step is needed.
+ARG APP_UID=10001
+ARG APP_GID=10001
+RUN addgroup -g "${APP_GID}" -S app \
+    && adduser -u "${APP_UID}" -G app -S -H -s /sbin/nologin app \
+    && mkdir -p /tmp/audio_cache \
+    && chown ${APP_UID}:${APP_GID} /tmp/audio_cache
+
+COPY --from=builder --chown=${APP_UID}:${APP_GID} /plugin /usr/local/bin/plugin
+
+USER ${APP_UID}:${APP_GID}
 
 EXPOSE 50051
 ENTRYPOINT ["plugin"]

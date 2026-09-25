@@ -199,10 +199,13 @@ func loadOrGenerate() *bootstrapCreds {
 	}
 	if err := writeBootstrap(c); err != nil {
 		log.Fatalf("[config] FATAL: cannot persist bootstrap creds to %s: %v\n"+
-			"  This usually means the host ./data directory is missing or not writable.\n"+
-			"  Fix: ensure ./data exists (mkdir -p ./data) and is writable, OR pin\n"+
-			"  real values in .env for JWT_SECRET / ADMIN_USERS / WEBHOOK_INTERNAL_TOKEN,\n"+
-			"  OR set ALLOW_INSECURE_DEFAULTS=1 to opt out of fail-closed enforcement.",
+			"  The containers now run as uid/gid 10001 (REVIEW.md P3-2), so the host\n"+
+			"  bind mount has to belong to that user — a ./data left root-owned by an\n"+
+			"  earlier version is the usual cause.\n"+
+			"  Fix: chown -R 10001:10001 ./data ./music (and ./music for the library),\n"+
+			"  OR pin real values in .env for JWT_SECRET / ADMIN_USERS /\n"+
+			"  WEBHOOK_INTERNAL_TOKEN, OR set ALLOW_INSECURE_DEFAULTS=1 to opt out of\n"+
+			"  fail-closed enforcement.",
 			bootstrapPath, err)
 	}
 	return c

@@ -2,8 +2,10 @@ FROM golang:alpine AS builder
 
 # go-sqlite3 needs cgo; pure alpine + CGO_ENABLED=0 produces a stub that
 # crashes worker at boot with "Binary was compiled with 'CGO_ENABLED=0'".
-# upx compresses the Go binary (musl cgo links statically; verified to run).
-RUN apk add --no-cache git gcc musl-dev upx
+#
+# REVIEW.md P3-3: UPX is gone — packing a cgo/musl binary is fragile and
+# breaks the debugger and the profiler, for a few MB.
+RUN apk add --no-cache git gcc musl-dev
 
 WORKDIR /build
 COPY go.mod go.sum ./
@@ -13,8 +15,7 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /worker ./cmd/worker \
-    && upx -q /worker
+    CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /worker ./cmd/worker
 
 FROM alpine:3.20
 # Pure-Go runtime: the only yt-dlp consumer is the youtube plugin (the
@@ -24,6 +25,22 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata
 ENV TZ=Asia/Shanghai
 
-COPY --from=builder /worker /usr/local/bin/worker
+# REVIEW.md P3-2: run unprivileged. The worker writes into the music
+# library (tagging, tidy, yt-dlp staging), so a root process here would
+# hand a compromised plugin a root shell on the host.
+#
+# See Dockerfile.gateway for why the uid is fixed and what the operator has
+# to chown on the host.
+ARG APP_UID=10001
+ARG APP_GID=10001
+RUN addgroup -g "${APP_GID}" -S app \
+    && adduser -u "${APP_UID}" -G app -S -H -s /sbin/nologin app
+
+COPY --from=builder --chown=${APP_UID}:${APP_GID} /worker /usr/local/bin/worker
+
+RUN mkdir -p /app/media /app/data /tmp/audio_cache \
+    && chown -R ${APP_UID}:${APP_GID} /app /tmp/audio_cache
+
+USER ${APP_UID}:${APP_GID}
 
 ENTRYPOINT ["worker"]

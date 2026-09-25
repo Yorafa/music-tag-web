@@ -182,8 +182,15 @@ services:
       args:
         PLUGIN: netease
     container_name: go-music-netease
+    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
+    # be two copies of one number kept in sync by hand — compose passed no
+    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
+    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
+    # variable, so changing it in .env moves them together. (Compose cannot
+    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
+    # still has to be set by hand when a port changes.)
     expose:
-      - "50051"
+      - "${NETEASE_PORT:-50051}"
     # REVIEW.md P1-5: without this the container reports "running" the
     # moment the process exists, which is before Serve() accepts and with
     # no signal at all if the plugin then dies on a bad config. gateway and
@@ -200,6 +207,7 @@ services:
       retries: 6
       start_period: 15s
     environment:
+      NETEASE_PORT: "${NETEASE_PORT:-50051}"
       NETEASE_HEALTH_PORT: "18081"
     restart: unless-stopped
 
@@ -210,8 +218,15 @@ services:
       args:
         PLUGIN: kugou
     container_name: go-music-kugou
+    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
+    # be two copies of one number kept in sync by hand — compose passed no
+    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
+    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
+    # variable, so changing it in .env moves them together. (Compose cannot
+    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
+    # still has to be set by hand when a port changes.)
     expose:
-      - "50052"
+      - "${KUGOU_PORT:-50052}"
     # REVIEW.md P1-5: without this the container reports "running" the
     # moment the process exists, which is before Serve() accepts and with
     # no signal at all if the plugin then dies on a bad config. gateway and
@@ -228,6 +243,7 @@ services:
       retries: 6
       start_period: 15s
     environment:
+      KUGOU_PORT: "${KUGOU_PORT:-50052}"
       KUGOU_HEALTH_PORT: "18082"
     restart: unless-stopped
 
@@ -238,8 +254,15 @@ services:
       args:
         PLUGIN: kuwo
     container_name: go-music-kuwo
+    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
+    # be two copies of one number kept in sync by hand — compose passed no
+    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
+    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
+    # variable, so changing it in .env moves them together. (Compose cannot
+    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
+    # still has to be set by hand when a port changes.)
     expose:
-      - "50053"
+      - "${KUWO_PORT:-50053}"
     # REVIEW.md P1-5: without this the container reports "running" the
     # moment the process exists, which is before Serve() accepts and with
     # no signal at all if the plugin then dies on a bad config. gateway and
@@ -256,6 +279,7 @@ services:
       retries: 6
       start_period: 15s
     environment:
+      KUWO_PORT: "${KUWO_PORT:-50053}"
       KUWO_HEALTH_PORT: "18083"
     restart: unless-stopped
 
@@ -266,8 +290,15 @@ services:
       args:
         PLUGIN: migu
     container_name: go-music-migu
+    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
+    # be two copies of one number kept in sync by hand — compose passed no
+    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
+    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
+    # variable, so changing it in .env moves them together. (Compose cannot
+    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
+    # still has to be set by hand when a port changes.)
     expose:
-      - "50054"
+      - "${MIGU_PORT:-50054}"
     # REVIEW.md P1-5: without this the container reports "running" the
     # moment the process exists, which is before Serve() accepts and with
     # no signal at all if the plugin then dies on a bad config. gateway and
@@ -284,6 +315,7 @@ services:
       retries: 6
       start_period: 15s
     environment:
+      MIGU_PORT: "${MIGU_PORT:-50054}"
       MIGU_HEALTH_PORT: "18084"
     restart: unless-stopped
 
@@ -294,8 +326,15 @@ services:
       args:
         PLUGIN: qmusic
     container_name: go-music-qmusic
+    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
+    # be two copies of one number kept in sync by hand — compose passed no
+    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
+    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
+    # variable, so changing it in .env moves them together. (Compose cannot
+    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
+    # still has to be set by hand when a port changes.)
     expose:
-      - "50055"
+      - "${QMUSIC_PORT:-50055}"
     # REVIEW.md P1-5: without this the container reports "running" the
     # moment the process exists, which is before Serve() accepts and with
     # no signal at all if the plugin then dies on a bad config. gateway and
@@ -312,6 +351,7 @@ services:
       retries: 6
       start_period: 15s
     environment:
+      QMUSIC_PORT: "${QMUSIC_PORT:-50055}"
       QMUSIC_HEALTH_PORT: "18085"
     restart: unless-stopped
 
@@ -322,8 +362,15 @@ services:
       args:
         PLUGIN: musicbrainz
     container_name: go-music-musicbrainz
+    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
+    # be two copies of one number kept in sync by hand — compose passed no
+    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
+    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
+    # variable, so changing it in .env moves them together. (Compose cannot
+    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
+    # still has to be set by hand when a port changes.)
     expose:
-      - "50056"
+      - "${MUSICBRAINZ_PORT:-50056}"
     # REVIEW.md P1-5: without this the container reports "running" the
     # moment the process exists, which is before Serve() accepts and with
     # no signal at all if the plugin then dies on a bad config. gateway and
@@ -340,6 +387,7 @@ services:
       retries: 6
       start_period: 15s
     environment:
+      MUSICBRAINZ_PORT: "${MUSICBRAINZ_PORT:-50056}"
       MUSICBRAINZ_HEALTH_PORT: "18086"
     restart: unless-stopped
 
@@ -350,8 +398,15 @@ services:
       args:
         PLUGIN: acoustid
     container_name: go-music-acoustid
+    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
+    # be two copies of one number kept in sync by hand — compose passed no
+    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
+    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
+    # variable, so changing it in .env moves them together. (Compose cannot
+    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
+    # still has to be set by hand when a port changes.)
     expose:
-      - "50057"
+      - "${ACOUSTID_PORT:-50057}"
     # REVIEW.md P1-5: without this the container reports "running" the
     # moment the process exists, which is before Serve() accepts and with
     # no signal at all if the plugin then dies on a bad config. gateway and
@@ -368,6 +423,7 @@ services:
       retries: 6
       start_period: 15s
     environment:
+      ACOUSTID_PORT: "${ACOUSTID_PORT:-50057}"
       ACOUSTID_HEALTH_PORT: "18087"
     restart: unless-stopped
 
@@ -378,8 +434,15 @@ services:
       args:
         PLUGIN: youtube
     container_name: go-music-youtube
+    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
+    # be two copies of one number kept in sync by hand — compose passed no
+    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
+    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
+    # variable, so changing it in .env moves them together. (Compose cannot
+    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
+    # still has to be set by hand when a port changes.)
     expose:
-      - "50058"
+      - "${YOUTUBE_PORT:-50058}"
     # The youtube plugin is the process that actually RUNS yt-dlp and writes
     # the audio file (internal/plugin/youtube/server.go::tmpDir →
     # $AUDIO_CACHE_DIR/youtube). It must therefore share the same volume as
@@ -397,6 +460,7 @@ services:
       # MUST match gateway + worker (and the audioCacheDir defaults in
       # internal/tasks/yt_dl.go / internal/gateway/handler/stream.go).
       AUDIO_CACHE_DIR: /tmp/audio_cache
+      YOUTUBE_PORT: "${YOUTUBE_PORT:-50058}"
       YOUTUBE_HEALTH_PORT: "18088"
     # REVIEW.md P1-5: without this the container reports "running" the
     # moment the process exists, which is before Serve() accepts and with

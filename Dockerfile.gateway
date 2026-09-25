@@ -29,9 +29,12 @@ FROM golang:alpine AS builder
 # binary boots in "DB unavailable — handlers run in env-only mode".
 # protoc / protobuf-dev are NOT needed: the api/proto/*.pb.go files are
 # checked in, and `go build` never invokes protoc.
-# upx compresses the cgo gateway binary (musl links statically; verified
-# to boot after packing).
-RUN apk add --no-cache git gcc musl-dev upx
+#
+# REVIEW.md P3-3: UPX is gone. Packing a cgo/musl binary is a known-fragile
+# combination, it defeats the debugger and the profiler, and it made crash
+# reports from a user's machine unreproducible — a few MB was not worth it.
+# -ldflags="-s -w" already strips the symbol table.
+RUN apk add --no-cache git gcc musl-dev
 
 WORKDIR /build
 
@@ -42,18 +45,39 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /gateway ./cmd/gateway \
-    && upx -q /gateway
+    CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /gateway ./cmd/gateway
 
 # Stage 3: runtime
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata
 ENV TZ=Asia/Shanghai
 
-COPY --from=builder /gateway /usr/local/bin/gateway
+# REVIEW.md P3-2: run unprivileged. The gateway hosts the unauthenticated
+# /media/* file server and holds write access to the whole music library,
+# so a root process here turns any remote code execution into full host
+# compromise — the single cheapest thing to take away.
+#
+# The uid/gid are fixed and numeric so they can be reproduced on the host
+# side. /app/media and /app/data are BIND mounts, so their ownership comes
+# from the host and the image cannot fix it: the operator must run
+# `chown -R 10001:10001 ./music ./data` once (see README, "Running with
+# Docker"), or set `user:` on the service in compose. The named volume
+# audio-cache needs no such step — Docker seeds a fresh named volume from
+# the image directory below, ownership included.
+ARG APP_UID=10001
+ARG APP_GID=10001
+RUN addgroup -g "${APP_GID}" -S app \
+    && adduser -u "${APP_UID}" -G app -S -H -s /sbin/nologin app
+
+COPY --from=builder --chown=${APP_UID}:${APP_GID} /gateway /usr/local/bin/gateway
 # router.Setup serves STATIC_DIR (default /app/static) at /static and reads
 # <STATIC_DIR>/dist/index.html for the SPA fallback.
-COPY --from=frontend /app/static/dist /app/static/dist
+COPY --from=frontend --chown=${APP_UID}:${APP_GID} /app/static/dist /app/static/dist
+
+RUN mkdir -p /app/media /app/data /tmp/audio_cache \
+    && chown -R ${APP_UID}:${APP_GID} /app /tmp/audio_cache
+
+USER ${APP_UID}:${APP_GID}
 
 EXPOSE 8001
 
