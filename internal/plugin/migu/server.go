@@ -182,7 +182,12 @@ func (sv *Server) doSearch(ctx context.Context, title string, page, limit int) (
 			ID:   miguFirstNonEmpty(item, "contentId", "content_id", "resourceId", "id"),
 			Name: str(item["name"]),
 			Year: "",
-			// Migu reports the track length as `duration`, in SECONDS.
+			// Migu's search response carries NO track length at all
+			// (verified live: the result rows contain contentId, rateFormats,
+			// songDescs, lyricUrl … and nothing resembling a duration), so
+			// this stays 0 and the row renders without a time. The read is
+			// kept because it costs nothing and will light up by itself if
+			// Migu ever adds the field.
 			Duration: plugin.DurationFromSeconds(item["duration"]),
 		}
 		if singers, ok := item["singers"].([]interface{}); ok {

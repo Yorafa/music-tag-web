@@ -241,8 +241,8 @@ func songToPB(m map[string]interface{}) *pb.Song {
 
 // normalize promotes the per-song map to a stable schema. It accepts
 // BOTH upstream key variants:
-//   - /api/search/get      uses `artists`, `album`, `picUrl`
-//   - /api/cloudsearch/get uses `ar`, `al`, `picUrl`
+//   - /api/search/get      uses `artists`, `album`, `picUrl`, `duration`
+//   - /api/cloudsearch/get uses `ar`, `al`, `picUrl`, `dt`
 //
 // Without this, switching between endpoints would orphan a code path and
 // we'd ship empty Artist/Album/AlbumImg values at runtime.
@@ -290,12 +290,14 @@ func (s *Server) normalize(songs []map[string]interface{}) []map[string]interfac
 		song["album_id"] = albumID
 		song["album_img"] = cover
 		song["year"] = year
-		// Track length. NetEase reports `duration` in MILLISECONDS
-		// (verified against /api/search/get: 119133 for a 1:59 track),
-		// unlike every other source here. Normalize to seconds once, at
-		// the edge, so nothing downstream has to remember which source
-		// was which. A missing/zero value stays 0 = "unknown".
-		song["duration"] = plugin.DurationFromMillis(song["duration"])
+		// Track length. NetEase is the one source that reports
+		// MILLISECONDS (verified live: 119133 for a 1:59 track), and it
+		// names the field differently depending on the endpoint — the
+		// cloudsearch shape used by the linux-forward path calls it `dt`,
+		// while the legacy /api/search/get fallback calls it `duration`.
+		// Read both, as the artist/album keys above already do, or the
+		// primary path silently reports no length at all.
+		song["duration"] = plugin.DurationFromMillis(firstPresent(song, "dt", "duration"))
 	}
 	return songs
 }
@@ -303,6 +305,19 @@ func (s *Server) normalize(songs []map[string]interface{}) []map[string]interfac
 // pickList accepts an interface{} value (map[string]interface{}) and returns
 // the [] it contains under whichever of the candidate keys is present. Used
 // by the upstream-key-agnostic normalize() flow.
+// firstPresent returns the value of the first key that is actually
+// present, so a shape that omits one spelling falls through to the other.
+// Unlike pickStr it does not coerce, because a present-but-zero value is
+// meaningfully different from an absent one.
+func firstPresent(m map[string]interface{}, keys ...string) interface{} {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			return v
+		}
+	}
+	return nil
+}
+
 func pickList(m map[string]interface{}, keys ...string) []interface{} {
 	for _, k := range keys {
 		if v, ok := m[k]; ok {

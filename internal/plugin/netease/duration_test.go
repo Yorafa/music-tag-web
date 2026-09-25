@@ -16,14 +16,15 @@ import (
 //
 // 119133 is the real upstream value for a 1:59 track, and NetEase is the
 // one source in the fleet that reports milliseconds; every other source
-// would be off by 1000x if this divide were ever dropped.
+// would be off by 1000x if this divide were ever dropped. The field is
+// spelled `dt` on the cloudsearch endpoint the plugin actually uses.
 func TestNormalize_ConvertsMillisToSeconds(t *testing.T) {
 	s := &Server{}
 	out := s.normalize([]map[string]interface{}{
 		{
-			"id":       float64(1),
-			"name":     "Jocelyn Flores",
-			"duration": float64(119133),
+			"id":   float64(1),
+			"name": "Jocelyn Flores",
+			"dt":   float64(119133),
 		},
 	})
 	if len(out) != 1 {
@@ -32,6 +33,28 @@ func TestNormalize_ConvertsMillisToSeconds(t *testing.T) {
 	got := plugin.DurationFromSeconds(out[0]["duration"])
 	if got < 118 || got > 120 {
 		t.Errorf("duration = %v seconds, want ~119 (1:59) — the millisecond divide is missing", got)
+	}
+}
+
+// The legacy /api/search/get fallback spells the same field `duration`,
+// and it is the shape a unit-test fixture is most likely to be written
+// from. Both spellings have to work, because the primary linux-forward
+// path uses `dt` and a reader that only knows `duration` reports no
+// length on every real search while its own tests stay green.
+func TestNormalize_AcceptsBothDurationSpellings(t *testing.T) {
+	s := &Server{}
+	cases := map[string]interface{}{
+		"dt":       float64(119133), // cloudsearch (primary path)
+		"duration": float64(119133), // legacy /api/search/get
+	}
+	for key, val := range cases {
+		out := s.normalize([]map[string]interface{}{
+			{"id": float64(1), "name": "x", key: val},
+		})
+		got := plugin.DurationFromSeconds(out[0]["duration"])
+		if got < 118 || got > 120 {
+			t.Errorf("key %q: duration = %v, want ~119", key, got)
+		}
 	}
 }
 
