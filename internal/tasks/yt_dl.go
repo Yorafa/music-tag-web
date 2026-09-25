@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -21,6 +22,69 @@ import (
 	"go-music-tag/internal/ytdlp"
 	"gorm.io/gorm"
 )
+
+// upsertDownloadFolder records a downloaded file as a music_folder row.
+//
+// A download has two possible keys — the video id (its long-term identity:
+// the same video fetched again must update one row, not accumulate copies)
+// and the path it landed on (unique since REVIEW.md P2-5, and already
+// claimed by the scanner for anything it has walked). The two can disagree,
+// so all four combinations are handled explicitly:
+//
+//	neither known          → insert
+//	uid known, path free   → move the existing row to the new path
+//	uid known, path taken  → the scanner owns that path; refresh its row
+//	                        and leave the video id where it is, or two
+//	                        rows would claim the same uid and the folder
+//	                        tree would fork
+//	uid free, path taken   → adopt the scanner's row and take the video id
+//
+// This also replaces a FirstOrCreate that never actually updated an
+// existing row (GORM's FirstOrCreate only inserts), so a re-download used
+// to leave the stored size and file type stale.
+func upsertDownloadFolder(tx *gorm.DB, folder db.Folder) error {
+	var byUID, byPath db.Folder
+	uidErr := tx.Where("uid = ?", folder.UID).First(&byUID).Error
+	pathErr := tx.Where("path = ?", folder.Path).First(&byPath).Error
+	if uidErr != nil && !errors.Is(uidErr, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("look up folder uid %q: %w", folder.UID, uidErr)
+	}
+	if pathErr != nil && !errors.Is(pathErr, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("look up folder path %q: %w", folder.Path, pathErr)
+	}
+	uidFound, pathFound := uidErr == nil, pathErr == nil
+
+	var (
+		target     int64
+		includeUID bool
+	)
+	switch {
+	case !uidFound && !pathFound:
+		return tx.Create(&folder).Error
+	case uidFound && (!pathFound || byPath.ID == byUID.ID):
+		target, includeUID = byUID.ID, true
+	case uidFound:
+		// The video is known but the file landed somewhere the scanner has
+		// already indexed. Refresh that row; the video id stays with the
+		// old one.
+		target = byPath.ID
+	default:
+		// The path is indexed but the video is new: adopt the row.
+		target, includeUID = byPath.ID, true
+	}
+
+	updates := map[string]any{
+		"path":       folder.Path,
+		"name":       folder.Name,
+		"size":       folder.Size,
+		"file_type":  folder.FileType,
+		"updated_at": folder.UpdatedAt,
+	}
+	if includeUID {
+		updates["uid"] = folder.UID
+	}
+	return tx.Model(&db.Folder{}).Where("id = ?", target).Updates(updates).Error
+}
 
 // AudioCacheRoot returns the per-source staging directory downloaded audio
 // files land in (shared with the gateway /api/stream handler's glob lookup).
@@ -228,9 +292,7 @@ func (h *DownloadHandler) runDownloadSource(ctx context.Context, payload *Downlo
 		Size:      dlSize,
 		UpdatedAt: now,
 	}
-	if err := h.DB.WithContext(ctx).Where("uid = ?", folder.UID).
-		Attrs(folder).
-		FirstOrCreate(&folder).Error; err != nil {
+	if err := upsertDownloadFolder(h.DB.WithContext(ctx), folder); err != nil {
 		return fmt.Errorf("download: upsert folder: %w", err)
 	}
 
@@ -375,9 +437,7 @@ func (h *DownloadHandler) runTagSource(ctx context.Context, payload *DownloadPay
 	if info, err := os.Stat(libraryPath); err == nil {
 		folder.Size = info.Size()
 	}
-	if err := h.DB.WithContext(ctx).Where("uid = ?", folder.UID).
-		Attrs(folder).
-		FirstOrCreate(&folder).Error; err != nil {
+	if err := upsertDownloadFolder(h.DB.WithContext(ctx), folder); err != nil {
 		return fmt.Errorf("download: upsert folder: %w", err)
 	}
 

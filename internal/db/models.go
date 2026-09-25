@@ -8,9 +8,24 @@ import "time"
 
 // Folder 镜像 music.models.Folder。
 type Folder struct {
-	ID           int64     `gorm:"column:id;primaryKey;autoIncrement"`
-	Name         string    `gorm:"column:name"`
-	Path         string    `gorm:"column:path;index"`
+	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
+
+	// One filesystem path is one row (REVIEW.md P2-5): fullScan used to
+	// blind-INSERT a fresh uid per run, so every repeated scan doubled the
+	// table.
+	//
+	// The index is NAMED on purpose. GORM derives an unnamed index's name
+	// from the column alone (`idx_music_folder_path`) whether or not it is
+	// unique, and AutoMigrate skips creation when an index of that name
+	// already exists — so on any database built before this change, an
+	// unnamed `uniqueIndex` would have been silently accepted as "already
+	// there" and uniqueness would never be installed. The explicit name
+	// makes it a genuinely new index; the now-redundant non-unique one is
+	// left in place rather than dropped, since dropping is not worth a
+	// migration that could fail on a locked table.
+	Path string `gorm:"column:path;uniqueIndex:uni_music_folder_path"`
+	Name string `gorm:"column:name"`
+
 	Size         int64     `gorm:"column:size"`
 	CreatedAt    time.Time `gorm:"column:created_at;autoCreateTime"`
 	LastScanTime time.Time `gorm:"column:last_scan_time;autoUpdateTime"`

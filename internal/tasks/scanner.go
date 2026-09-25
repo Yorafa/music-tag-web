@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"go-music-tag/internal/audioext"
 	"go-music-tag/internal/db"
@@ -60,6 +61,11 @@ func (h *FullScanHandler) fullScan(ctx context.Context, subPaths [][2]string) er
 	}
 	const batchSize = 500
 	batch := make([]db.Folder, 0, batchSize)
+	// REVIEW.md P2-5: a second full scan used to INSERT a brand-new uid for
+	// every path, doubling the table each time. Reuse the uid already on
+	// disk so the folder tree keeps its identity, and let flushBatch's
+	// upsert refresh the row in place.
+	uidByPath := loadFolderUIDs(h.DB)
 	for len(stack) > 0 {
 		select {
 		case <-ctx.Done():
@@ -83,7 +89,7 @@ func (h *FullScanHandler) fullScan(ctx context.Context, subPaths [][2]string) er
 				log.Printf("[scan] read %s: %v", dir, err)
 				continue
 			}
-			myUID := uuid.New().String()
+			myUID := uidForPath(uidByPath, dir)
 			batch = append(batch, db.Folder{
 				Name: filepath.Base(dir), Path: dir,
 				FileType: "folder", UID: myUID, ParentID: parentUID,
@@ -109,8 +115,8 @@ func (h *FullScanHandler) fullScan(ctx context.Context, subPaths [][2]string) er
 				if e.IsDir() {
 					stack = append(stack, [2]string{myUID, filepath.Join(dir, e.Name())})
 				} else {
-					fileUID := uuid.New().String()
 					filePath := filepath.Join(dir, e.Name())
+					fileUID := uidForPath(uidByPath, filePath)
 					ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filePath), "."))
 					if audioext.IsLibraryExt(ext) {
 						batch = append(batch, db.Folder{
@@ -129,7 +135,7 @@ func (h *FullScanHandler) fullScan(ctx context.Context, subPaths [][2]string) er
 			}
 		} else {
 			// file entry (already-popped from parent dir); record inline
-			myUID := uuid.New().String()
+			myUID := uidForPath(uidByPath, dir)
 			ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(dir), "."))
 			if audioext.IsLibraryExt(ext) {
 				batch = append(batch, db.Folder{
@@ -157,11 +163,60 @@ func (h *FullScanHandler) fullScan(ctx context.Context, subPaths [][2]string) er
 	return nil
 }
 
+// loadFolderUIDs returns the existing path -> uid mapping, or an empty map
+// if the table cannot be read. A failure here is not fatal: the scan then
+// just mints fresh uids, which is what it always did — the upsert in
+// flushBatch keeps the table from growing regardless.
+func loadFolderUIDs(conn *gorm.DB) map[string]string {
+	out := make(map[string]string)
+	if conn == nil {
+		return out
+	}
+	var rows []struct {
+		Path string
+		UID  string
+	}
+	if err := conn.Model(&db.Folder{}).Select("path", "uid").Find(&rows).Error; err != nil {
+		log.Printf("[scan] preload folder uids: %v", err)
+		return out
+	}
+	for _, r := range rows {
+		if r.UID != "" {
+			out[r.Path] = r.UID
+		}
+	}
+	return out
+}
+
+// uidForPath returns a stable uid for path, minting and remembering one on
+// first sight. Remembering intra-scan matters too: a caller-supplied
+// subPaths list that names the same directory twice would otherwise produce
+// two rows fighting over the unique index.
+func uidForPath(m map[string]string, path string) string {
+	if uid, ok := m[path]; ok && uid != "" {
+		return uid
+	}
+	uid := uuid.New().String()
+	m[path] = uid
+	return uid
+}
+
+// flushBatch writes a batch of folder rows, refreshing any path that is
+// already on disk rather than inserting beside it (REVIEW.md P2-5).
+//
+// `uid` is deliberately absent from the update list: the uid is the row's
+// identity, children point at it, and the caller has just re-read it from
+// disk. `state` is absent for the same reason — it is owned by
+// updateScan ("updated"), and a full scan stamping "scanning" over it would
+// discard the more meaningful value.
 func flushBatch(conn *gorm.DB, rows []db.Folder) {
 	if len(rows) == 0 || conn == nil {
 		return
 	}
-	if err := conn.CreateInBatches(rows, 500).Error; err != nil {
+	if err := conn.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "path"}},
+		DoUpdates: clause.AssignmentColumns([]string{"name", "size", "file_type", "parent_id", "updated_at", "last_scan_time"}),
+	}).CreateInBatches(rows, 500).Error; err != nil {
 		log.Printf("[scan] flush batch err: %v", err)
 	}
 }
