@@ -14,11 +14,11 @@ import (
 func seedTags(t *testing.T, music, name, title, artist, album string) string {
 	t.Helper()
 	path := testaudio.SeedMP3(t, music, name)
-	if err := applyFileUpdate(path, map[string]interface{}{
+	if _, err := applyFileUpdate(path, map[string]interface{}{
 		"title":  title,
 		"artist": artist,
 		"album":  album,
-	}, nil); err != nil {
+	}); err != nil {
 		t.Fatalf("seed tags: %v", err)
 	}
 	return path
@@ -43,15 +43,15 @@ func TestApplyFileUpdate_FilenameTemplateSeesPendingTags(t *testing.T) {
 		t.Setenv("MUSIC_DIR", music)
 		src := seedTags(t, music, "stale.mp3", "Old Title", "Seed Artist", "Seed Album")
 
-		var renamedTo string
-		if err := applyFileUpdate(src, map[string]interface{}{
+		res, err := applyFileUpdate(src, map[string]interface{}{
 			"title":    "BrandNewTitle",
 			"filename": "${title}",
-		}, &renamedTo); err != nil {
+		})
+		if err != nil {
 			t.Fatalf("applyFileUpdate: %v", err)
 		}
-		if renamedTo != "BrandNewTitle.mp3" {
-			t.Errorf("renamedTo = %q, want %q — the template rendered against the stale on-disk title", renamedTo, "BrandNewTitle.mp3")
+		if res.RenamedTo != "BrandNewTitle.mp3" {
+			t.Errorf("res.RenamedTo = %q, want %q — the template rendered against the stale on-disk title", res.RenamedTo, "BrandNewTitle.mp3")
 		}
 	})
 
@@ -60,17 +60,17 @@ func TestApplyFileUpdate_FilenameTemplateSeesPendingTags(t *testing.T) {
 		t.Setenv("MUSIC_DIR", music)
 		src := seedTags(t, music, "stale2.mp3", "Seed Title", "Old Artist", "Seed Album")
 
-		var renamedTo string
-		if err := applyFileUpdate(src, map[string]interface{}{
+		res, err := applyFileUpdate(src, map[string]interface{}{
 			"artist":   "NewArtist",
 			"filename": "${artist} - ${title}",
-		}, &renamedTo); err != nil {
+		})
+		if err != nil {
 			t.Fatalf("applyFileUpdate: %v", err)
 		}
 		// The title was NOT in this request, so it must fall back to the
 		// on-disk value rather than rendering empty.
-		if want := "NewArtist - Seed Title.mp3"; renamedTo != want {
-			t.Errorf("renamedTo = %q, want %q", renamedTo, want)
+		if want := "NewArtist - Seed Title.mp3"; res.RenamedTo != want {
+			t.Errorf("res.RenamedTo = %q, want %q", res.RenamedTo, want)
 		}
 	})
 
@@ -79,15 +79,15 @@ func TestApplyFileUpdate_FilenameTemplateSeesPendingTags(t *testing.T) {
 		t.Setenv("MUSIC_DIR", music)
 		src := seedTags(t, music, "stale3.mp3", "Seed Title", "Seed Artist", "Old Album")
 
-		var renamedTo string
-		if err := applyFileUpdate(src, map[string]interface{}{
+		res, err := applyFileUpdate(src, map[string]interface{}{
 			"album":    "NewAlbum",
 			"filename": "${album} - ${title}",
-		}, &renamedTo); err != nil {
+		})
+		if err != nil {
 			t.Fatalf("applyFileUpdate: %v", err)
 		}
-		if want := "NewAlbum - Seed Title.mp3"; renamedTo != want {
-			t.Errorf("renamedTo = %q, want %q", renamedTo, want)
+		if want := "NewAlbum - Seed Title.mp3"; res.RenamedTo != want {
+			t.Errorf("res.RenamedTo = %q, want %q", res.RenamedTo, want)
 		}
 	})
 
@@ -98,14 +98,14 @@ func TestApplyFileUpdate_FilenameTemplateSeesPendingTags(t *testing.T) {
 
 		// Only the filename is supplied. Overlaying the pending tags must
 		// not blank out the ones the request says nothing about.
-		var renamedTo string
-		if err := applyFileUpdate(src, map[string]interface{}{
+		res, err := applyFileUpdate(src, map[string]interface{}{
 			"filename": "${artist} - ${title}",
-		}, &renamedTo); err != nil {
+		})
+		if err != nil {
 			t.Fatalf("applyFileUpdate: %v", err)
 		}
-		if want := "Seed Artist - Seed Title.mp3"; renamedTo != want {
-			t.Errorf("renamedTo = %q, want %q", renamedTo, want)
+		if want := "Seed Artist - Seed Title.mp3"; res.RenamedTo != want {
+			t.Errorf("res.RenamedTo = %q, want %q", res.RenamedTo, want)
 		}
 	})
 
@@ -118,15 +118,15 @@ func TestApplyFileUpdate_FilenameTemplateSeesPendingTags(t *testing.T) {
 		// tag write treats empty as "leave alone", so the template must
 		// agree — otherwise the name is built from a value the file does
 		// not have either.
-		var renamedTo string
-		if err := applyFileUpdate(src, map[string]interface{}{
+		res, err := applyFileUpdate(src, map[string]interface{}{
 			"title":    "",
 			"filename": "${title}",
-		}, &renamedTo); err != nil {
+		})
+		if err != nil {
 			t.Fatalf("applyFileUpdate: %v", err)
 		}
-		if want := "Seed Title.mp3"; renamedTo != want {
-			t.Errorf("renamedTo = %q, want %q", renamedTo, want)
+		if want := "Seed Title.mp3"; res.RenamedTo != want {
+			t.Errorf("res.RenamedTo = %q, want %q", res.RenamedTo, want)
 		}
 	})
 }
@@ -141,10 +141,10 @@ func TestApplyFileUpdate_CollidingRenameStillWritesNothing(t *testing.T) {
 	src := seedTags(t, music, "source.mp3", "Seed Title", "Seed Artist", "Seed Album")
 	taken := seedTags(t, music, "NewAlbum - Seed Title.mp3", "Other", "Other", "Other")
 
-	err := applyFileUpdate(src, map[string]interface{}{
+	_, err := applyFileUpdate(src, map[string]interface{}{
 		"album":    "NewAlbum",
 		"filename": "${album} - ${title}",
-	}, nil)
+	})
 	if err == nil {
 		t.Fatal("applyFileUpdate succeeded — expected a collision error")
 	}

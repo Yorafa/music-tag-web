@@ -24,6 +24,13 @@ export interface UpdateDoneEntry {
   new_file_name?: string;
 }
 
+export interface UpdateWarningEntry {
+  file_full_path?: string;
+  sidecar?: string;
+  target?: string;
+  reason?: string;
+}
+
 /** The new relative path for `oldPath`, or null when it did not move.
  *
  *  Accepts either the raw axios body (the `{result, code, data, message}`
@@ -46,6 +53,32 @@ export function renamedPathFromUpdate(
   if (typeof newName !== 'string' || newName === '') return null;
 
   return joinDir(oldPath, newName);
+}
+
+/** Human-readable notes about sidecars that did not follow their audio
+ *  file, for a toast. Empty when the save was clean.
+ *
+ *  A sidecar is a separate file named after the track (`.lrc`) or its
+ *  album (`cover-<album>.jpg`). Renaming a track moves the audio; if the
+ *  sidecar cannot move with it — a read-only directory, a vanished
+ *  source, a name clash the OS refuses — the save still counts as done,
+ *  because the tags and the new name both landed. Reporting it as a
+ *  failure would be a lie, and staying quiet would leave an orphan the
+ *  user has no way to learn about. */
+export function sidecarWarningsFromUpdate(res: unknown): string[] {
+  if (typeof res !== 'object' || res === null) return [];
+  const env = res as { data?: { warnings?: unknown }; warnings?: unknown };
+
+  const warnings = asArray<UpdateWarningEntry>(env.data?.warnings ?? env.warnings);
+
+  return warnings.map((w) => {
+    const sidecar = typeof w?.sidecar === 'string' ? w.sidecar : 'sidecar';
+    const target = typeof w?.target === 'string' ? w.target : '';
+    const reason = typeof w?.reason === 'string' ? w.reason : '未知原因';
+    return target
+      ? `${sidecar} 未能改名为 ${target}：${reason}`
+      : `${sidecar} 未能跟随重命名：${reason}`;
+  });
 }
 
 /** The file name part of a relative path, without a dependency on

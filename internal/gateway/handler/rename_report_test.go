@@ -34,18 +34,18 @@ func TestApplyFileUpdate_ReportsRename(t *testing.T) {
 		// appends the source extension, so the reported name must include
 		// it. A client that trusted its own input here would store a path
 		// that does not exist.
-		var renamedTo string
-		if err := applyFileUpdate(src, map[string]interface{}{
+		res, err := applyFileUpdate(src, map[string]interface{}{
 			"title":    "Some Title",
 			"filename": "after",
-		}, &renamedTo); err != nil {
+		})
+		if err != nil {
 			t.Fatalf("applyFileUpdate: %v", err)
 		}
 
-		if renamedTo != "after.mp3" {
-			t.Errorf("renamedTo = %q, want %q", renamedTo, "after.mp3")
+		if res.RenamedTo != "after.mp3" {
+			t.Errorf("res.RenamedTo = %q, want %q", res.RenamedTo, "after.mp3")
 		}
-		if _, err := os.Stat(filepath.Join(music, renamedTo)); err != nil {
+		if _, err := os.Stat(filepath.Join(music, res.RenamedTo)); err != nil {
 			t.Errorf("reported name does not resolve on disk: %v", err)
 		}
 		if _, err := os.Stat(src); !os.IsNotExist(err) {
@@ -59,14 +59,14 @@ func TestApplyFileUpdate_ReportsRename(t *testing.T) {
 		src := testaudio.SeedMP3(t, music, "same.mp3")
 
 		// No "filename" key at all: a plain tag write.
-		var renamedTo string
-		if err := applyFileUpdate(src, map[string]interface{}{
+		res, err := applyFileUpdate(src, map[string]interface{}{
 			"title": "Just A Title",
-		}, &renamedTo); err != nil {
+		})
+		if err != nil {
 			t.Fatalf("applyFileUpdate: %v", err)
 		}
-		if renamedTo != "" {
-			t.Errorf("renamedTo = %q, want empty — a client would rewrite the row for a file that did not move", renamedTo)
+		if res.RenamedTo != "" {
+			t.Errorf("res.RenamedTo = %q, want empty — a client would rewrite the row for a file that did not move", res.RenamedTo)
 		}
 	})
 
@@ -79,14 +79,14 @@ func TestApplyFileUpdate_ReportsRename(t *testing.T) {
 		// filename and the user edits only the tags. The handler resolves
 		// the target, finds it equals the source, and skips the rename —
 		// so there is nothing to report and the row must not move.
-		var renamedTo string
-		if err := applyFileUpdate(src, map[string]interface{}{
+		res, err := applyFileUpdate(src, map[string]interface{}{
 			"filename": "unchanged.mp3",
-		}, &renamedTo); err != nil {
+		})
+		if err != nil {
 			t.Fatalf("applyFileUpdate: %v", err)
 		}
-		if renamedTo != "" {
-			t.Errorf("renamedTo = %q, want empty for a no-op rename", renamedTo)
+		if res.RenamedTo != "" {
+			t.Errorf("res.RenamedTo = %q, want empty for a no-op rename", res.RenamedTo)
 		}
 		if _, err := os.Stat(src); err != nil {
 			t.Errorf("file vanished on a no-op rename: %v", err)
@@ -101,15 +101,14 @@ func TestApplyFileUpdate_ReportsRename(t *testing.T) {
 
 		// The collision is detected before any write, so the caller must
 		// not be handed a new name for a file that stayed put.
-		var renamedTo string
-		err := applyFileUpdate(src, map[string]interface{}{
+		res, err := applyFileUpdate(src, map[string]interface{}{
 			"filename": "taken",
-		}, &renamedTo)
+		})
 		if err == nil {
 			t.Fatal("applyFileUpdate succeeded — expected a collision error")
 		}
-		if renamedTo != "" {
-			t.Errorf("renamedTo = %q, want empty on a refused rename", renamedTo)
+		if res.RenamedTo != "" {
+			t.Errorf("res.RenamedTo = %q, want empty on a refused rename", res.RenamedTo)
 		}
 	})
 }

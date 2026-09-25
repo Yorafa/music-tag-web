@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   renamedPathFromUpdate,
+  sidecarWarningsFromUpdate,
   baseNameOf,
   joinDir,
 } from './renameResult';
@@ -239,5 +240,79 @@ describe('the stores and the response agree', () => {
     expect(useWorklistStore.getState().selectedIds).toEqual([newPath]);
     expect(useLibraryStore.getState().rows[0].fullPath).toBe(newPath);
     expect(useDetailStore.getState().target!.fullPath).toBe(newPath);
+  });
+});
+
+describe('sidecarWarningsFromUpdate', () => {
+  /** The handler always sends `warnings`, empty on a clean save.
+   *  Typed `unknown[]` on purpose: one spec feeds it shapes the handler
+   *  cannot produce, which is the point. */
+  function withWarnings(warnings: unknown[]) {
+    return {
+      result: true,
+      code: '200',
+      message: 'success',
+      data: { done: [{ file_full_path: OLD, status: 'updated' }], skipped: [], warnings },
+    };
+  }
+
+  it('is empty on a clean save', () => {
+    // The overwhelmingly common case. A toast here would train the user
+    // to dismiss warnings without reading them, which is exactly when a
+    // real one would be missed.
+    expect(sidecarWarningsFromUpdate(withWarnings([]))).toEqual([]);
+  });
+
+  it('is empty when the handler omits the key entirely', () => {
+    // An older gateway, or a call that took a different path. Absent must
+    // not become one empty-string toast.
+    const res = { result: true, data: { done: [], skipped: [] } };
+    expect(sidecarWarningsFromUpdate(res)).toEqual([]);
+  });
+
+  it('names the sidecar, the name it failed to reach and the reason', () => {
+    const res = withWarnings([
+      {
+        file_full_path: OLD,
+        sidecar: 'old.lrc',
+        target: 'new.lrc',
+        reason: 'rename /a/old.lrc -> /a/new.lrc: permission denied',
+      },
+    ]);
+    expect(sidecarWarningsFromUpdate(res)).toEqual([
+      'old.lrc 未能改名为 new.lrc：rename /a/old.lrc -> /a/new.lrc: permission denied',
+    ]);
+  });
+
+  it('reads an already-unwrapped data as well as the envelope', () => {
+    // Callers sit on both sides of the envelope boundary in this
+    // codebase, and the rename reader already tolerates both.
+    const data = {
+      done: [],
+      skipped: [],
+      warnings: [{ sidecar: 'old.lrc', target: 'new.lrc', reason: 'busy' }],
+    };
+    expect(sidecarWarningsFromUpdate(data)).toEqual(['old.lrc 未能改名为 new.lrc：busy']);
+  });
+
+  it('survives a malformed warning rather than throwing', () => {
+    // A bad shape must not blank the dialog: the save itself succeeded
+    // and the user still needs their tags.
+    expect(sidecarWarningsFromUpdate(withWarnings([{}, null, 7]))).toEqual([
+      'sidecar 未能跟随重命名：未知原因',
+      'sidecar 未能跟随重命名：未知原因',
+      'sidecar 未能跟随重命名：未知原因',
+    ]);
+  });
+
+  it('reports every warning, not just the first', () => {
+    // An album tidy can strand a .lrc and two covers at once; showing
+    // only the first would send the user looking for a problem that is
+    // not there and missing one that is.
+    const res = withWarnings([
+      { sidecar: 'song.lrc', target: 'song.lrc', reason: 'denied' },
+      { sidecar: 'cover-A.jpg', target: 'cover-A.jpg', reason: 'denied' },
+    ]);
+    expect(sidecarWarningsFromUpdate(res)).toHaveLength(2);
   });
 });

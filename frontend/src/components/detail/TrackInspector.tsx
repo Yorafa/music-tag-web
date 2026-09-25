@@ -41,7 +41,11 @@ import {
   getMusicId3,
 } from '@/api/client';
 import { resolveCoverSrc, COVER_PLACEHOLDER_GRADIENTS } from '@/utils/cover';
-import { renamedPathFromUpdate, baseNameOf } from '@/components/detail/renameResult';
+import {
+  renamedPathFromUpdate,
+  sidecarWarningsFromUpdate,
+  baseNameOf,
+} from '@/components/detail/renameResult';
 import { useDetailStore } from '@/store/useDetailStore';
 import type { MusicSource, MusicTagInfo, SongInfo } from '@/types';
 import type { DetailTarget } from '@/store/useDetailStore';
@@ -194,6 +198,12 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
           .push(`已保存并重命名为「${newFileName}」`, 'info');
       } else {
         useNoticeStore.getState().push(`已成功保存「${formData.title || row.fileName}」标签`, 'info');
+      }
+      // The save itself landed; these are the sidecars that did not
+      // follow the file. Warn rather than fail — the tags and the new
+      // name are both saved, and the alternative is a silent orphan.
+      for (const warning of sidecarWarningsFromUpdate(res)) {
+        useNoticeStore.getState().push(warning, 'warn');
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

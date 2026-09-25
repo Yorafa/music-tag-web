@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,8 +81,8 @@ func UpdateID3(c *gin.Context) {
 			Failure(c, "路径不安全: "+err.Error())
 			return
 		}
-		var renamedTo string
-		if err := applyFileUpdate(filePath, info, &renamedTo); err != nil {
+		res, err := applyFileUpdate(filePath, info)
+		if err != nil {
 			if dupErr, ok := err.(ErrDuplicateSkipped); ok {
 				// 记录跳过信息但 handler 整体仍返回成功，避免前端给一行「重复」扔 4xx。
 				report.addSkipped(rawPath, dupErr.Dup)
@@ -92,7 +93,12 @@ func UpdateID3(c *gin.Context) {
 			Failure(c, fmt.Sprintf("update %s: %v", filepath.Base(filePath), err))
 			return
 		}
-		report.addDone(rawPath, renamedTo)
+		report.addDone(rawPath, res.RenamedTo)
+		for _, m := range res.FailedSidecars() {
+			report.addSidecarWarning(rawPath, m)
+			log.Printf("[update_id3] sidecar %s -> %s did not follow %s: %v",
+				filepath.Base(m.From), filepath.Base(m.To), rawPath, m.Err)
+		}
 		audit.Log(c.Request.Context(), audit.ActionUpdateID3, rawPath, "admin", audit.StatusSuccess, 1, info, nil)
 	}
 	SuccessData(c, report.toJSON())
@@ -101,8 +107,21 @@ func UpdateID3(c *gin.Context) {
 // updateBatchReport 是 BatchUpdateID3 / UpdateID3 共用的「哪些写成功、哪些
 // 因重复被跳过」回包包体。给前端 toast / 状态 badge 渲染。
 type updateBatchReport struct {
-	done    []map[string]interface{}
-	skipped []map[string]interface{}
+	done     []map[string]interface{}
+	skipped  []map[string]interface{}
+	warnings []map[string]interface{}
+}
+
+// addSidecarWarning records a sidecar that could not follow its audio
+// file. The write itself succeeded, so this is informational: the client
+// shows it and moves on rather than treating the save as failed.
+func (r *updateBatchReport) addSidecarWarning(path string, m tag.SidecarMove) {
+	r.warnings = append(r.warnings, map[string]interface{}{
+		"file_full_path": path,
+		"sidecar":        filepath.Base(m.From),
+		"target":         filepath.Base(m.To),
+		"reason":         m.Err.Error(),
+	})
 }
 
 // addDone records one successful write. newFileName is non-empty only
@@ -139,9 +158,13 @@ func (r *updateBatchReport) toJSON() map[string]interface{} {
 	if r.skipped == nil {
 		r.skipped = []map[string]interface{}{}
 	}
+	if r.warnings == nil {
+		r.warnings = []map[string]interface{}{}
+	}
 	return map[string]interface{}{
-		"done":    r.done,
-		"skipped": r.skipped,
+		"done":     r.done,
+		"skipped":  r.skipped,
+		"warnings": r.warnings,
 	}
 }
 
@@ -203,8 +226,8 @@ func BatchUpdateID3(c *gin.Context) {
 					"file_full_path": leaf,
 					"filename":       e.Name(),
 				})
-				var renamedTo string
-				if err := applyFileUpdate(stringValue(merged["file_full_path"]), merged, &renamedTo); err != nil {
+				res, err := applyFileUpdate(stringValue(merged["file_full_path"]), merged)
+				if err != nil {
 					if dupErr, ok := err.(ErrDuplicateSkipped); ok {
 						report.addSkipped(relToMusicRoot(leaf), dupErr.Dup)
 						continue
@@ -212,7 +235,12 @@ func BatchUpdateID3(c *gin.Context) {
 					Failure(c, err.Error())
 					return
 				}
-				report.addDone(relToMusicRoot(leaf), renamedTo)
+				report.addDone(relToMusicRoot(leaf), res.RenamedTo)
+				for _, m := range res.FailedSidecars() {
+					report.addSidecarWarning(relToMusicRoot(leaf), m)
+					log.Printf("[batch_update_id3] sidecar %s -> %s did not follow: %v",
+						filepath.Base(m.From), filepath.Base(m.To), m.Err)
+				}
 			}
 			continue
 		}
@@ -224,8 +252,8 @@ func BatchUpdateID3(c *gin.Context) {
 		merged := mergeInfo(req.MusicInfo, map[string]interface{}{
 			"file_full_path": leaf,
 		})
-		var renamedTo string
-		if err := applyFileUpdate(stringValue(merged["file_full_path"]), merged, &renamedTo); err != nil {
+		res, err := applyFileUpdate(stringValue(merged["file_full_path"]), merged)
+		if err != nil {
 			if dupErr, ok := err.(ErrDuplicateSkipped); ok {
 				report.addSkipped(relToMusicRoot(leaf), dupErr.Dup)
 				continue
@@ -233,7 +261,12 @@ func BatchUpdateID3(c *gin.Context) {
 			Failure(c, err.Error())
 			return
 		}
-		report.addDone(relToMusicRoot(leaf), renamedTo)
+		report.addDone(relToMusicRoot(leaf), res.RenamedTo)
+		for _, m := range res.FailedSidecars() {
+			report.addSidecarWarning(relToMusicRoot(leaf), m)
+			log.Printf("[batch_update_id3] sidecar %s -> %s did not follow: %v",
+				filepath.Base(m.From), filepath.Base(m.To), m.Err)
+		}
 	}
 	status := audit.StatusSuccess
 	if len(report.skipped) > 0 && len(report.done) > 0 {
@@ -383,25 +416,43 @@ func relToMusicRoot(abs string) string {
 	return rel
 }
 
+// applyResult reports what applyFileUpdate actually did to one file.
+type applyResult struct {
+	// RenamedTo is the new BASE name when the file was renamed, and empty
+	// otherwise. Only the base name, because the rename target is always
+	// in the same parent directory, so the caller can rebuild the
+	// relative path from the one it already has.
+	RenamedTo string
+	// Sidecars records every sidecar that was asked to follow the file.
+	// An entry with a non-nil Err did not make it; the audio is renamed
+	// regardless, so these become warnings rather than failures.
+	Sidecars []tag.SidecarMove
+}
+
+// FailedSidecars returns only the sidecars that did not land.
+func (r applyResult) FailedSidecars() []tag.SidecarMove {
+	var out []tag.SidecarMove
+	for _, m := range r.Sidecars {
+		if m.Err != nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 // applyFileUpdate 每个文件按 MusicIDS 流：模板 → 写 tag → sidecar → 文件名模板 → 改名。
 //
-// Renamed targets are computed via utils.SafeJoin so callers cannot drive
+// Renamed targets are computed via utils.SafeAbs so callers cannot drive
 // the rename into an arbitrary parent directory.
-// applyFileUpdate writes tags (and sidecars) for one file, renaming it
-// last if info["filename"] asked for a different name.
-//
-// renamedTo, when non-nil, receives the new BASE name after a successful
-// rename and is left untouched otherwise. Only the base name is reported
-// because the rename target is always in the same parent directory, so
-// the caller can rebuild the relative path from the one it already has.
-func applyFileUpdate(filePath string, info map[string]interface{}, renamedTo *string) error {
+func applyFileUpdate(filePath string, info map[string]interface{}) (applyResult, error) {
+	var res applyResult
 	if !isAudioFile(filePath) {
-		return nil
+		return res, nil
 	}
 	// 去重前置检查：caller 通过 info["check_duplicate"]=true 开启；
 	// 命中 Duplicate 即跳过整张文件的写入。
 	if err := runDedupCheck(context.Background(), filePath, info); err != nil {
-		return err
+		return res, err
 	}
 	tmplVars := readFileContext(filePath)
 
@@ -495,7 +546,7 @@ func applyFileUpdate(filePath string, info map[string]interface{}, renamedTo *st
 		// `/app/media/app/media/foo.mp3` without raising anything.
 		safeTarget, sErr := utils.SafeAbs(utils.MusicRoot(), target)
 		if sErr != nil {
-			return fmt.Errorf("rename target unsafe: %w", sErr)
+			return res, fmt.Errorf("rename target unsafe: %w", sErr)
 		}
 		if safeTarget != filePath {
 			// os.Rename silently REPLACES an existing destination. Two
@@ -503,11 +554,11 @@ func applyFileUpdate(filePath string, info map[string]interface{}, renamedTo *st
 			// would lose one file with no error and no trace, so the
 			// collision has to be caught before the rename.
 			if _, statErr := os.Stat(safeTarget); statErr == nil {
-				return fmt.Errorf("rename target already exists: %s", filepath.Base(safeTarget))
+				return res, fmt.Errorf("rename target already exists: %s", filepath.Base(safeTarget))
 			} else if !os.IsNotExist(statErr) {
 				// A permission error or I/O failure on the destination is
 				// not evidence that it is free.
-				return fmt.Errorf("rename target stat: %w", statErr)
+				return res, fmt.Errorf("rename target stat: %w", statErr)
 			}
 			renameTarget = safeTarget
 			renameWanted = true
@@ -515,7 +566,7 @@ func applyFileUpdate(filePath string, info map[string]interface{}, renamedTo *st
 	}
 
 	if err := tag.Write(filePath, upd); err != nil {
-		return fmt.Errorf("write tags: %w", err)
+		return res, fmt.Errorf("write tags: %w", err)
 	}
 
 	sc := &tag.WriteSidecar{
@@ -528,7 +579,7 @@ func applyFileUpdate(filePath string, info map[string]interface{}, renamedTo *st
 		sc.Album = v
 	}
 	if _, err := tag.HandleSidecars(filePath, upd, sc); err != nil {
-		return fmt.Errorf("sidecar: %w", err)
+		return res, fmt.Errorf("sidecar: %w", err)
 	}
 
 	// 文件名模板 + rename
@@ -537,13 +588,17 @@ func applyFileUpdate(filePath string, info map[string]interface{}, renamedTo *st
 	// write, so all that is left here is the rename itself.
 	if renameWanted {
 		if err := os.Rename(filePath, renameTarget); err != nil {
-			return fmt.Errorf("rename: %w", err)
+			return res, fmt.Errorf("rename: %w", err)
 		}
-		if renamedTo != nil {
-			*renamedTo = filepath.Base(renameTarget)
-		}
+		res.RenamedTo = filepath.Base(renameTarget)
+		// The sidecars written above are named after the OLD path, so
+		// they have to travel too or they are orphaned under a name the
+		// library no longer lists. Best-effort: the audio is already
+		// renamed, and refusing the whole request would leave the client
+		// unable to trust the row it just wrote.
+		res.Sidecars = tag.MoveSidecars(filePath, renameTarget)
 	}
-	return nil
+	return res, nil
 }
 
 func applyTemplate(tmpl string, vars map[string]string) string {

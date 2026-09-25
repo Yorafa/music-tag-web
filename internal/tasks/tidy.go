@@ -91,6 +91,17 @@ func (h *TidyFolderHandler) tidyOne(ctx context.Context, musicPath string, p Tid
 	if err := os.Rename(musicPath, dst); err != nil {
 		return err
 	}
+	// The .lrc and the album cover are filed next to the audio, not
+	// inside it, so the rename above strands them in the old folder and
+	// splits the album across two directories. Best-effort for the same
+	// reason as the rename itself: the file has already moved, so report
+	// the leftovers rather than failing a job that mostly succeeded.
+	for _, m := range tag.MoveSidecars(musicPath, dst) {
+		if m.Err != nil {
+			log.Printf("[tidy] sidecar %s -> %s did not follow: %v",
+				filepath.Base(m.From), filepath.Base(m.To), m.Err)
+		}
+	}
 	if h.DB != nil {
 		// Update Folder row (tracker's primary key). Track rows track audio
 		// files by path; mirror the rename so refresh-by-path keeps working.

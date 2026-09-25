@@ -40,10 +40,10 @@ func TestApplyFileUpdate_RefusesToOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = applyFileUpdate(src, map[string]interface{}{
+	_, err = applyFileUpdate(src, map[string]interface{}{
 		"title":    "Renamed Title",
 		"filename": "target",
-	}, nil)
+	})
 	if err == nil {
 		t.Fatal("applyFileUpdate succeeded — the existing file was silently replaced")
 	}
@@ -81,9 +81,9 @@ func TestApplyFileUpdate_AllowsFreeTarget(t *testing.T) {
 
 	src := testaudio.SeedMP3(t, music, "before.mp3")
 
-	if err := applyFileUpdate(src, map[string]interface{}{
+	if _, err := applyFileUpdate(src, map[string]interface{}{
 		"filename": "after",
-	}, nil); err != nil {
+	}); err != nil {
 		t.Fatalf("applyFileUpdate: %v", err)
 	}
 
@@ -105,9 +105,9 @@ func TestApplyFileUpdate_RenamesOntoItselfIsANoOp(t *testing.T) {
 
 	src := testaudio.SeedMP3(t, music, "same.mp3")
 
-	if err := applyFileUpdate(src, map[string]interface{}{
+	if _, err := applyFileUpdate(src, map[string]interface{}{
 		"filename": "same",
-	}, nil); err != nil {
+	}); err != nil {
 		t.Fatalf("applyFileUpdate on an unchanged name: %v", err)
 	}
 	if _, err := os.Stat(src); err != nil {
@@ -135,9 +135,9 @@ func TestApplyFileUpdate_KeepsResultUnderMusicRoot(t *testing.T) {
 	// happens to be on the machine. (/etc/passwd is a bad choice here: on
 	// a normal host it already exists, so its presence proves nothing.)
 	sentinel := "zzz-escape-sentinel-9f3a.mp3"
-	err := applyFileUpdate(src, map[string]interface{}{
+	_, err := applyFileUpdate(src, map[string]interface{}{
 		"filename": "../../etc/" + sentinel,
-	}, nil)
+	})
 
 	// Nothing named after the sentinel may exist anywhere — not directly
 	// above the music root, not two levels up, not in /etc.
