@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -169,32 +170,163 @@ func mapToPBSong(m map[string]interface{}) *pb.Song {
 // propagate ("", nil) so the gateway /api/stream proxy fallback can take
 // over.
 //
-// Endpoint choice: kugou.com/yy/index.php?r=play/getdata&hash={hash} returns
-// `data.play_url` (direct mp3 URL) for free tracks. Some intermediate kugou
-// responses require a `dfid` cookie primed from a homepage visit, but the
-// anonymous path is functional for the common case.
-const kgAudioURL = "https://www.kugou.com/yy/index.php?r=play/getdata"
+// kgAudioURL is the mobile song-info endpoint used to resolve a playable
+// audio URL from a kugou FileHash. The previous
+// https://www.kugou.com/yy/index.php?r=play/getdata endpoint now returns
+// err_code 20010 / 30020 for anonymous traffic (verified 2026-07), but the
+// H5-era m.kugou.com getSongInfo.php?cmd=playInfo still serves free tracks:
+//
+//	https://m.kugou.com/app/i/getSongInfo.php?cmd=playInfo&hash=<hash>&dfid=<dfid>&mid=<mid>&platid=4
+//	→ {"errcode":0,"url":"https://sharefs.kugou.com/...mp3","pay_type":0}
+//
+// Paid / region-locked tracks come back with errcode 0 + empty url (or
+// pay_type>0) — we propagate empty so the gateway keeps the "preview
+// unavailable" envelope.
+//
+// kgAudioURL is declared as `var` (not `const`) so the plugin YAML override
+// (plan C.4 / Stage B) can swap it at runtime via (*Server).SetAPIBase.
+// Note: kg does NOT ship with a Secret constant in source — anonymous
+// search is unauthenticated and the upstream uses an MD5 signature derived
+// from the public `keyCodeTemplate` (also a const). SetSecret is intentionally
+// NOT exposed for kg; secrets: {} entries in the YAML are no-ops here.
+var kgAudioURL = "https://m.kugou.com/app/i/getSongInfo.php"
+
+// kgDFID / kgMID are the device-fingerprint params the H5 getSongInfo
+// endpoint requires (bare requests return errcode 0 + empty url). Values
+// verified against a real free-track lookup in 2026-07; both are opaque to
+// the CDN and stable across calls.
+var (
+	kgDFID = "3iH5Iv2u6WqG3y2O2d1d0eZ0"
+	kgMID  = "5c7d3e0d2e4f4a8e9c8f6d5e4b3a2c1d"
+)
+
+// SetAPIBase overwrites the package-level kgAudioURL for the plugin YAML
+// override flow.
+func (s *Server) SetAPIBase(apiBase string) {
+	kgAudioURL = apiBase
+}
 
 func (s *Server) GetAudioURL(ctx context.Context, req *pb.GetAudioRequest) (*pb.GetAudioResponse, error) {
 	if req.Id == "" {
 		return &pb.GetAudioResponse{}, nil
 	}
-	urlStr := fmt.Sprintf("%s&hash=%s", kgAudioURL, req.Id)
+	// The H5 endpoint rejects bare requests (empty url + errcode 0) unless
+	// they carry the same dfid/mid/platid params the m.kugou.com app sends
+	// (verified 2026-07). dfid is a stable cookie-format device id; mid is a
+	// random device fingerprint that does not need to round-trip.
+	urlStr := fmt.Sprintf("%s?cmd=playInfo&hash=%s&dfid=%s&mid=%s&platid=4",
+		kgAudioURL, req.Id, kgDFID, kgMID)
 	httpReq, _ := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
+	httpReq.Header.Set("Referer", "http://m.kugou.com/")
 	resp, err := s.client.Do(httpReq)
 	if err != nil {
+		log.Printf("[kg] GetAudioURL http error: %v", err)
 		return &pb.GetAudioResponse{}, nil
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	var raw struct {
-		Data struct {
-			PlayURL string `json:"play_url"`
-		} `json:"data"`
+		ErrCode int    `json:"errcode"`
+		URL     string `json:"url"`
 	}
-	if err := json.Unmarshal(body, &raw); err != nil || raw.Data.PlayURL == "" {
+	if err := json.Unmarshal(body, &raw); err != nil {
+		log.Printf("[kg] GetAudioURL unmarshal (head=%q): %v", previewKg(body, 80), err)
 		return &pb.GetAudioResponse{}, nil
 	}
-	return &pb.GetAudioResponse{Url: raw.Data.PlayURL}, nil
+	if raw.ErrCode == 0 && raw.URL != "" {
+		return &pb.GetAudioResponse{Url: raw.URL}, nil
+	}
+	// getSongInfo failed (paid track / anti-bot errcode 1002 / region-lock):
+	// fall back to the trackercdn mirrors the reference go-music-dl project
+	// uses. Verified 2026-08: the cmd=4 mirror (key=md5(hash+"kgcloud"),
+	// vip=1) serves a playable url even when getSongInfo errcodes.
+	if u := s.trackercdnFallback(ctx, req.Id); u != "" {
+		return &pb.GetAudioResponse{Url: u}, nil
+	}
+	// Ops-side signal for the kg 502-when-listening case: paid track
+	// (errcode 0 + empty url + pay_type>0), anti-bot block, or
+	// region-lock. Body head (first 80 bytes) included so
+	// `docker logs | grep '\[kg\] GetAudioURL empty url'` shows
+	// exactly what kugou returned.
+	log.Printf("[kg] GetAudioURL empty url errcode=%d upstream status=%d body=%q (trackercdn fallback empty too)",
+		raw.ErrCode, resp.StatusCode, previewKg(body, 80))
+	return &pb.GetAudioResponse{}, nil
+}
+
+// trackercdnFallback tries the trackercdn mirrors from the reference
+// go-music-dl project (kugou/kugou.go::fetchTrackerSongInfo). Returns the
+// first non-empty url, or "" if every mirror fails. Mirrors are ordered
+// best-first; each is keyed with the md5(hash+salt) the CDN expects and the
+// hash must be lowercase for the tracker API.
+func (s *Server) trackercdnFallback(ctx context.Context, hash string) string {
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	keyV2 := kgMD5(hash + "kgcloudv2")
+	keyOld := kgMD5(hash + "kgcloud")
+	urls := []string{
+		fmt.Sprintf("https://trackercdn.kugou.com/i/v2/?cdnBackup=1&behavior=download&pid=1&cmd=21&appid=1001&hash=%s&key=%s", hash, keyV2),
+		fmt.Sprintf("http://trackercdn.kugou.com/i/?cmd=4&pid=1&forceDown=0&vip=1&hash=%s&key=%s", hash, keyOld),
+	}
+	for _, u := range urls {
+		httpReq, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
+		httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
+		httpReq.Header.Set("Referer", "https://www.kugou.com/")
+		resp, err := s.client.Do(httpReq)
+		if err != nil {
+			continue
+		}
+		body, rerr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if rerr != nil {
+			continue
+		}
+		var m map[string]interface{}
+		if json.Unmarshal(body, &m) != nil {
+			continue
+		}
+		if url := pickKgURL(m["url"]); url != "" {
+			return strings.ReplaceAll(url, `\/`, "/")
+		}
+		if url := pickKgURL(m["backup_url"]); url != "" {
+			return strings.ReplaceAll(url, `\/`, "/")
+		}
+	}
+	return ""
+}
+
+// pickKgURL extracts the first non-empty string from a trackercdn `url` /
+// `backup_url` field, which may be a plain string OR a JSON array of
+// mirrors. Mirrors the reference kugou pickKugouURL.
+func pickKgURL(v interface{}) string {
+	switch u := v.(type) {
+	case string:
+		return u
+	case []interface{}:
+		for _, item := range u {
+			if s, ok := item.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// kgMD5 returns the lowercase hex md5 of s (the tracker API keys are
+// lowercase; kugouSignature above stays uppercase for the search API).
+func kgMD5(s string) string {
+	h := md5.Sum([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
+// previewKg returns the first n bytes of body for log lines. Used by
+// [kg] GetAudioURL so docker logs capture enough of the upstream payload
+// (status + json head) for ops to tell "anti-bot block" from "paid track"
+// from "endpoint churn" at a glance. Mirrors kuwo/server.go::preview
+// but kept plugin-local so the two plugins remain independently
+// testable / deployable.
+func previewKg(b []byte, n int) string {
+	if len(b) <= n {
+		return string(b)
+	}
+	return string(b[:n]) + "...(truncated)"
 }

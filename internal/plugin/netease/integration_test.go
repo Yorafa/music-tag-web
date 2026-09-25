@@ -73,8 +73,9 @@ func TestGRPC_GetPluginInfo_OverWire(t *testing.T) {
 // fails to encode the gRPC error trailer, would surface as resp != nil here.
 //
 // (The previous "swallowed-upstream-err returns empty Songs" contract was
-//  removed in this same change; the test name + comment both flipped
-//  accordingly so the next reviewer can't reach for the old contract.)
+//
+//	removed in this same change; the test name + comment both flipped
+//	accordingly so the next reviewer can't reach for the old contract.)
 func TestGRPC_Search_UpstreamFailureYieldsErrOverWire(t *testing.T) {
 	srv := newServerForTest(t)
 	srv.client.Transport = integrationtest.ErrorRoundTripper{

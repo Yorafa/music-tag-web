@@ -112,32 +112,40 @@ func TestServer_Search_HappyPath(t *testing.T) {
 	if !strings.HasPrefix(s.AlbumImg, wantImgPrefix) {
 		t.Errorf("AlbumImg = %q, want prefix %q", s.AlbumImg, wantImgPrefix)
 	}
-	// NOTE: qmusic.doSearch inspects `wrap.Search[""]`, but the JSON object
-	// from QQ stores its data under the long dotted key. When Go's json
-	// package unmarshals an object into a struct-typed map field whose tag
-	// is `"music.search.SearchCgiService.DoSearchForQQMusicDesktop"`, the
-	// lookup key in the runtime map is "" (the dotted-name is consumed by
-	// the struct tag, not stored). Empirically HasMore is therefore always
-	// false regardless of meta.nextpage. Pin the current observable behavior
-	// here so a future fix lights up: a corrected production would flip
-	// this test back to `HasMore=true` and surface the regression.
-	if resp.HasMore {
-		t.Errorf("HasMore=true; current production always returns false (see comment)")
+	// meta.nextpage = 2 > page 1 → HasMore must be true. The fixture's
+	// nextpage is the pagination signal the frontend 加载更多 button reads;
+	// before the typed-parse fix doSearch peeked `wrap.Search[""]` and
+	// HasMore was permanently false.
+	if !resp.HasMore {
+		t.Errorf("HasMore=false; want true (meta.nextpage=2 > page=1)")
 	}
 }
 
-func TestServer_Search_HasMoreAlwaysFalseIrrespectiveOfMeta(t *testing.T) {
-	// Whatever the meta payload says, production currently returns HasMore=false
-	// because doSearch peeks at the wrong map key. This test pins that
-	// observable behavior; if a future fix corrects production, flip this
-	// assertion to expect HasMore=true derived from meta.nextpage.
+func TestServer_Search_HasMoreDerivedFromMetaNextPage(t *testing.T) {
+	// meta.nextpage=2, request page=1 → HasMore=true.
 	srv := NewServer()
 	srv.client.Transport = &qmusicRT{fn: func(*http.Request) (*http.Response, error) {
 		return jsonResp(200, qmusicSearchBody), nil
 	}}
 	resp, _ := srv.Search(context.Background(), &pb.SearchRequest{Page: 1, Limit: 10})
+	if !resp.HasMore {
+		t.Errorf("HasMore=false; want true when meta.nextpage=2 > page=1")
+	}
+}
+
+func TestServer_Search_HasMoreFalseWhenNextPageEqualsPage(t *testing.T) {
+	// meta.nextpage = curpage = 1 → no more pages → HasMore=false.
+	body := `{"music.search.SearchCgiService.DoSearchForQQMusicMobile":{"data":{"body":{"song":{"list":[{"mid":"a","title":"t"}]}}},"meta":{"sum":1,"nextpage":1,"curpage":1}}}`
+	srv := NewServer()
+	srv.client.Transport = &qmusicRT{fn: func(*http.Request) (*http.Response, error) {
+		return jsonResp(200, body), nil
+	}}
+	resp, _ := srv.Search(context.Background(), &pb.SearchRequest{Page: 1, Limit: 10})
 	if resp.HasMore {
-		t.Errorf("HasMore=true; current production returns false regardless of meta.nextpage")
+		t.Errorf("HasMore=true; want false when meta.nextpage=1 == page=1")
+	}
+	if len(resp.Songs) != 1 {
+		t.Errorf("len=%d, want 1 (typed list parse must still work)", len(resp.Songs))
 	}
 }
 
@@ -178,6 +186,137 @@ func TestServer_Search_EmptyList(t *testing.T) {
 	resp, _ := srv.Search(context.Background(), &pb.SearchRequest{Page: 1, Limit: 10})
 	if len(resp.Songs) != 0 {
 		t.Errorf("empty list should yield empty Songs; got %+v", resp.Songs)
+	}
+}
+
+// TestServer_Search_ParsesNewItemSongShape pins the 2026-07 upstream
+// migration: QQ moved mobile search results from data.body.song.list to
+// data.body.item_song (a direct array; meta is now an empty object). The
+// typed parse MUST read item_song — before this fix the plugin returned 0
+// songs (the old song.list key simply no longer exists upstream).
+func TestServer_Search_ParsesNewItemSongShape(t *testing.T) {
+	body := `{"music.search.SearchCgiService.DoSearchForQQMusicMobile":{"code":0,"data":{"body":{"item_song":[{"mid":"001Bbywq2gicae","name":"搁浅","singer":[{"id":4558,"mid":"0025NhlN2yWrP4","name":"周杰伦"}],"album":{"id":20612,"mid":"003DFRzD192KKD","name":"七里香"},"time_public":"2004-08-03","file":{"media_mid":"004UlK9x0jeuow"}}]}},"meta":{}}}`
+	srv := NewServer()
+	srv.client.Transport = &qmusicRT{fn: func(*http.Request) (*http.Response, error) {
+		return jsonResp(200, body), nil
+	}}
+	resp, err := srv.Search(context.Background(), &pb.SearchRequest{Query: "搁浅", Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(resp.Songs) != 1 {
+		t.Fatalf("len=%d, want 1 (item_song shape must parse)", len(resp.Songs))
+	}
+	s := resp.Songs[0]
+	if s.Mid != "001Bbywq2gicae" || s.Id != "001Bbywq2gicae" {
+		t.Errorf("Id/Mid = %q/%q (want 001Bbywq2gicae)", s.Id, s.Mid)
+	}
+	if s.Name != "搁浅" {
+		t.Errorf("Name = %q (item_song uses `name`, want 搁浅)", s.Name)
+	}
+	if s.Artist != "周杰伦" {
+		t.Errorf("Artist = %q", s.Artist)
+	}
+	if s.Album != "七里香" || s.AlbumId != "003DFRzD192KKD" {
+		t.Errorf("album = %q/%q", s.Album, s.AlbumId)
+	}
+}
+
+// TestServer_Search_HasMoreFallsBackToFullPage pins the meta-is-empty
+// regression: the new API returns an empty `meta` object (no nextpage), so
+// HasMore can no longer be derived from meta.nextpage. It must fall back to
+// the full-page heuristic (len(out) >= limit) like kuwo/kg/migu — otherwise
+// 加载更多 never lights up.
+func TestServer_Search_HasMoreFallsBackToFullPage(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"music.search.SearchCgiService.DoSearchForQQMusicMobile":{"code":0,"data":{"body":{"item_song":[`)
+	for i := 0; i < 10; i++ {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString(`{"mid":"m` + string(rune('a'+i)) + `","name":"s"}`)
+	}
+	b.WriteString(`]}},"meta":{}}}`)
+	srv := NewServer()
+	srv.client.Transport = &qmusicRT{fn: func(*http.Request) (*http.Response, error) {
+		return jsonResp(200, b.String()), nil
+	}}
+	resp, _ := srv.Search(context.Background(), &pb.SearchRequest{Page: 1, Limit: 10})
+	if !resp.HasMore {
+		t.Errorf("HasMore=false; want true (10 items, empty meta, limit 10 → full-page fallback)")
+	}
+}
+
+// TestServer_GetAudioURL_ReturnsSipPlusPurl pins the multi-quality vkey
+// dance: the musicu.fcg UrlGetVkey response carries `sip` (CDN roots) +
+// `midurlinfo[].{filename,purl}`; GetAudioURL must pick the BEST filename
+// (M800 320k first, then M500 128k) that got a non-empty purl and return
+// sip[0]+purl (CN IP path).
+func TestServer_GetAudioURL_ReturnsSipPlusPurl(t *testing.T) {
+	body := `{"req_1":{"data":{"sip":["http://aqqmusic.tc.qq.com/","http://sjy6.stream.qqmusic.qq.com/"],"midurlinfo":[{"filename":"M800001Bbywq2gicae001Bbywq2gicae.mp3","purl":"M800001Bbywq2gicae001Bbywq2gicae.mp3?guid=1&vkey=ABC&uin=&fromtag=3"}]}}}`
+	srv := NewServer()
+	srv.client.Transport = &qmusicRT{fn: func(*http.Request) (*http.Response, error) {
+		return jsonResp(200, body), nil
+	}}
+	resp, err := srv.GetAudioURL(context.Background(), &pb.GetAudioRequest{Id: "001Bbywq2gicae"})
+	if err != nil {
+		t.Fatalf("GetAudioURL: %v", err)
+	}
+	const want = "http://aqqmusic.tc.qq.com/M800001Bbywq2gicae001Bbywq2gicae.mp3?guid=1&vkey=ABC&uin=&fromtag=3"
+	if resp.GetUrl() != want {
+		t.Errorf("url=%q (want %q)", resp.GetUrl(), want)
+	}
+}
+
+// TestServer_GetAudioURL_PrefersHigherQuality pins the quality ordering:
+// when BOTH M800 (320k) and M500 (128k) come back with purls, GetAudioURL
+// must return the M800 one (filenames are matched in best-first order).
+func TestServer_GetAudioURL_PrefersHigherQuality(t *testing.T) {
+	body := `{"req_1":{"data":{"sip":["http://aqqmusic.tc.qq.com/"],"midurlinfo":[{"filename":"M500mm.mp3","purl":"LOW.mp3"},{"filename":"M800mm.mp3","purl":"HIGH.mp3"}]}}}`
+	srv := NewServer()
+	srv.client.Transport = &qmusicRT{fn: func(*http.Request) (*http.Response, error) {
+		return jsonResp(200, body), nil
+	}}
+	resp, err := srv.GetAudioURL(context.Background(), &pb.GetAudioRequest{Id: "m"})
+	if err != nil {
+		t.Fatalf("GetAudioURL: %v", err)
+	}
+	if resp.GetUrl() != "http://aqqmusic.tc.qq.com/HIGH.mp3" {
+		t.Errorf("url=%q (want M800/higher quality even when listed after M500)", resp.GetUrl())
+	}
+}
+
+// TestServer_GetAudioURL_FallsBackToWSStream pins the no-sip path: when the
+// response omits `sip`, GetAudioURL must still return a url by prefixing the
+// reference project's hardcoded ws.stream host.
+func TestServer_GetAudioURL_FallsBackToWSStream(t *testing.T) {
+	body := `{"req_1":{"data":{"midurlinfo":[{"filename":"M500mm.mp3","purl":"low.mp3?guid=1&vkey=X"}]}}}`
+	srv := NewServer()
+	srv.client.Transport = &qmusicRT{fn: func(*http.Request) (*http.Response, error) {
+		return jsonResp(200, body), nil
+	}}
+	resp, err := srv.GetAudioURL(context.Background(), &pb.GetAudioRequest{Id: "m"})
+	if err != nil {
+		t.Fatalf("GetAudioURL: %v", err)
+	}
+	if resp.GetUrl() != "https://ws.stream.qqmusic.qq.com/low.mp3?guid=1&vkey=X" {
+		t.Errorf("url=%q (want ws.stream fallback host)", resp.GetUrl())
+	}
+}
+
+// TestServer_GetAudioURL_EmptyPurlReturnsEmpty pins the geo-locked path:
+// anonymous non-CN calls return purl="" (result 104003) — GetAudioURL must
+// yield ("", nil) so the gateway keeps the "preview unavailable" envelope
+// instead of a broken URL.
+func TestServer_GetAudioURL_EmptyPurlReturnsEmpty(t *testing.T) {
+	body := `{"req_1":{"data":{"sip":["http://aqqmusic.tc.qq.com/"],"midurlinfo":[{"filename":"M800mm.mp3","purl":""},{"filename":"M500mm.mp3","purl":""}]}}}`
+	srv := NewServer()
+	srv.client.Transport = &qmusicRT{fn: func(*http.Request) (*http.Response, error) {
+		return jsonResp(200, body), nil
+	}}
+	resp, _ := srv.GetAudioURL(context.Background(), &pb.GetAudioRequest{Id: "m"})
+	if resp.GetUrl() != "" {
+		t.Errorf("url=%q (want empty when all purls empty)", resp.GetUrl())
 	}
 }
 

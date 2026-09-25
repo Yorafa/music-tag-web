@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -26,6 +27,24 @@ import (
 
 	pb "go-music-tag/api/proto/tagplugin"
 )
+
+// qmusicSearchURL is the public QQ Music musicu.fcg POST endpoint that
+// all `DoSearchForQQMusicMobile` traffic rides. Declared `var` (not
+// `const`) so the plugin YAML override (plan C.4 / Stage B) can swap it
+// at runtime via (*Server).SetAPIBase. Note: qmusic has NO Secret header
+// (the `authst`/cookie layer is host-bound and rarely worth overriding),
+// so SetSecret is intentionally NOT exposed here — secrets: {} entries
+// in data/sources/qmusic.yaml are silently no-ops in (*plugin.Registry).
+// RefreshOverrides. The lyric endpoint stays hardcoded inline in
+// FetchLyric because its response-code signing pairs with that exact
+// host; overriding only the search endpoint is the practical case.
+var qmusicSearchURL = "https://u.y.qq.com/cgi-bin/musicu.fcg"
+
+// SetAPIBase overwrites the package-level qmusicSearchURL for the
+// plugin YAML override flow.
+func (s *Server) SetAPIBase(apiBase string) {
+	qmusicSearchURL = apiBase
+}
 
 var headers = map[string]string{
 	"User-Agent":   "QQ音乐/73222 CFNetwork/1406.0.3 Darwin/22.4.0",
@@ -205,7 +224,7 @@ func (s *Server) doSearch(ctx context.Context, query string, page, limit int) ([
 	bodyJSON, _ := json.Marshal(payload)
 
 	req, _ := http.NewRequestWithContext(ctx, "POST",
-		"https://u.y.qq.com/cgi-bin/musicu.fcg",
+		qmusicSearchURL,
 		strings.NewReader(string(bodyJSON)))
 	for k, v := range headers {
 		req.Header.Set(k, v)
@@ -221,11 +240,23 @@ func (s *Server) doSearch(ctx context.Context, query string, page, limit int) ([
 	// 注意：当歌曲不存在时, `list` 字段可能取值为 null / [] / 数字 0。用 json.RawMessage
 	// 避免父 unmarshal 因 `cannot unmarshal number into []map[string]interface{}`
 	// 直接失败；后续由 isQMusicEmptyListSentinel + 条件 unmarshal 还原。
+	//
+	// BUGFIX (2026-07): the previous shape declared `Search map[string]struct{...}`
+	// with the dotted JSON tag on the MAP field — encoding/json then unmarshals
+	// the inner object's `data`/`meta` keys AS map keys, so every read via
+	// `wrap.Search[""]` returned the zero struct: songs still arrived through the
+	// loose fallback, but `has_more` was permanently false (meta.nextpage was
+	// never read), breaking 加载更多 pagination. A plain struct field with the
+	// dotted tag addresses the exact key and Data/Meta populate correctly.
 	var wrap struct {
-		Search map[string]struct {
+		Search struct {
 			Data struct {
 				Body struct {
-					Song struct {
+					// 2026-07: QQ 把移动端搜索结果从 data.body.song.list 迁移到了
+					// data.body.item_song（直接数组；meta 变成空对象，nextpage 不再
+					// 返回）。item_song 是当前主 shape，song.list 保留作降级。
+					ItemSong json.RawMessage `json:"item_song"`
+					Song     struct {
 						List json.RawMessage `json:"list"`
 					} `json:"song"`
 				} `json:"body"`
@@ -242,21 +273,24 @@ func (s *Server) doSearch(ctx context.Context, query string, page, limit int) ([
 	}
 	// RawMessage 允许 QQ 返回 null / [] / 数字 0（空结果的三种 sentinel）。
 	// 只对真正的数组走 typed unmarshal；其余一律当作「0 首歌」处理。
-	// ⚠️  production 本身依靠 loose fallback 拿到数据（wrap.Search[""] 的
-	// key 与实际 JSON 上的长 dotted-key 不匹配，typed 路径总是 zero-value），
-	// 所以 loose fallback 总是要运行一次；不过 typed unmarshal 成功后不会
-	// 再走 loose 路径（避免重复）。
 	var list []map[string]interface{}
-	listRaw := wrap.Search[""].Data.Body.Song.List
-	if !isQMusicEmptyListSentinel(listRaw) {
-		if err := json.Unmarshal(listRaw, &list); err != nil {
-			// typed unmarshal 依然失败（罕见），让下面的 loose fallback 再试一次。
+	for _, raw := range []json.RawMessage{
+		wrap.Search.Data.Body.ItemSong,  // 当前主 shape（2026-07 迁移后）
+		wrap.Search.Data.Body.Song.List, // 老 shape 降级
+	} {
+		if isQMusicEmptyListSentinel(raw) {
+			continue
+		}
+		var tmp []map[string]interface{}
+		if err := json.Unmarshal(raw, &tmp); err == nil && len(tmp) > 0 {
+			list = tmp
+			break
 		}
 	}
 	if len(list) == 0 {
-		// fallback：loose parse path (the struct-tagged dotted key above
-		// always reads as wrap.Search[""]; the runtime map can never carry
-		// the data under that empty key).
+		// fallback：loose parse path. Now that the typed struct field
+		// addresses the dotted key correctly, this only fires on genuinely
+		// empty/sentinel results or a schema shift we haven't mirrored yet.
 		var loose map[string]interface{}
 		_ = json.Unmarshal(body, &loose)
 		if v, ok := loose["music.search.SearchCgiService.DoSearchForQQMusicMobile"].(map[string]interface{}); ok {
@@ -280,7 +314,7 @@ func (s *Server) doSearch(ctx context.Context, query string, page, limit int) ([
 		sg := song{
 			ID:   str(item["mid"]), // 用 mid 作为 id，与 qmusic 客户端约定一致
 			Mid:  str(item["mid"]),
-			Name: str(item["title"]),
+			Name: str(firstNonEmpty(item, "title", "name")),
 		}
 		// artist 数组
 		if singers, ok := item["singer"].([]interface{}); ok {
@@ -296,14 +330,19 @@ func (s *Server) doSearch(ctx context.Context, query string, page, limit int) ([
 			sg.Artist = strings.Join(names, ",")
 		}
 		if album, ok := item["album"].(map[string]interface{}); ok {
-			sg.Album = str(album["title"])
+			sg.Album = str(firstNonEmpty(album, "title", "name"))
 			sg.AlbumID = str(album["mid"])
 		}
 		sg.Year = str(item["time_public"])
 		sg.AlbumImg = "http://y.qq.com/music/photo_new/T002R300x300M000" + sg.AlbumID + ".jpg"
 		out = append(out, sg)
 	}
-	hasMore := wrap.Search[""].Meta.NextPage > page
+	// 新版 API 的 meta 是空对象（nextpage 恒为 0），退化为「满页即有更多」启发式
+	// （kuwo/kg/migu 同款）。老版本 meta.nextpage 信号仍然优先。
+	hasMore := len(out) >= limit
+	if wrap.Search.Meta.NextPage > page {
+		hasMore = true
+	}
 	return out, hasMore, nil
 }
 
@@ -314,7 +353,17 @@ func str(v interface{}) string {
 	return fmt.Sprintf("%v", v)
 }
 
-var _ = rand.Int // 保留占位 (若后续要做分布式锁随机种子可用)
+// firstNonEmpty returns the first non-empty string among the given keys of
+// item. Used for title/name and album-title drift across QQ API cohorts
+// (item_song uses `name` while the legacy song.list used `title`).
+func firstNonEmpty(item map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v := str(item[k]); v != "" {
+			return v
+		}
+	}
+	return ""
+}
 
 // isQMusicEmptyListSentinel 判别 QQ Music 在 Empty-Result 路径上返回的
 // 「不算数组」哨兵值：null / [] / 数字（包括 0 和负数）。识别成功后交给
@@ -333,25 +382,118 @@ func isQMusicEmptyListSentinel(raw json.RawMessage) bool {
 	return false
 }
 
-// GetAudioURL is a documented best-effort stub for QQ Music.
+// GetAudioURL resolves a playable stream URL via the musicu.fcg
+// music.vkey.GetVkey / UrlGetVkey module — the same one the reference
+// go-music-dl project uses (qq/download.go). The trick: request MULTIPLE
+// quality levels in one round-trip by passing a `filename` array
+// (M800=320k, M500=128k — both built as <prefix><songmid><songmid>.mp3),
+// then return the first filename that came back with a non-empty `purl`.
+// This maximizes the chance of a playable URL (e.g. 128k free preview when
+// 320k is VIP-locked) without a second request.
 //
-// QQ Music's actual audio stream URL requires a 2-step dance:
+// Response shape (verified 2026-08):
 //
-//  1. GET https://c.y.qq.com/base/fcgi-bin/fcg_musicexpress.fcg?json=3&guid={rand}
-//     → response carries a short-lived `vkey` + ip-bearing `sip` CDN array.
-//  2. Construct http://dl.stream.qqmusic.qq.com/[PREFIX]{MID}.m4a?vkey=VKEY&guid=GUID
-//     where PREFIX is M500 (128k mp3) / M800 (320k mp3) / C400 (96k m4a).
+//	{ "req_1": { "data": {
+//	    "sip": ["http://aqqmusic.tc.qq.com/", ...],
+//	    "midurlinfo": [{"filename":"M800<mid><mid>.mp3",
+//	                    "purl":"...?guid=...&vkey=...&uin=&fromtag=3"}, ...]
+//	}}}
 //
-// For 2024-26 this path is geo-locked from non-Mainland-China exit IPs and
-// increasingly requires a `qqmusic_uin`/`qqmusic_key` cookie from a logged-in
-// session. Anonymous (no cookie) calls return empty vkeys in the majority of
-// regions outside PRC.
+// Full URL = sip[0] + purl (falls back to the ws.stream host when sip is
+// absent). Anonymous calls return empty `purl` entries from non-Mainland-
+// China exit IPs (geo-locked / paid), which we propagate as ("", nil) so the
+// gateway /api/stream proxy envelope stays "preview unavailable:
+// source=qmusic".
 //
-// Best-effort contract: we always return ("", nil) so callers (gateway
-// /api/stream proxy or frontend PlayButton) treat empty url + SupportsAudioUrl
-// == true as a "transient upstream failure" signal. The proxy path then
-// re-attempts via the gateway with a Mainland-China exit IP. SupportsAudioUrl
-// =true here is the source's honest "I CAN answer; please try the proxy."
-func (s *Server) GetAudioURL(_ context.Context, _ *pb.GetAudioRequest) (*pb.GetAudioResponse, error) {
+// Best-effort contract preserved: ("", nil) on any failure.
+func (s *Server) GetAudioURL(ctx context.Context, req *pb.GetAudioRequest) (*pb.GetAudioResponse, error) {
+	if req.Id == "" {
+		return &pb.GetAudioResponse{}, nil
+	}
+	// <prefix><songmid><songmid>.mp3 — same filename scheme as the reference.
+	filenames := []string{
+		fmt.Sprintf("M800%s%s.mp3", req.Id, req.Id), // 320kbps
+		fmt.Sprintf("M500%s%s.mp3", req.Id, req.Id), // 128kbps
+	}
+	guid := fmt.Sprintf("%d", rand.Int63n(9000000000)+1000000000)
+	payload := map[string]interface{}{
+		"comm": map[string]interface{}{
+			"cv":          4747474,
+			"ct":          "24",
+			"format":      "json",
+			"inCharset":   "utf-8",
+			"outCharset":  "utf-8",
+			"notice":      0,
+			"platform":    "yqq.json",
+			"needNewCode": 1,
+			"uin":         0,
+		},
+		"req_1": map[string]interface{}{
+			"module": "music.vkey.GetVkey",
+			"method": "UrlGetVkey",
+			"param": map[string]interface{}{
+				"guid":      guid,
+				"songmid":   []string{req.Id, req.Id},
+				"songtype":  []int{0, 0},
+				"uin":       "0",
+				"loginflag": 1,
+				"platform":  "20",
+				"filename":  filenames,
+			},
+		},
+	}
+	bodyJSON, _ := json.Marshal(payload)
+	httpReq, _ := http.NewRequestWithContext(ctx, "POST", qmusicSearchURL, strings.NewReader(string(bodyJSON)))
+	for k, v := range headers {
+		httpReq.Header.Set(k, v)
+	}
+	resp, err := s.client.Do(httpReq)
+	if err != nil {
+		log.Printf("[qmusic] GetAudioURL http error: %v", err)
+		return &pb.GetAudioResponse{}, nil
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var wrap struct {
+		Req1 struct {
+			Data struct {
+				Sip        []string `json:"sip"`
+				MidURLInfo []struct {
+					Filename string `json:"filename"`
+					Purl     string `json:"purl"`
+				} `json:"midurlinfo"`
+			} `json:"data"`
+		} `json:"req_1"`
+	}
+	if err := json.Unmarshal(body, &wrap); err != nil {
+		log.Printf("[qmusic] GetAudioURL unmarshal (head=%q): %v", previewQMusic(body, 120), err)
+		return &pb.GetAudioResponse{}, nil
+	}
+	// Iterate the filenames we asked for (best → worst) and return the first
+	// one the upstream mapped to a non-empty purl. Guards against the
+	// response being reordered or missing entries.
+	for _, expected := range filenames {
+		for _, mi := range wrap.Req1.Data.MidURLInfo {
+			if mi.Filename != expected || mi.Purl == "" {
+				continue
+			}
+			if len(wrap.Req1.Data.Sip) > 0 && wrap.Req1.Data.Sip[0] != "" {
+				return &pb.GetAudioResponse{Url: wrap.Req1.Data.Sip[0] + mi.Purl}, nil
+			}
+			// sip absent → reference hardcodes the ws.stream host.
+			return &pb.GetAudioResponse{Url: "https://ws.stream.qqmusic.qq.com/" + mi.Purl}, nil
+		}
+	}
+	// All purls empty — geo-locked / paid / not logged in. Same "preview
+	// unavailable" envelope as before.
 	return &pb.GetAudioResponse{}, nil
+}
+
+// previewQMusic returns the first n bytes of body for log lines (kept
+// plugin-local, mirrors kuwo/kg/migu preview helpers).
+func previewQMusic(b []byte, n int) string {
+	if len(b) <= n {
+		return string(b)
+	}
+	return string(b[:n]) + "...(truncated)"
 }

@@ -1,17 +1,13 @@
-// Package kuwo 酷我音乐 gRPC 插件。Ported from applications/task/services/kuwo.py。
+// Package kuwo 酷我音乐 gRPC 插件。Ported from applications/task/services/kuwo.py and
+// aligned with the reference go-music-dl / music-lib kuwo package (2026-08):
 //
-// 关键点：
-//   - search.kuwo.cn/r.s 返回 JS 风格 JSON（单引号、裸 key），parseKuwoJSON 转标准 JSON 后 unmarshal。
+//   - Search uses the www.kuwo.cn searchMusicBykeyWord endpoint, which returns
+//     clean, properly-escaped JSON (abslist[]). The previous search.kuwo.cn/r.s
+//     endpoint served JS-style JSON whose MINFO/N_MINFO values embed raw
+//     double quotes inside single-quoted strings — the naive '→" conversion
+//     corrupted the payload (invalid character 'b' after object key:value
+//     pair) and blanked the whole source (verified 2026-08).
 //   - 歌词从 m.kuwo.cn/newh5/singles/songinfoandlrc 取 lrclist，按 [h:m:s]fmt 重排为 LRC。
-//
-// CSRF / cookie ergonomics:
-//
-//	Kuwo's modern search endpoint gates anonymous calls behind a csrf cookie
-//	that has to be primed from a homepage visit. Replicating the cookie
-//	handshake via http.CookieJar (idempotent, per-server) is cleaner than
-//	baking in a token-rotation game against an undocumented endpoint.
-//	The first call per Server pays the warm-up cost; subsequent calls reuse
-//	the seeded cookies via the shared jar.
 package kuwo
 
 import (
@@ -21,22 +17,18 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	pb "go-music-tag/api/proto/tagplugin"
 )
 
-const (
-	searchURL     = "http://search.kuwo.cn/r.s"
-	homepageURL   = "https://www.kuwo.cn/"
-	warmupTimeout = 5 * time.Second
-)
+// searchURL is the kuwo web search endpoint (reference go-music-dl). It needs
+// no csrf cookie handshake and returns standard JSON — unlike the retired
+// search.kuwo.cn/r.s JS-style endpoint.
+const searchURL = "http://www.kuwo.cn/search/searchMusicBykeyWord"
 
 var headers = map[string]string{
 	"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
@@ -44,28 +36,12 @@ var headers = map[string]string{
 
 type Server struct {
 	pb.UnimplementedTagSourceServer
-	client     *http.Client
-	warmupOnce sync.Once
+	client *http.Client
 }
 
 func NewServer() *Server {
-	// cookiejar.New with nil Options accepts whatever cookies the warmup
-	// GET sets — no SameSite / domain allow-lists needed, exactly what we
-	// want for mimicking a real browser against kuwo.
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		// Treat as fatal: a search-only client without a jar would regress
-		// to the original failure mode (no csrf seeding). Log + return a
-		// server with an empty jar-like fallback so /r.s still gets called
-		// and the operator sees a useful error in `docker logs kuwo`.
-		log.Printf("[kuwo] cookiejar.New: %v — search may fail csrf check", err)
-		jar, _ = cookiejar.New(nil)
-	}
 	return &Server{
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-			Jar:     jar,
-		},
+		client: &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
@@ -164,49 +140,50 @@ func formatLRC(list []struct {
 // ─── internal search ──────────────────────────────────────────────
 
 type song struct {
-	ID      string
-	Name    string
-	Artist  string
-	Album   string
-	AlbumID string
+	ID       string
+	Name     string
+	Artist   string
+	Album    string
+	AlbumID  string
+	AlbumImg string
 }
 
 func (s song) toPB() *pb.Song {
 	return &pb.Song{
 		Id: s.ID, Name: s.Name, Artist: s.Artist,
 		Album: s.Album, AlbumId: s.AlbumID,
+		AlbumImg: s.AlbumImg,
 	}
 }
 
+// kuwoSearchItem mirrors one abslist / musiclist row of the clean-JSON
+// searchMusicBykeyWord response (field names verified 2026-08).
+type kuwoSearchItem struct {
+	MusicRID string `json:"MUSICRID"`
+	SongName string `json:"SONGNAME"`
+	Artist   string `json:"ARTIST"`
+	Singer   string `json:"SINGER"` // musiclist cohort uses SINGER (legacy fallback)
+	Album    string `json:"ALBUM"`
+	AlbumID  string `json:"ALBUMID"`
+	HtsMVPIC string `json:"hts_MVPIC"`
+}
+
 func (s *Server) doSearch(ctx context.Context, title string, page, limit int) ([]song, bool, error) {
-	// CSRF seed (no-op on subsequent calls thanks to sync.Once).
-	s.warmupOnce.Do(func() {
-		warmupCtx, cancel := context.WithTimeout(context.Background(), warmupTimeout)
-		defer cancel()
-		req, _ := http.NewRequestWithContext(warmupCtx, "GET", homepageURL, nil)
-		for k, v := range headers {
-			req.Header.Set(k, v)
-		}
-		if resp, err := s.client.Do(req); err == nil {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-		} else {
-			log.Printf("[kuwo] warmup: %v — first /r.s request may be csrf-rejected", err)
-		}
-	})
 	pn := (page - 1) * limit
 	q := url.Values{
-		"all":      {title},
-		"ft":       {"music"},
-		"itemset":  {"web_2013"},
-		"client":   {"kt"},
-		"pcmp4":    {"1"},
-		"geo":      {"c"},
-		"vipver":   {"1"},
-		"pn":       {strconv.Itoa(pn)},
-		"rn":       {strconv.Itoa(limit)},
-		"rformat":  {"json"},
-		"encoding": {"utf8"},
+		"all":                {title},
+		"vipver":             {"1"},
+		"client":             {"kt"},
+		"ft":                 {"music"},
+		"cluster":            {"0"},
+		"strategy":           {"2012"},
+		"encoding":           {"utf8"},
+		"rformat":            {"json"},
+		"mobi":               {"1"},
+		"issubtitle":         {"1"},
+		"show_copyright_off": {"1"},
+		"pn":                 {strconv.Itoa(pn)},
+		"rn":                 {strconv.Itoa(limit)},
 	}
 	httpReq, _ := http.NewRequestWithContext(ctx, "GET", searchURL+"?"+q.Encode(), nil)
 	for k, v := range headers {
@@ -218,46 +195,40 @@ func (s *Server) doSearch(ctx context.Context, title string, page, limit int) ([
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	cleaned := parseKuwoJSON(body)
 
 	var raw struct {
-		Abslist   []map[string]interface{} `json:"abslist"`
-		MusicList []map[string]interface{} `json:"musiclist"`
+		Abslist   []kuwoSearchItem `json:"abslist"`
+		MusicList []kuwoSearchItem `json:"musiclist"`
 	}
-	if err := json.Unmarshal(cleaned, &raw); err != nil {
+	if err := json.Unmarshal(body, &raw); err != nil {
 		// kuwo 上游偶发返回非 JSON 体（HTML 错误页、JS 模板渲染异常、响应中
 		// 嵌入意外字符、字符截断…）。不要把整次搜索变成 gRPC fail —— gateway
 		// 那一侧还在依次 fan-out 其余 plugin；记一行诊断日志、返 0 首歌、
 		// nil error，让前端照常拿到搜索结果，其它 plugin 不受影响。
 		log.Printf("[kuwo] doSearch 上游返回的响应无法解析为 JSON (响应长度=%d, 头 80 字节=%q): %v",
-			len(cleaned), preview(cleaned, 80), err)
+			len(body), preview(body, 80), err)
 		return nil, false, nil
 	}
-	songs := raw.Abslist
-	if len(songs) == 0 {
-		songs = raw.MusicList
+	items := raw.Abslist
+	if len(items) == 0 {
+		items = raw.MusicList
 	}
-	out := make([]song, 0, len(songs))
-	for _, m := range songs {
-		sg := song{
-			ID:      strings.TrimPrefix(str(getField(m, "MUSICRID", "musicrid")), "MUSIC_"),
-			Name:    str(getField(m, "NAME", "SONGNAME")),
-			Artist:  str(getField(m, "ARTIST", "SINGER")),
-			Album:   str(getField(m, "ALBUM")),
-			AlbumID: str(getField(m, "ALBUMID")),
+	out := make([]song, 0, len(items))
+	for _, it := range items {
+		artist := it.Artist
+		if artist == "" {
+			artist = it.Singer // musiclist cohort uses SINGER
 		}
-		out = append(out, sg)
+		out = append(out, song{
+			ID:       strings.TrimPrefix(it.MusicRID, "MUSIC_"),
+			Name:     it.SongName,
+			Artist:   artist,
+			Album:    it.Album,
+			AlbumID:  it.AlbumID,
+			AlbumImg: it.HtsMVPIC,
+		})
 	}
 	return out, len(out) >= limit, nil
-}
-
-func getField(m map[string]interface{}, keys ...string) interface{} {
-	for _, k := range keys {
-		if v, ok := m[k]; ok {
-			return v
-		}
-	}
-	return nil
 }
 
 func str(v interface{}) string {
@@ -276,50 +247,61 @@ func preview(b []byte, n int) string {
 	return string(b[:n]) + "...(truncated)"
 }
 
-// parseKuwoJSON 把 JS 风格的 JSON 转换为标准 JSON：
-//  1. 单引号 → 双引号
-//  2. 无引号 key 加引号  ({key: → {"key":,  ,key: → ,"key":)
-//
-// 实现完全等价 demjson3.decode。
-func parseKuwoJSON(body []byte) []byte {
-	s := string(body)
-	// ' → "
-	s = strings.ReplaceAll(s, `'`, `"`)
-	// 给裸 key 加引号
-	re := regexp.MustCompile(`([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)(\s*:)`)
-	s = re.ReplaceAllString(s, `$1"$2"$3`)
-	// 去掉 JS 风格的尾部逗号 (,] → ],  ,} → })
-	s = regexp.MustCompile(`,(\s*[}\]])`).ReplaceAllString(s, `$1`)
-	return []byte(s)
-}
-
 // GetAudioURL fetches a short-lived upstream audio-stream URL for the given
 // kuwo song rid. Best-effort: paid tracks or anti-bot blocks result in empty
 // url, which we propagate as ("", nil) so the gateway /api/stream proxy
 // fallback (handler.StreamAudio) can take over.
 //
-// Endpoint choice: www.kuwo.cn/api/v1/www/music/playUrl?mid={rid}&type=music is
-// the canonical 2024-era free-track endpoint. The older songinfoandlrc
-// response sometimes carries data.playurl in payload side-effects but we
-// don't depend on that here — playUrl is the explicit audio-fetch endpoint.
+// kuwoAudioURL is the antiserver endpoint used to resolve a playable audio
+// URL from a song rid. The previous www.kuwo.cn/api/v1/www/music/playUrl
+// endpoint now returns `{"success":false,"message":"The request is
+// illegal!"}` for anonymous traffic — the `Secret` header scheme was retired
+// upstream (verified 2026-07). antiserver.kuwo.cn/anti.s?type=convert_url3
+// still serves free 128k previews without any secret:
 //
-// The `Secret` header is documented upstream and is required for anonymous
-// 2024-26 traffic; rotating keys require updating kuwoSecret.
-const (
-	kuwoAudioURL = "https://www.kuwo.cn/api/v1/www/music/playUrl"
-	kuwoSecret   = "10373b58aee58943f95eaf17d38bc9cf50fbbef8e4bf4ec6401a3ae3ef8154560507f032"
+//	https://antiserver.kuwo.cn/anti.s?type=convert_url3&rid=MUSIC_<rid>&format=mp3&response=url
+//	→ {"code":200,"msg":"success","url":"https://nf-sycdn.kuwo.cn/...mp3"}
+//
+// kuwoSecret is kept as a deprecated no-op for the YAML override surface
+// (plan C.4); the antiserver path does not use it.
+var (
+	kuwoAudioURL = "https://antiserver.kuwo.cn/anti.s"
+	kuwoSecret   = "" // deprecated: playUrl Secret scheme retired 2026
 )
 
-// GetAudioURL handler (gRPC) on kuwo.TagSource.
+// SetSecret overwrites the package-level kuwoSecret. Exposed for the plugin
+// YAML override flow (plan C.4 Step 1: const→var runtime override); called by
+// internal/plugin/registry.go::RefreshOverrides only.
+func (s *Server) SetSecret(secret string) {
+	kuwoSecret = secret
+}
+
+// SetAPIBase overwrites the package-level kuwoAudioURL. Same lifecycle as
+// SetSecret above.
+func (s *Server) SetAPIBase(apiBase string) {
+	kuwoAudioURL = apiBase
+}
+
+// GetAudioURL handler (gRPC) on kuwo.TagSource. Resolves a playable audio
+// URL via the antiserver convert_url3 endpoint (the Secret-free replacement
+// for the retired playUrl API). Best-effort: paid / region-locked tracks
+// return empty url, which we propagate as ("", nil) so the gateway
+// /api/stream proxy fallback (handler.StreamAudio) keeps the "preview
+// unavailable" envelope.
 func (s *Server) GetAudioURL(ctx context.Context, req *pb.GetAudioRequest) (*pb.GetAudioResponse, error) {
 	if req.Id == "" {
 		return &pb.GetAudioResponse{}, nil
 	}
-	urlStr := fmt.Sprintf("%s?mid=%s&type=music&httpsStatus=1", kuwoAudioURL, req.Id)
+	// rid must carry the MUSIC_ prefix for convert_url3 (search already
+	// strips it when building Song.Id, so we re-add it here).
+	rid := req.Id
+	if !strings.HasPrefix(rid, "MUSIC_") {
+		rid = "MUSIC_" + rid
+	}
+	urlStr := fmt.Sprintf("%s?type=convert_url3&rid=%s&format=mp3&response=url", kuwoAudioURL, rid)
 	httpReq, _ := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	httpReq.Header.Set("User-Agent", headers["User-Agent"])
-	httpReq.Header.Set("Referer", "https://www.kuwo.cn/")
-	httpReq.Header.Set("Secret", kuwoSecret)
+	httpReq.Header.Set("Referer", "http://www.kuwo.cn/")
 	resp, err := s.client.Do(httpReq)
 	if err != nil {
 		log.Printf("[kuwo] GetAudioURL http error: %v", err)
@@ -328,13 +310,21 @@ func (s *Server) GetAudioURL(ctx context.Context, req *pb.GetAudioRequest) (*pb.
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	var data struct {
-		Data struct {
-			Url string `json:"url"`
-		} `json:"data"`
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		URL  string `json:"url"`
 	}
 	if err := json.Unmarshal(body, &data); err != nil {
 		log.Printf("[kuwo] GetAudioURL unmarshal (head=%q): %v", preview(body, 80), err)
 		return &pb.GetAudioResponse{}, nil
 	}
-	return &pb.GetAudioResponse{Url: data.Data.Url}, nil
+	if data.Code != 200 || data.URL == "" {
+		// Ops-side signal: antiserver returns code!=200 or empty url for
+		// paid / region-locked tracks. Body head goes to docker logs so
+		// `grep '[kuwo] GetAudioURL empty url'` shows what came back.
+		log.Printf("[kuwo] GetAudioURL empty url code=%d upstream status=%d body=%q",
+			data.Code, resp.StatusCode, preview(body, 80))
+		return &pb.GetAudioResponse{}, nil
+	}
+	return &pb.GetAudioResponse{Url: data.URL}, nil
 }

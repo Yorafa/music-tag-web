@@ -202,9 +202,18 @@ func (x *DownloadSearchResponse) GetItems() []*DownloadItem {
 }
 
 type DownloadRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	VideoId       string                 `protobuf:"bytes,1,opt,name=video_id,json=videoId,proto3" json:"video_id,omitempty"`
-	DownloadDir   string                 `protobuf:"bytes,2,opt,name=download_dir,json=downloadDir,proto3" json:"download_dir,omitempty"` // optional override
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	VideoId     string                 `protobuf:"bytes,1,opt,name=video_id,json=videoId,proto3" json:"video_id,omitempty"`
+	DownloadDir string                 `protobuf:"bytes,2,opt,name=download_dir,json=downloadDir,proto3" json:"download_dir,omitempty"` // optional override
+	// yt-dlp tuning knobs forwarded by the worker's download:generic task
+	// (DownloadPayload.ExtraJSON). Empty string means "plugin default":
+	//
+	//	format        → "bestaudio/best"
+	//	output_format → keep original container (no transcode)
+	//	quality       → "192" (kbps, only meaningful with output_format)
+	Format        string `protobuf:"bytes,3,opt,name=format,proto3" json:"format,omitempty"`
+	OutputFormat  string `protobuf:"bytes,4,opt,name=output_format,json=outputFormat,proto3" json:"output_format,omitempty"`
+	Quality       string `protobuf:"bytes,5,opt,name=quality,proto3" json:"quality,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -249,6 +258,27 @@ func (x *DownloadRequest) GetVideoId() string {
 func (x *DownloadRequest) GetDownloadDir() string {
 	if x != nil {
 		return x.DownloadDir
+	}
+	return ""
+}
+
+func (x *DownloadRequest) GetFormat() string {
+	if x != nil {
+		return x.Format
+	}
+	return ""
+}
+
+func (x *DownloadRequest) GetOutputFormat() string {
+	if x != nil {
+		return x.OutputFormat
+	}
+	return ""
+}
+
+func (x *DownloadRequest) GetQuality() string {
+	if x != nil {
+		return x.Quality
 	}
 	return ""
 }
@@ -426,10 +456,13 @@ const file_download_source_proto_rawDesc = "" +
 	"\achannel\x18\x05 \x01(\tR\achannel\x12\x1c\n" +
 	"\tthumbnail\x18\x06 \x01(\tR\tthumbnail\"G\n" +
 	"\x16DownloadSearchResponse\x12-\n" +
-	"\x05items\x18\x01 \x03(\v2\x17.tagplugin.DownloadItemR\x05items\"O\n" +
+	"\x05items\x18\x01 \x03(\v2\x17.tagplugin.DownloadItemR\x05items\"\xa6\x01\n" +
 	"\x0fDownloadRequest\x12\x19\n" +
 	"\bvideo_id\x18\x01 \x01(\tR\avideoId\x12!\n" +
-	"\fdownload_dir\x18\x02 \x01(\tR\vdownloadDir\"|\n" +
+	"\fdownload_dir\x18\x02 \x01(\tR\vdownloadDir\x12\x16\n" +
+	"\x06format\x18\x03 \x01(\tR\x06format\x12#\n" +
+	"\routput_format\x18\x04 \x01(\tR\foutputFormat\x12\x18\n" +
+	"\aquality\x18\x05 \x01(\tR\aquality\"|\n" +
 	"\x10DownloadResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1b\n" +
 	"\tfile_path\x18\x02 \x01(\tR\bfilePath\x12\x1b\n" +

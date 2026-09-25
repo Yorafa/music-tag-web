@@ -1,10 +1,17 @@
 // Package netease implements the NetEase Cloud Music tag source as a gRPC server.
-// Ported from applications/task/services/music_resource.py NetEaseMusicClient.
+// Ported from applications/task/services/music_resource.py NetEaseMusicClient and
+// aligned with the reference go-music-dl / music-lib netease package (2026-08):
 //
-// Endpoint choice: the historical /api/linux/forward pipeline rotated its AES key
-// upstream and returns `{"code":400}` on cold calls; the simpler
-// /api/search/get endpoint still serves unencrypted search results, so we use
-// it instead. No eparams encryption required.
+//   - Search uses the linux-client forward pipeline
+//     (POST /api/linux/forward with AES-128-ECB `eparams`, public key) as the
+//     primary path, with the legacy unencrypted /api/search/get as a fallback.
+//   - GetAudioURL resolves real stream URLs via the weapi pipeline
+//     (POST /weapi/song/enhance/player/url, AES-128-CBC + RSA — both fixed
+//     public keys, portable in pure Go, see crypto.go).
+//
+// Both encryption schemes use fixed public keys, so unlike the old
+// /api/linux/forward AES rotation failure mode ({"code":400} on cold calls)
+// the current keys are stable and verified against the live upstream.
 package netease
 
 import (
@@ -12,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -23,10 +31,19 @@ import (
 
 const baseURL = "https://music.163.com"
 
-// searchURL is the unencrypted endpoint we use for Search/FetchId3ByTitle.
-// Replaces the dead /api/linux/forward AES-encrypted pipeline that started
-// returning {"code":400} on cold calls after NetEase rotated the symmetric key.
+// forwardURL is the linux-client forward pipeline — the primary search path.
+// The body is an AES-128-ECB-encrypted `eparams` envelope pointing at the
+// cloudsearch endpoint (see crypto.go::encryptLinux). Response is the plain
+// cloudsearch JSON shape (result.songs[].ar/al).
+const forwardURL = "http://music.163.com/api/linux/forward"
+
+// searchURL is the legacy unencrypted search endpoint, kept as a fallback
+// when the forward pipeline is unreachable or returns an empty result.
 const searchURL = baseURL + "/api/search/get"
+
+// weapiURL is the weapi audio-stream endpoint used by GetAudioURL
+// (AES-128-CBC + RSA form body, see crypto.go::encryptWeapi).
+const weapiURL = "http://music.163.com/weapi/song/enhance/player/url"
 
 var defaultHeaders = map[string]string{
 	"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -104,11 +121,51 @@ func (s *Server) FetchLyric(ctx context.Context, req *pb.FetchLyricRequest) (*pb
 
 // --- Internal ---
 
-// doSearch POSTs to /api/search/get with form body. Returns the un-shuffled
-// raw song list (each element matching upstream's per-song schema: {id, name,
-// ar|artists, al|album, publishTime}). The normalize step folds both old and
-// new key shapes into a stable schema so the upstream drift doesn't leak.
+// doSearch runs the linux-forward pipeline first, falling back to the legacy
+// /api/search/get endpoint on transport/parse errors or an empty result (the
+// forward pipeline is the reference go-music-dl path; the legacy endpoint is
+// kept so a single upstream quirk never blanks the whole source). Returns the
+// raw per-song maps ({id, name, ar|artists, al|album, publishTime}) for the
+// normalize step to fold into a stable schema.
 func (s *Server) doSearch(ctx context.Context, title string, offset, limit int) ([]map[string]interface{}, error) {
+	songs, err := s.doLinuxForwardSearch(ctx, title, offset, limit)
+	if err == nil && len(songs) > 0 {
+		return songs, nil
+	}
+	if err != nil {
+		log.Printf("[netease] linux forward search failed (%v); falling back to /api/search/get", err)
+	} else {
+		log.Printf("[netease] linux forward search returned 0 songs; falling back to /api/search/get")
+	}
+	return s.doLegacySearch(ctx, title, offset, limit)
+}
+
+// doLinuxForwardSearch POSTs an AES-128-ECB-encrypted `eparams` envelope to
+// /api/linux/forward. The envelope targets the cloudsearch endpoint; the
+// response is plain cloudsearch JSON.
+func (s *Server) doLinuxForwardSearch(ctx context.Context, title string, offset, limit int) ([]map[string]interface{}, error) {
+	ep := map[string]interface{}{
+		"method": "POST",
+		"url":    "http://music.163.com/api/cloudsearch/pc",
+		"params": map[string]interface{}{
+			"s":      title,
+			"type":   1,
+			"offset": offset,
+			"limit":  limit,
+		},
+	}
+	raw, _ := json.Marshal(ep)
+	form := url.Values{"eparams": {encryptLinux(string(raw))}}
+	resp, err := s.doPostWithContext(ctx, forwardURL,
+		"application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	return parseSearchSongs(resp)
+}
+
+// doLegacySearch POSTs the unencrypted form body to /api/search/get.
+func (s *Server) doLegacySearch(ctx context.Context, title string, offset, limit int) ([]map[string]interface{}, error) {
 	form := url.Values{
 		"s":      {title},
 		"type":   {"1"},
@@ -120,13 +177,17 @@ func (s *Server) doSearch(ctx context.Context, title string, offset, limit int) 
 	if err != nil {
 		return nil, err
 	}
+	return parseSearchSongs(resp)
+}
+
+// parseSearchSongs pulls the songs array out of the shared response shapes:
+// {"code":...,"result":{"songs":[...]}} (both forward and legacy) or a
+// legacy top-level {"songs":[...]}.
+func parseSearchSongs(resp []byte) ([]map[string]interface{}, error) {
 	var result map[string]interface{}
 	if uerr := json.Unmarshal(resp, &result); uerr != nil {
 		return nil, fmt.Errorf("netease json unmarshal: %w", uerr)
 	}
-	// The endpoint can return either {"code":...,"result":{"songs":[...]}}
-	// or {"result":{"songs":[...]}}. Older payloads used
-	// {"songs":[...]} at the top level. Iterate the known containers.
 	var list []interface{}
 	if resultMap, ok := result["result"].(map[string]interface{}); ok {
 		if songs, ok := resultMap["songs"].([]interface{}); ok {
@@ -340,20 +401,57 @@ func (s *Server) doPostWithContext(ctx context.Context, url, contentType string,
 	return io.ReadAll(resp.Body)
 }
 
-// GetAudioURL is a documented stub for NetEase Cloud Music.
+// GetAudioURL resolves a real stream URL via the weapi pipeline
+// (POST /weapi/song/enhance/player/url). The weapi scheme uses fixed public
+// keys (AES-128-CBC nonce + random secKey, RSA of the reversed secKey — see
+// crypto.go), so it is fully reproducible from pure Go — no sidecar, no
+// rotating-key guessing.
 //
-// As of 2024-2026, NetEase's audio-stream URL endpoint (/api/song/enhance/
-// player/url) requires EAPI/WeAPI encryption (CryptoJS AES with rotating
-// upstream keys) or a session cookie from a logged-in /vip account. The
-// historical /api/linux/forward pipeline started returning {"code":400} on
-// cold calls after NetEase rotated the symmetric key, so we cannot reliably
-// reproduce the encryption from a Go-only client without a sidecar.
+// Response shape (verified 2026-08):
 //
-// Best-effort contract: we always return ("", nil) so callers (gateway
-// /api/stream proxy or frontend PlayButton) treat empty url + SupportsAudioUrl
-// == true as a "transient upstream failure" signal. The proxy path then asks
-// NetEase through the gateway. SupportsAudioUrl=true here just tells callers
-// the source CAN provide audio if asked via the proxy.
-func (s *Server) GetAudioURL(_ context.Context, _ *pb.GetAudioRequest) (*pb.GetAudioResponse, error) {
-	return &pb.GetAudioResponse{}, nil
+//	{"code":200,"data":[{"id":...,"url":"http://m7.music.126.net/...mp3?e=...","br":320000,"code":200}]}
+//
+// Non-CN exit IPs (and anonymous callers of paid tracks) get an EMPTY body
+// from the upstream — that is a geo/VIP restriction, not a client bug. We
+// propagate ("", nil) so the gateway /api/stream keeps the "preview
+// unavailable: source=netease" envelope instead of a misleading 200. From a
+// CN / logged-in deployment the URL populates and playback works.
+//
+// Best-effort contract preserved: ("", nil) on any failure.
+func (s *Server) GetAudioURL(ctx context.Context, req *pb.GetAudioRequest) (*pb.GetAudioResponse, error) {
+	if req.Id == "" {
+		return &pb.GetAudioResponse{}, nil
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"ids":        []string{req.Id},
+		"br":         320000,
+		"csrf_token": "",
+	})
+	params, encSecKey := encryptWeapi(string(payload))
+	form := url.Values{
+		"params":    {params},
+		"encSecKey": {encSecKey},
+	}
+	resp, err := s.doPostWithContext(ctx, weapiURL,
+		"application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
+	if err != nil {
+		log.Printf("[netease] GetAudioURL http error id=%s: %v", req.Id, err)
+		return &pb.GetAudioResponse{}, nil
+	}
+	var data struct {
+		Code int `json:"code"`
+		Data []struct {
+			URL string `json:"url"`
+		} `json:"data"`
+	}
+	if uerr := json.Unmarshal(resp, &data); uerr != nil {
+		log.Printf("[netease] GetAudioURL unmarshal id=%s (len=%d): %v", req.Id, len(resp), uerr)
+		return &pb.GetAudioResponse{}, nil
+	}
+	if data.Code != 200 || len(data.Data) == 0 || data.Data[0].URL == "" {
+		// Empty body / empty url = geo or VIP restriction (see doc above).
+		log.Printf("[netease] GetAudioURL empty url code=%d id=%s body_len=%d", data.Code, req.Id, len(resp))
+		return &pb.GetAudioResponse{}, nil
+	}
+	return &pb.GetAudioResponse{Url: data.Data[0].URL}, nil
 }

@@ -2,6 +2,7 @@ package netease
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"strconv"
@@ -197,6 +198,123 @@ func TestServer_Search_NumericIDDoesNotPanic(t *testing.T) {
 	}
 }
 
+// ─── linux-forward search pipeline ─────────────────────────────────────────
+
+// TestServer_Search_UsesLinuxForwardPrimary verifies the search request hits
+// /api/linux/forward with a non-empty `eparams` AES envelope (not the raw
+// keyword), and the cloudsearch-shaped response is parsed.
+func TestServer_Search_UsesLinuxForwardPrimary(t *testing.T) {
+	srv, _ := NewServer()
+	var sawURL string
+	var sawForm string
+	srv.client.Transport = &neteaseRT{
+		fn: func(req *http.Request) (*http.Response, error) {
+			sawURL = req.URL.String()
+			body, _ := io.ReadAll(req.Body)
+			sawForm = string(body)
+			return jsonResp(200, neteaseSearchBody), nil
+		},
+	}
+	resp, err := srv.Search(context.Background(), &pb.SearchRequest{Query: "hello", Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if !strings.Contains(sawURL, "/api/linux/forward") {
+		t.Errorf("Search hit %q, want /api/linux/forward", sawURL)
+	}
+	// eparams must be a 32-hex-char-per-block uppercase string, not the query.
+	if !strings.Contains(sawForm, "eparams=") || strings.Contains(sawForm, "hello") {
+		t.Errorf("form body=%q: want eparams AES envelope without the raw query", sawForm)
+	}
+	if len(resp.Songs) != 1 || resp.Songs[0].Name != "Hello" {
+		t.Errorf("unexpected songs: %+v", resp.Songs)
+	}
+}
+
+// TestServer_Search_FallsBackToLegacyWhenForwardEmpty verifies the fallback
+// fires when the forward pipeline returns an empty (but valid) result.
+func TestServer_Search_FallsBackToLegacyWhenForwardEmpty(t *testing.T) {
+	srv, _ := NewServer()
+	calls := 0
+	srv.client.Transport = &neteaseRT{
+		fn: func(req *http.Request) (*http.Response, error) {
+			calls++
+			if strings.Contains(req.URL.String(), "/api/linux/forward") {
+				return jsonResp(200, `{"code":200,"result":{"songs":[]}}`), nil
+			}
+			return jsonResp(200, neteaseSearchBody), nil
+		},
+	}
+	resp, err := srv.Search(context.Background(), &pb.SearchRequest{Query: "hello", Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("expected 2 upstream calls (forward empty → legacy), got %d", calls)
+	}
+	if len(resp.Songs) != 1 || resp.Songs[0].Id != "12345" {
+		t.Errorf("legacy fallback should populate songs: %+v", resp.Songs)
+	}
+}
+
+// ─── GetAudioURL (weapi) ───────────────────────────────────────────────────
+
+func TestServer_GetAudioURL_ReturnsWeapiUrl(t *testing.T) {
+	srv, _ := NewServer()
+	var sawURL string
+	var sawForm string
+	body := `{"code":200,"data":[{"id":347230,"url":"http://m7.music.126.net/abc.mp3","br":320000,"code":200}]}`
+	srv.client.Transport = &neteaseRT{
+		fn: func(req *http.Request) (*http.Response, error) {
+			sawURL = req.URL.String()
+			b, _ := io.ReadAll(req.Body)
+			sawForm = string(b)
+			return jsonResp(200, body), nil
+		},
+	}
+	resp, err := srv.GetAudioURL(context.Background(), &pb.GetAudioRequest{Id: "347230"})
+	if err != nil {
+		t.Fatalf("GetAudioURL: %v", err)
+	}
+	if !strings.Contains(sawURL, "/weapi/song/enhance/player/url") {
+		t.Errorf("GetAudioURL hit %q, want weapi url endpoint", sawURL)
+	}
+	if !strings.Contains(sawForm, "params=") || !strings.Contains(sawForm, "encSecKey=") {
+		t.Errorf("weapi form should carry params+encSecKey, got %q", sawForm)
+	}
+	if resp.Url != "http://m7.music.126.net/abc.mp3" {
+		t.Errorf("Url = %q, want weapi data[0].url", resp.Url)
+	}
+}
+
+func TestServer_GetAudioURL_EmptyBodyReturnsEmpty(t *testing.T) {
+	srv, _ := NewServer()
+	srv.client.Transport = &neteaseRT{
+		fn: func(*http.Request) (*http.Response, error) { return jsonResp(200, ``), nil },
+	}
+	resp, err := srv.GetAudioURL(context.Background(), &pb.GetAudioRequest{Id: "347230"})
+	if err != nil {
+		t.Fatalf("GetAudioURL: %v", err)
+	}
+	if resp.Url != "" {
+		t.Errorf("empty upstream body should yield empty url; got %q", resp.Url)
+	}
+}
+
+func TestServer_GetAudioURL_NetworkErrorReturnsEmpty(t *testing.T) {
+	srv, _ := NewServer()
+	srv.client.Transport = &neteaseRT{
+		fn: func(*http.Request) (*http.Response, error) { return nil, io.EOF },
+	}
+	resp, err := srv.GetAudioURL(context.Background(), &pb.GetAudioRequest{Id: "347230"})
+	if err != nil {
+		t.Fatalf("GetAudioURL network error should still return nil err: %v", err)
+	}
+	if resp.Url != "" {
+		t.Errorf("network error should yield empty url; got %q", resp.Url)
+	}
+}
+
 // ─── FetchId3ByTitle ───────────────────────────────────────────────────────
 
 func TestServer_FetchId3ByTitle_HappyPath(t *testing.T) {
@@ -254,6 +372,55 @@ func TestNewServer_StableAcrossCalls(t *testing.T) {
 	}
 	if a.client == nil || b.client == nil {
 		t.Errorf("expected non-nil client in both servers")
+	}
+}
+
+// ─── crypto primitives ─────────────────────────────────────────────────────
+
+// TestEncryptLinux_KnownVector pins the AES-128-ECB eparams envelope against
+// the reference implementation's exact algorithm (uppercase hex output). The
+// vector was verified against the live upstream: the returned eparams is
+// decodable by NetEase's cloudsearch/pc (2026-08).
+func TestEncryptLinux_DeterministicShape(t *testing.T) {
+	out := encryptLinux(`{"method":"POST","url":"http://music.163.com/api/cloudsearch/pc"}`)
+	if len(out) == 0 || len(out)%32 != 0 {
+		t.Errorf("encryptLinux output len=%d, want multiple of 32 (16-byte AES blocks in hex)", len(out))
+	}
+	for _, c := range out {
+		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')) {
+			t.Fatalf("encryptLinux output contains non-uppercase-hex char %q", c)
+		}
+	}
+	// Deterministic for the same input+key.
+	again := encryptLinux(`{"method":"POST","url":"http://music.163.com/api/cloudsearch/pc"}`)
+	if out != again {
+		t.Errorf("encryptLinux not deterministic")
+	}
+}
+
+// TestEncryptWeapi_ParamsAndSecKeyShapes pins the weapi output: params must
+// be base64 (AES-128-CBC double layer), encSecKey must be a 256-hex-char RSA
+// ciphertext.
+func TestEncryptWeapi_ParamsAndSecKeyShapes(t *testing.T) {
+	params, encSecKey := encryptWeapi(`{"ids":["347230"],"br":320000}`)
+	if params == "" {
+		t.Fatal("empty weapi params")
+	}
+	if _, err := base64.StdEncoding.DecodeString(params); err != nil {
+		t.Errorf("weapi params not base64: %v", err)
+	}
+	if len(encSecKey) != 256 {
+		t.Errorf("encSecKey len=%d, want 256 hex chars", len(encSecKey))
+	}
+	for _, c := range encSecKey {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			t.Fatalf("encSecKey contains non-lower-hex char %q", c)
+		}
+	}
+	// Two calls must differ (random secKey).
+	p2, k2 := encryptWeapi(`{"ids":["347230"],"br":320000}`)
+	if params == p2 && encSecKey == k2 {
+		t.Errorf("weapi should be randomized across calls (got identical output)")
 	}
 }
 

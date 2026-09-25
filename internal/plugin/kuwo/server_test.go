@@ -2,7 +2,6 @@ package kuwo
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -29,18 +28,20 @@ func jsonResp(code int, body string) *http.Response {
 	}
 }
 
-// kuwoSearchBody: search.kuwo.cn/r.s returns JS-style JSON. After parseKuwoJSON
-// transforms, we get cleanly-structured abslist entries.
-const kuwoSearchJSBody = `{
-  abslist: [
+// kuwoSearchBody mirrors the clean-JSON searchMusicBykeyWord response shape
+// (reference go-music-dl endpoint; verified 2026-08). Fields are properly
+// escaped — no JS-style parsing needed.
+const kuwoSearchBody = `{
+  "abslist": [
     {
-      MUSICRID: 'MUSIC_12345',
-      NAME: 'Hello',
-      ARTIST: 'Adele',
-      ALBUM: '25',
-      ALBUMID: '200'
-    },
-  ],
+      "MUSICRID": "MUSIC_12345",
+      "SONGNAME": "Hello",
+      "ARTIST": "Adele",
+      "ALBUM": "25",
+      "ALBUMID": "200",
+      "hts_MVPIC": "https://img4.kuwo.cn/wmvpic/abc.jpg"
+    }
+  ]
 }`
 
 // ─── GetPluginInfo ─────────────────────────────────────────────────────────
@@ -61,48 +62,6 @@ func TestServer_GetPluginInfo(t *testing.T) {
 		if !gate {
 			t.Errorf("expected all-true; got %+v", info)
 		}
-	}
-}
-
-// ─── parseKuwoJSON pure helper ─────────────────────────────────────────────
-
-func TestParseKuwoJSON_ConvertsSingleQuotesToDouble(t *testing.T) {
-	in := []byte(`{abslist:[{MUSICRID:'MUSIC_1',NAME:'hello',},]}`)
-	out := string(parseKuwoJSON(in))
-	// Should: quote-key + strip-',]' + strip-trailing-comma-before-'}'. So
-	// these tokens MUST appear, and `,]` / `,}` MUST NOT survive.
-	for _, must := range []string{`"abslist"`, `"MUSICRID"`, `"MUSIC_1"`, `"NAME"`, `"hello"`, `}]`} {
-		if !strings.Contains(out, must) {
-			t.Errorf("output missing %q; got %q", must, out)
-		}
-	}
-	for _, forbidden := range []string{`,]`, `,}`, `'`} {
-		if strings.Contains(out, forbidden) {
-			t.Errorf("output still contains %q (should be stripped); got %q", forbidden, out)
-		}
-	}
-}
-
-func TestParseKuwoJSON_RemovesTrailingCommas(t *testing.T) {
-	in := []byte("[1,2,3,]")
-	out := string(parseKuwoJSON(in))
-	if strings.Contains(out, ",]") {
-		t.Errorf("trailing comma not stripped; got %q", out)
-	}
-}
-
-func TestParseKuwoJSON_HandlesAlreadyValidJSON(t *testing.T) {
-	// passthrough: don't mangle standard JSON twice.
-	in := []byte(`{"abslist":[{"MUSICRID":"MUSIC_1"}]}`)
-	out := string(parseKuwoJSON(in))
-	var probe struct {
-		Abslist []map[string]interface{} `json:"abslist"`
-	}
-	if err := json.Unmarshal([]byte(out), &probe); err != nil {
-		t.Fatalf("output not valid json: %v (out=%q)", err, out)
-	}
-	if len(probe.Abslist) != 1 || probe.Abslist[0]["MUSICRID"] != "MUSIC_1" {
-		t.Errorf("passthrough lost data: %+v", probe)
 	}
 }
 
@@ -136,7 +95,7 @@ func TestFormatLRC_Empty(t *testing.T) {
 func TestServer_Search_HappyPath(t *testing.T) {
 	srv := NewServer()
 	srv.client.Transport = &kuwoRT{fn: func(*http.Request) (*http.Response, error) {
-		return jsonResp(200, kuwoSearchJSBody), nil
+		return jsonResp(200, kuwoSearchBody), nil
 	}}
 	resp, _ := srv.Search(context.Background(), &pb.SearchRequest{Query: "hello", Page: 1, Limit: 10})
 	if len(resp.Songs) != 1 {
@@ -152,17 +111,20 @@ func TestServer_Search_HappyPath(t *testing.T) {
 	if s.Artist != "Adele" || s.Album != "25" || s.AlbumId != "200" {
 		t.Errorf("song=%+v", s)
 	}
+	if s.AlbumImg != "https://img4.kuwo.cn/wmvpic/abc.jpg" {
+		t.Errorf("AlbumImg = %q (want hts_MVPIC cover)", s.AlbumImg)
+	}
 }
 
 func TestServer_Search_FallsBackToMusicListWhenAbslistEmpty(t *testing.T) {
-	// ABSLIST empty; MUSICLIST present with one entry.
-	body := `{musiclist:[{MUSICRID:'MUSIC_99',SONGNAME:'fallback',SINGER:'x',ALBUM:'y',ALBUMID:'5'}]}`
+	// ABSLIST empty; MUSICLIST present with one entry (SINGER field cohort).
+	body := `{"musiclist":[{"MUSICRID":"MUSIC_99","SONGNAME":"fallback","SINGER":"x","ALBUM":"y","ALBUMID":"5"}]}`
 	srv := NewServer()
 	srv.client.Transport = &kuwoRT{fn: func(*http.Request) (*http.Response, error) {
 		return jsonResp(200, body), nil
 	}}
 	resp, _ := srv.Search(context.Background(), &pb.SearchRequest{Query: "x", Page: 1, Limit: 10})
-	if len(resp.Songs) != 1 || resp.Songs[0].Name != "fallback" {
+	if len(resp.Songs) != 1 || resp.Songs[0].Name != "fallback" || resp.Songs[0].Artist != "x" {
 		t.Errorf("musiclist fallback not honored; got %+v", resp.Songs)
 	}
 }
@@ -201,12 +163,55 @@ func TestServer_Search_InvalidJSONToleratedAsEmpty(t *testing.T) {
 	}
 }
 
+// ─── GetAudioURL (antiserver convert_url3) ─────────────────────────────────
+
+// TestServer_GetAudioURL_AntiserverReturnsUrl pins the 2026-era playback
+// fix: the www.kuwo.cn/api/v1/www/music/playUrl endpoint now 403s anonymous
+// traffic ("The request is illegal!") — the Secret header scheme was
+// retired. GetAudioURL must call antiserver convert_url3 with the MUSIC_
+// prefixed rid and return its `url` field.
+func TestServer_GetAudioURL_AntiserverReturnsUrl(t *testing.T) {
+	body := `{"code":200,"msg":"success","url":"https://nf-sycdn.kuwo.cn/abc123.mp3"}`
+	var gotURL string
+	srv := NewServer()
+	srv.client.Transport = &kuwoRT{fn: func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		return jsonResp(200, body), nil
+	}}
+	resp, err := srv.GetAudioURL(context.Background(), &pb.GetAudioRequest{Id: "12345"})
+	if err != nil {
+		t.Fatalf("GetAudioURL: %v", err)
+	}
+	if !strings.Contains(gotURL, "type=convert_url3") || !strings.Contains(gotURL, "rid=MUSIC_12345") {
+		t.Errorf("request URL=%q (want antiserver convert_url3 + MUSIC_ prefixed rid)", gotURL)
+	}
+	if resp.GetUrl() != "https://nf-sycdn.kuwo.cn/abc123.mp3" {
+		t.Errorf("url=%q (want antiserver url field)", resp.GetUrl())
+	}
+}
+
+// TestServer_GetAudioURL_Non200CodeReturnsEmpty pins the paid/region-locked
+// path: antiserver returns code!=200 (or empty url) for tracks it can't
+// serve — GetAudioURL yields ("", nil) so the gateway keeps the "preview
+// unavailable" envelope.
+func TestServer_GetAudioURL_Non200CodeReturnsEmpty(t *testing.T) {
+	body := `{"code":201,"msg":"forbidden","url":""}`
+	srv := NewServer()
+	srv.client.Transport = &kuwoRT{fn: func(*http.Request) (*http.Response, error) {
+		return jsonResp(200, body), nil
+	}}
+	resp, _ := srv.GetAudioURL(context.Background(), &pb.GetAudioRequest{Id: "12345"})
+	if resp.GetUrl() != "" {
+		t.Errorf("url=%q (want empty on non-200 code)", resp.GetUrl())
+	}
+}
+
 // ─── FetchId3ByTitle ───────────────────────────────────────────────────────
 
 func TestServer_FetchId3ByTitle_Happy(t *testing.T) {
 	srv := NewServer()
 	srv.client.Transport = &kuwoRT{fn: func(*http.Request) (*http.Response, error) {
-		return jsonResp(200, kuwoSearchJSBody), nil
+		return jsonResp(200, kuwoSearchBody), nil
 	}}
 	resp, _ := srv.FetchId3ByTitle(context.Background(), &pb.FetchId3Request{Title: "Hello"})
 	if len(resp.Songs) != 1 || resp.Songs[0].Id != "12345" {

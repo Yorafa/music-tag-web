@@ -146,6 +146,102 @@ func TestServer_Search_EmptyResult(t *testing.T) {
 	}
 }
 
+// ─── GetAudioURL (m.kugou getSongInfo) ─────────────────────────────────────
+
+// TestServer_GetAudioURL_ReturnsUrl pins the 2026-era playback fix: the
+// www.kugou.com/yy/index.php?r=play/getdata endpoint now returns err_code
+// 20010/30020 for anonymous traffic, but m.kugou.com/app/i/getSongInfo.php
+// (cmd=playInfo) still serves free tracks with a real `url`. GetAudioURL
+// must call that endpoint and return the url field.
+func TestServer_GetAudioURL_ReturnsUrl(t *testing.T) {
+	body := `{"errcode":0,"url":"https://sharefs.kugou.com/v3/abc.mp3","pay_type":0,"privilege":0}`
+	var gotURL string
+	srv := NewServer()
+	srv.client.Transport = &kgRT{fn: func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		return jsonResp(200, body), nil
+	}}
+	resp, err := srv.GetAudioURL(context.Background(), &pb.GetAudioRequest{Id: "abc123"})
+	if err != nil {
+		t.Fatalf("GetAudioURL: %v", err)
+	}
+	if !strings.Contains(gotURL, "cmd=playInfo") || !strings.Contains(gotURL, "hash=abc123") {
+		t.Errorf("request URL=%q (want getSongInfo cmd=playInfo + hash)", gotURL)
+	}
+	// The H5 endpoint rejects bare requests (errcode 0 + empty url) unless
+	// they carry the dfid/mid/platid device-fingerprint params (verified
+	// 2026-07). Pin them so a future refactor can't silently drop them.
+	for _, want := range []string{"dfid=" + kgDFID, "mid=" + kgMID, "platid=4"} {
+		if !strings.Contains(gotURL, want) {
+			t.Errorf("request URL=%q missing %q (device fingerprint params)", gotURL, want)
+		}
+	}
+	if resp.GetUrl() != "https://sharefs.kugou.com/v3/abc.mp3" {
+		t.Errorf("url=%q (want getSongInfo url field)", resp.GetUrl())
+	}
+}
+
+// TestServer_GetAudioURL_FallsBackToTrackercdn pins the 2026-08 fallback:
+// when getSongInfo errcodes (anti-bot 1002, paid, region-lock), GetAudioURL
+// retries the trackercdn mirrors (reference go-music-dl kugou fetchTracker-
+// SongInfo). The cmd=4 mirror with md5(hash+"kgcloud") key serves a url for
+// free tracks; the fallback must lower-case the hash for the tracker API.
+func TestServer_GetAudioURL_FallsBackToTrackercdn(t *testing.T) {
+	srv := NewServer()
+	var trackerURL string
+	srv.client.Transport = &kgRT{fn: func(req *http.Request) (*http.Response, error) {
+		if strings.Contains(req.URL.String(), "getSongInfo") {
+			return jsonResp(200, `{"errcode":1002,"url":""}`), nil // anti-bot rate limit
+		}
+		trackerURL = req.URL.String()
+		return jsonResp(200, `{"status":1,"errcode":0,"url":"https://fsvippc.tx.kugou.com/real.mp3"}`), nil
+	}}
+	resp, err := srv.GetAudioURL(context.Background(), &pb.GetAudioRequest{Id: "ABC123"})
+	if err != nil {
+		t.Fatalf("GetAudioURL: %v", err)
+	}
+	if resp.GetUrl() != "https://fsvippc.tx.kugou.com/real.mp3" {
+		t.Errorf("url=%q (want trackercdn fallback url)", resp.GetUrl())
+	}
+	if !strings.Contains(trackerURL, "trackercdn") {
+		t.Errorf("fallback request=%q (want trackercdn mirror)", trackerURL)
+	}
+	if !strings.Contains(trackerURL, "hash=abc123") {
+		t.Errorf("fallback request=%q (want lowercase hash)", trackerURL)
+	}
+}
+
+// TestPickKgURL_HandlesStringAndArray pins the trackercdn url/backup_url
+// shape tolerance: the fields can be a plain string OR a mirror array, and
+// the raw body may escape slashes (\\/) which must be un-escaped.
+func TestPickKgURL_HandlesStringAndArray(t *testing.T) {
+	if got := pickKgURL("https://a/1.mp3"); got != "https://a/1.mp3" {
+		t.Errorf("string pick=%q", got)
+	}
+	if got := pickKgURL([]interface{}{"", "https://b/2.mp3"}); got != "https://b/2.mp3" {
+		t.Errorf("array pick=%q", got)
+	}
+	if got := pickKgURL(42); got != "" {
+		t.Errorf("non-string pick=%q (want empty)", got)
+	}
+}
+
+// TestServer_GetAudioURL_PaidTrackReturnsEmpty pins the paid/region-locked
+// path: paid tracks come back errcode 0 + empty url (or errcode != 0) AND
+// the trackercdn fallback also returns nothing — GetAudioURL yields ("",
+// nil) so the gateway keeps the "preview unavailable" envelope.
+func TestServer_GetAudioURL_PaidTrackReturnsEmpty(t *testing.T) {
+	body := `{"errcode":0,"url":"","pay_type":3,"privilege":10}`
+	srv := NewServer()
+	srv.client.Transport = &kgRT{fn: func(*http.Request) (*http.Response, error) {
+		return jsonResp(200, body), nil
+	}}
+	resp, _ := srv.GetAudioURL(context.Background(), &pb.GetAudioRequest{Id: "abc123"})
+	if resp.GetUrl() != "" {
+		t.Errorf("url=%q (want empty on paid track)", resp.GetUrl())
+	}
+}
+
 // ─── FetchId3ByTitle ───────────────────────────────────────────────────────
 
 func TestServer_FetchId3ByTitle_Happy(t *testing.T) {

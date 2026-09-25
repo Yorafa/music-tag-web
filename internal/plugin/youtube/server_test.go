@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -175,5 +176,212 @@ func mustWrite(t *testing.T, path string, data []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// fakeYtdlpScript returns a self-contained fake yt-dlp that:
+//   - dumps its full argv (one arg per line) to $YTDLP_ARGS_FILE, and
+//   - resolves the -o output template + the trailing video URL, then
+//     writes a fake <id>.mp3 into the template dir, exiting 0.
+//
+// mode "fail" makes it exit 1 with a stderr message instead, to exercise
+// the failure/error-sentinel path.
+func fakeYtdlpScript(mode string) string {
+	if mode == "fail" {
+		return `#!/bin/sh
+printf 'ERROR: signed URL expired\n' >&2
+exit 1
+`
+	}
+	return `#!/bin/sh
+printf '%s\n' "$@" > "$YTDLP_ARGS_FILE"
+prev=""
+out=""
+url=""
+for a in "$@"; do
+    [ "$prev" = "-o" ] && out="$a"
+    url="$a"
+    prev="$a"
+done
+[ -n "$out" ] || exit 1
+dir=$(dirname "$out")
+mkdir -p "$dir"
+vid=$(printf '%s' "$url" | sed -E 's/.*v=([A-Za-z0-9_-]+).*/\1/')
+outpath=$(printf '%s' "$out" | sed -E "s/%\(id\)s/${vid}/g; s/%\(ext\)s/mp3/g")
+printf 'FAKE-AUDIO' > "$outpath"
+exit 0
+`
+}
+
+// installFakeYtdlp writes the fake script to disk and returns a Server
+// pointed at it, with an isolated workDir and a fresh argv capture file.
+func installFakeYtdlp(t *testing.T, mode string) (*Server, string, string) {
+	t.Helper()
+	script := fakeYtdlpScript(mode)
+	bin := filepath.Join(t.TempDir(), "fake-yt-dlp")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	t.Setenv("YTDLP_ARGS_FILE", argsFile)
+	workDir := t.TempDir()
+	s, err := NewServer(WithYTDLPPath(bin), WithWorkDir(workDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, argsFile, workDir
+}
+
+func readArgsFile(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read args file: %v", err)
+	}
+	return strings.Split(strings.TrimSpace(string(data)), "\n")
+}
+
+func hasArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestDownload_TranscodeArgs pins the full yt-dlp argv the plugin builds
+// for a transcode request (output_format=mp3 + quality + format) — the
+// contract the worker relies on when it forwards DownloadOptions.
+func TestDownload_TranscodeArgs(t *testing.T) {
+	s, argsFile, _ := installFakeYtdlp(t, "ok")
+	const id = "dQw4w9WgXcQ"
+	resp, err := s.Download(context.Background(), &pb.DownloadRequest{
+		VideoId:      id,
+		Format:       "bestaudio[height<=480]",
+		OutputFormat: "mp3",
+		Quality:      "320",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Success {
+		t.Fatalf("Download failed: %s", resp.Error)
+	}
+	if filepath.Base(resp.FilePath) != id+".mp3" {
+		t.Errorf("FilePath = %q, want basename %q", resp.FilePath, id+".mp3")
+	}
+	if resp.FileName != id+".mp3" {
+		t.Errorf("FileName = %q, want %q", resp.FileName, id+".mp3")
+	}
+
+	args := readArgsFile(t, argsFile)
+	for _, want := range []string{
+		"--no-playlist", "--no-progress", "--newline",
+		"--retries", "3", "--extractor-retries", "3",
+		"--extractor-args", "youtube:player_client=default",
+		"-f", "bestaudio[height<=480]",
+		"--extract-audio", "--audio-format", "mp3", "--audio-quality", "320K",
+		"--", "https://www.youtube.com/watch?v=" + id,
+	} {
+		if !hasArg(args, want) {
+			t.Errorf("argv missing %q; got %v", want, args)
+		}
+	}
+	if hasArg(args, "--js-runtimes") {
+		t.Errorf("argv should not contain --js-runtimes (deno absent in test env)")
+	}
+}
+
+// TestDownload_DefaultNoTranscode pins that an empty output_format keeps the
+// original container — no --extract-audio flag, and -f defaults to
+// bestaudio/best.
+func TestDownload_DefaultNoTranscode(t *testing.T) {
+	s, argsFile, _ := installFakeYtdlp(t, "ok")
+	resp, err := s.Download(context.Background(), &pb.DownloadRequest{VideoId: "dQw4w9WgXcQ"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Success {
+		t.Fatalf("Download failed: %s", resp.Error)
+	}
+	args := readArgsFile(t, argsFile)
+	if hasArg(args, "--extract-audio") {
+		t.Errorf("argv should not contain --extract-audio for empty output_format; got %v", args)
+	}
+	if !hasArg(args, "-f") || !hasArg(args, "bestaudio/best") {
+		t.Errorf("argv should default to -f bestaudio/best; got %v", args)
+	}
+}
+
+// TestDownload_RejectsUnsafeKnobs pins that format / output_format / quality
+// are sanitized at the plugin boundary — an injection attempt is refused
+// before any exec, with a clean failure envelope.
+func TestDownload_RejectsUnsafeKnobs(t *testing.T) {
+	cases := []struct {
+		name string
+		req  *pb.DownloadRequest
+	}{
+		{"format flag injection", &pb.DownloadRequest{VideoId: "dQw4w9WgXcQ", Format: "--exec=rm -rf /"}},
+		{"output_format not in enum", &pb.DownloadRequest{VideoId: "dQw4w9WgXcQ", OutputFormat: "exe"}},
+		{"quality not numeric", &pb.DownloadRequest{VideoId: "dQw4w9WgXcQ", Quality: "1e6;rm"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s, _, _ := installFakeYtdlp(t, "ok")
+			resp, err := s.Download(context.Background(), c.req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.Success {
+				t.Errorf("expected sanitize rejection, got Success")
+			}
+			if resp.Error == "" {
+				t.Error("expected a non-empty error message")
+			}
+		})
+	}
+}
+
+// TestDownload_FailureWritesErrorMarker pins the <id>.error sentinel
+// contract: a failed yt-dlp run writes <id>.error into workDir so the
+// gateway's /api/stream long-poll fails closed instead of looping 202.
+func TestDownload_FailureWritesErrorMarker(t *testing.T) {
+	s, _, workDir := installFakeYtdlp(t, "fail")
+	const id = "dQw4w9WgXcQ"
+	resp, err := s.Download(context.Background(), &pb.DownloadRequest{VideoId: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Success {
+		t.Error("expected failure, got Success")
+	}
+	marker := filepath.Join(workDir, id+".error")
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("read error marker %q: %v", marker, err)
+	}
+	if !strings.Contains(string(data), "signed URL expired") {
+		t.Errorf("error marker content = %q, want it to carry the yt-dlp reason", string(data))
+	}
+}
+
+// TestDownload_SuccessClearsStaleErrorMarker pins that a successful
+// re-download removes a previously-written <id>.error (mirrors the worker's
+// failDownload/clear contract).
+func TestDownload_SuccessClearsStaleErrorMarker(t *testing.T) {
+	s, _, workDir := installFakeYtdlp(t, "ok")
+	const id = "dQw4w9WgXcQ"
+	marker := filepath.Join(workDir, id+".error")
+	mustWrite(t, marker, []byte("stale failure"))
+	resp, err := s.Download(context.Background(), &pb.DownloadRequest{VideoId: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Success {
+		t.Fatalf("Download failed: %s", resp.Error)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Errorf("stale error marker should be removed after success, stat err=%v", err)
 	}
 }

@@ -27,6 +27,14 @@ message DownloadSearchResponse {
 message DownloadRequest {
   string video_id = 1;
   string download_dir = 2; // optional override
+  // yt-dlp tuning knobs forwarded by the worker's download:generic task
+  // (DownloadPayload.ExtraJSON). Empty string means "plugin default":
+  //   format        → "bestaudio/best"
+  //   output_format → keep original container (no transcode)
+  //   quality       → "192" (kbps, only meaningful with output_format)
+  string format = 3;
+  string output_format = 4;
+  string quality = 5;
 }
 
 message DownloadResponse {

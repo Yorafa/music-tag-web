@@ -1,15 +1,16 @@
 // Package youtube implements the YouTube gRPC DownloadSource plugin by
-// shelling out to yt-dlp. The plugin is intentionally thin: all the
-// search/download heavy lifting is delegated to the yt-dlp binary that's
-// already a runtime dependency for the worker side at
-// internal/tasks/yt_dl.go.
+// shelling out to yt-dlp. Since the 2026 refactor the worker's
+// download:generic task delegates the actual yt-dlp exec to this plugin
+// (internal/plugin/interface.go::DownloadOptions carries the format /
+// output_format / quality knobs); the worker only orchestrates cache /
+// library copy + DB records. This plugin is the ONLY yt-dlp runtime
+// consumer, so the worker image stays pure Go (no python / ffmpeg).
 //
 // Why yt-dlp shell-outs:
-//   - the worker already uses yt-dlp via exec.CommandContext (see yt_dl.go);
-//     reusing the same binary keeps cookie / extract-audio config drift-free
-//     between worker and plugin.
 //   - bypassing yt-dlp would mean reimplementing YouTube's search + audio
 //     extraction logic in pure Go. Not worth the maintenance cost.
+//   - keeping the exec here (instead of the worker) means the python3 /
+//     yt-dlp / ffmpeg runtime lives only in this plugin's image.
 //
 // SECURITY: every free-form input that reaches yt-dlp argv goes through
 // either a charset whitelist (validYouTubeID), a length cap (query),
@@ -33,6 +34,7 @@ import (
 	"time"
 
 	pb "go-music-tag/api/proto/tagplugin"
+	"go-music-tag/internal/ytdlp"
 )
 
 const (
@@ -307,10 +309,15 @@ func (s *Server) Search(ctx context.Context, req *pb.DownloadSearchRequest) (*pb
 }
 
 // Download lands the audio track for video_id into workDir and returns
-// the file path the gateway can serve. Mirrors internal/tasks/yt_dl.go's
-// filenames — <id>.<ext> under audioCacheDir("youtube") — so a handler
-// that points at AUDIO_CACHE_DIR/youtube can serve either result
-// interchangeably.
+// the file path the gateway can serve. Filenames mirror the worker's
+// contract — <id>.<ext> under AUDIO_CACHE_DIR/youtube — so the gateway's
+// /api/stream glob and the worker's cache-short-circuit both see the file
+// without a second hop.
+//
+// The yt-dlp tuning knobs (req.Format / OutputFormat / Quality) are
+// sanitized HERE before reaching argv, even though the worker already
+// sanitized them — a replayed/tampered task must not be able to inject
+// flags (defence-in-depth; see internal/ytdlp).
 func (s *Server) Download(ctx context.Context, req *pb.DownloadRequest) (*pb.DownloadResponse, error) {
 	videoID := strings.TrimSpace(req.GetVideoId())
 	if videoID == "" {
@@ -323,11 +330,23 @@ func (s *Server) Download(ctx context.Context, req *pb.DownloadRequest) (*pb.Dow
 		}, nil
 	}
 
+	cleanFmt, err := ytdlp.SanitizeYTDLPFormat(req.GetFormat())
+	if err != nil {
+		return &pb.DownloadResponse{Success: false, Error: err.Error()}, nil
+	}
+	cleanOut, err := ytdlp.SanitizeYTDLPOutputFormat(req.GetOutputFormat())
+	if err != nil {
+		return &pb.DownloadResponse{Success: false, Error: err.Error()}, nil
+	}
+	cleanQuality, err := ytdlp.SanitizeYTDLPQuality(req.GetQuality())
+	if err != nil {
+		return &pb.DownloadResponse{Success: false, Error: err.Error()}, nil
+	}
+
 	// The proto lets callers specify an optional download_dir, but the
-	// existing gateway handler at handler/download.go::Download
-	// never sets it today. Pin the override to workDir anyway: allowing
-	// the caller to point into arbitrary filesystem locations would
-	// let a compromised gateway bushwack files outside workDir.
+	// worker never sets it today. Pin the override to workDir anyway:
+	// allowing the caller to point into arbitrary filesystem locations
+	// would let a compromised gateway/worker bushwack files outside workDir.
 	// filepath.Clean normalises trailing slashes and /./ so e.g.
 	// /tmp/youtube_audio/ and /tmp/youtube_audio/./ compare equal to
 	// /tmp/youtube_audio.
@@ -341,17 +360,62 @@ func (s *Server) Download(ctx context.Context, req *pb.DownloadRequest) (*pb.Dow
 	}
 	dir := s.workDir
 
+	// Clear any previous <id>.error sentinel so a successful re-download is
+	// not poisoned by a stale failure marker from an older yt-dlp breakage
+	// (same contract as internal/tasks/yt_dl.go::runDownloadSource, which
+	// also clears before delegating).
+	_ = os.Remove(downloadErrorPath(dir, videoID))
+
 	outTpl := filepath.Join(dir, "%(id)s.%(ext)s")
 	args := []string{
 		"--no-playlist",
 		"--no-progress",
 		"--newline",
-		"-f", "bestaudio/best",
+		"--retries", "3",
+		"--extractor-retries", "3",
+		// Prefer upstream default client set; without a JS runtime yt-dlp
+		// falls back to jsless clients automatically.
+		"--extractor-args", "youtube:player_client=default",
+		"-f", cleanFmt,
 		"-o", outTpl,
-		"--no-part",
-		"--", // separates opts from positional URL; defence-in-depth.
-		"https://www.youtube.com/watch?v=" + videoID,
+		// Keep default .part so incomplete files never land under the
+		// final audio extension (gateway ignores .part / empty stubs).
 	}
+	// deno (if present in the image) unlocks full JS challenge solving for
+	// modern YouTube players. Missing runtime is fine — yt-dlp ignores it.
+	if _, err := exec.LookPath("deno"); err == nil {
+		args = append(args, "--js-runtimes", "deno")
+	}
+	switch cleanOut {
+	case "mp3":
+		args = append(args,
+			"--extract-audio",
+			"--audio-format", "mp3",
+			"--audio-quality", cleanQuality+"K",
+		)
+	case "m4a":
+		args = append(args,
+			"--extract-audio",
+			"--audio-format", "m4a",
+			"--audio-quality", cleanQuality+"K",
+		)
+	case "ogg", "vorbis":
+		args = append(args,
+			"--extract-audio",
+			"--audio-format", "vorbis",
+			"--audio-quality", cleanQuality+"K",
+		)
+	case "wav":
+		args = append(args, "--extract-audio", "--audio-format", "wav")
+	default:
+		// bestaudio fallback: keep original container
+	}
+	// `--` separates opts from the positional URL; defence-in-depth even
+	// though videoID already passed the charset whitelist.
+	args = append(args,
+		"--",
+		"https://www.youtube.com/watch?v="+videoID,
+	)
 
 	cctx, cancel := context.WithTimeout(ctx, s.downloadTimeout)
 	defer cancel()
@@ -383,15 +447,19 @@ func (s *Server) Download(ctx context.Context, req *pb.DownloadRequest) (*pb.Dow
 		close(stdoutDone)
 	}()
 
-	waitErr := cmd.Wait()
-	<-stderrDone // happens-before for cw.out reads below
 	<-stdoutDone
+	<-stderrDone // happens-before for cw.out reads below
+	waitErr := cmd.Wait()
 
 	if waitErr != nil {
 		snippet := firstLine(strings.TrimSpace(string(stderrBuf.out)))
 		if snippet == "" {
 			snippet = waitErr.Error()
 		}
+		// Write the <id>.error sentinel so the gateway's /api/stream
+		// long-poll fails closed with a real message instead of looping
+		// 202 forever (contract with tasks.ReadDownloadError).
+		_ = os.WriteFile(downloadErrorPath(dir, videoID), []byte("yt-dlp: "+snippet), 0o644)
 		return &pb.DownloadResponse{
 			Success: false,
 			Error:   fmt.Sprintf("yt-dlp: %s", snippet),
@@ -407,6 +475,14 @@ func (s *Server) Download(ctx context.Context, req *pb.DownloadRequest) (*pb.Dow
 		FilePath: fpath,
 		FileName: fname,
 	}, nil
+}
+
+// downloadErrorPath is the sentinel written next to a failed cache entry so
+// /api/stream can fail-closed instead of looping 202 forever. Same name and
+// location contract as internal/tasks/yt_dl.go::downloadErrorPath (they
+// share AUDIO_CACHE_DIR/youtube by convention).
+func downloadErrorPath(dir, videoID string) string {
+	return filepath.Join(dir, videoID+".error")
 }
 
 // validYouTubeID is a charset whitelist for video_id: alphanumeric and

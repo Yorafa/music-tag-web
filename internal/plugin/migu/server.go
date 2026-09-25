@@ -9,15 +9,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	pb "go-music-tag/api/proto/tagplugin"
 )
 
-const baseURL = "http://pd.musicapp.migu.cn/MIGUM2.0/v1.0/content"
+// baseURL is the public migu CDN root for search/audio/lyric endpoints.
+// Declared `var` (not `const`) so tests can swap it for an httptest.Server
+// in NewClientForTest / TestDoSearch_* paths.
+var baseURL = "http://pd.musicapp.migu.cn/MIGUM2.0/v1.0/content"
 
 var headers = map[string]string{
 	"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15",
@@ -27,6 +33,13 @@ var headers = map[string]string{
 type Server struct {
 	pb.UnimplementedTagSourceServer
 	client *http.Client
+
+	// lyricCache maps migu contentId → the lyric endpoint URL carried
+	// alongside it in songResultData.result[]. Migu's search response
+	// returns a transient lyricUrl/trcUrl that's only valid when hit from
+	// migu's IP/CDN, so we cache the URL keyed by the canonical contentId
+	// and FetchLyric resolves req.SongId → lyric endpoint later.
+	lyricCache sync.Map
 }
 
 func NewServer() *Server {
@@ -65,12 +78,26 @@ func (s *Server) FetchId3ByTitle(ctx context.Context, req *pb.FetchId3Request) (
 	return &pb.FetchId3Response{Songs: out}, nil
 }
 
-// FetchLyric: song_id 是搜索返回 lyricUrl/trcUrl，直接 GET 拿到 LRC 文本。
+// FetchLyric: req.SongId is now the canonical numeric migu songid
+// (set by Search). We resolve it back to the lyric endpoint via the
+// lyricCache populated by Search. If the songid was never cached (e.g.
+// FetchLyric called before Search for that id, or a server restart
+// wiped the cache), we return empty rather than mis-GETting the songid
+// against the lyric endpoint — that would surface a stream-shaped
+// binary blob as "lyric text" downstream.
 func (s *Server) FetchLyric(ctx context.Context, req *pb.FetchLyricRequest) (*pb.FetchLyricResponse, error) {
 	if req.SongId == "" {
 		return &pb.FetchLyricResponse{}, nil
 	}
-	httpReq, _ := http.NewRequestWithContext(ctx, "GET", req.SongId, nil)
+	cached, ok := s.lyricCache.Load(req.SongId)
+	if !ok {
+		return &pb.FetchLyricResponse{}, nil
+	}
+	lyricURL, ok := cached.(string)
+	if !ok || lyricURL == "" {
+		return &pb.FetchLyricResponse{}, nil
+	}
+	httpReq, _ := http.NewRequestWithContext(ctx, "GET", lyricURL, nil)
 	for k, v := range headers {
 		httpReq.Header.Set(k, v)
 	}
@@ -134,8 +161,22 @@ func (sv *Server) doSearch(ctx context.Context, title string, page, limit int) (
 	}
 	out := make([]song, 0, len(raw.SongResultData.Result))
 	for _, item := range raw.SongResultData.Result {
+		// CRITICAL: Song.Id MUST be the migu contentId (the stable
+		// upstream track id). GetAudioURL's MIGUM3.0 listen.do endpoint
+		// REQUIRES contentId — the legacy numeric `id` (e.g. 3790007) is
+		// rejected with 参数校验失败 contentId:must not be blank — and
+		// copyrightId can be "0", so no in-process cache is needed: the
+		// id alone survives the gateway/worker round trip and restart.
+		// This mirrors the reference go-music-dl ID contract (which packs
+		// contentId|resourceType|formatType into the id; we keep just
+		// contentId and hardcode the verified-working resourceType=2 /
+		// toneFlag=HQ listen combo).
+		//
+		// Field-name fallbacks cover API cohort drift: most responses have
+		// `contentId`; on a future migration we may need `content_id` /
+		// `resourceId` / legacy `id`. Try in order until first non-empty.
 		sg := song{
-			ID:   str(item["lyricUrl"]),
+			ID:   miguFirstNonEmpty(item, "contentId", "content_id", "resourceId", "id"),
 			Name: str(item["name"]),
 			Year: "",
 		}
@@ -159,13 +200,32 @@ func (sv *Server) doSearch(ctx context.Context, title string, page, limit int) (
 				sg.AlbumImg = str(m["img"])
 			}
 		}
-		// 也尝试 trcUrl 作为 lyric 备用
-		if sg.ID == "" {
-			sg.ID = str(item["trcUrl"])
+		// Cache the lyric endpoint URL keyed by the canonical contentId so
+		// FetchLyric can resolve req.SongId → lyricURL later. We prefer
+		// lyricUrl (full LRC) and fall back to trcUrl (translation) only.
+		if sg.ID != "" {
+			if u := str(item["lyricUrl"]); u != "" {
+				sv.lyricCache.Store(sg.ID, u)
+			} else if u := str(item["trcUrl"]); u != "" {
+				sv.lyricCache.Store(sg.ID, u)
+			}
 		}
 		out = append(out, sg)
 	}
 	return out, len(out) >= limit, nil
+}
+
+// miguFirstNonEmpty returns the first non-empty string from the JSON
+// object's keys, in order. Used to tolerate field-name drift across
+// migu API cohorts (e.g. a future API version that renames `id` to
+// `contentId`). Returns "" if all keys are absent or empty.
+func miguFirstNonEmpty(item map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v := str(item[k]); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func str(v interface{}) string {
@@ -186,41 +246,93 @@ func joinSlash(parts []string) string {
 	return out
 }
 
-// GetAudioURL fetches a short-lived upstream audio-stream URL for the given
-// migu songid. Best-effort: when the upstream returns empty url (paid track
-// or transient error), we propagate ("", nil) so callers fall back to the
-// gateway /api/stream proxy.
-//
-// Endpoint choice: pd.musicapp.migu.cn/MIGUM2.0/v1.0/content/audio_only/data
-// is the canonical 2024-era free-track fetcher for migu; it accepts a
-// `songid` parameter and returns `data.playUrl` (mp3/m4a direct CDN URL).
-// migu is one of the most permissive of the five mainland sources, so this
-// endpoint reliably returns non-empty urls for free tracks without anti-bot
-// sign-in requirements.
-const miguAudioURL = "http://pd.musicapp.migu.cn/MIGUM2.0/v1.0/content/audio_only/data?songid="
+// miguListenURL is the MIGUM3.0 listen endpoint that replaced the retired
+// audio_only route. It requires the {netType, resourceType, contentId,
+// copyrightId, channel, toneFlag} param set — see GetAudioURL. Declared
+// `var` so tests + the plugin YAML override can swap it.
+var miguListenURL = "http://pd.musicapp.migu.cn/MIGUM3.0/v1.0/content/sub/listen.do"
 
+// SetAPIBase overwrites the package-level migu base URLs. baseURL (used by
+// Search's /search_all.do) is rewritten verbatim; miguListenURL is rebuilt
+// from the new CDN root `apiBase`. Plan C.4 / Stage B wires the YAML
+// override flow to call this on startup and on POST /api/sources/refresh.
+// Migu has no Secret constant upstream (the public endpoint is anonymous),
+// so SetSecret is intentionally NOT exposed here — secrets: {} entries in
+// data/sources/migu.yaml are silently no-ops in
+// (*plugin.Registry).RefreshOverrides.
+func (s *Server) SetAPIBase(apiBase string) {
+	baseURL = apiBase
+	// listen.do lives under the MIGUM3.0 CDN root, a sibling of the
+	// MIGUM2.0 base Search uses. Rebuild the path explicitly instead of
+	// path-traversal concatenation (apiBase+"/../MIGUM3.0/...") which
+	// breaks against custom mirror roots. Falls back to appending the
+	// full MIGUM3.0 path when apiBase is already a bare host/root.
+	base := strings.TrimSuffix(apiBase, "/")
+	if strings.HasSuffix(base, "/MIGUM2.0/v1.0/content") {
+		base = strings.TrimSuffix(base, "/MIGUM2.0/v1.0/content")
+	}
+	miguListenURL = base + "/MIGUM3.0/v1.0/content/sub/listen.do"
+}
+
+// GetAudioURL fetches a short-lived upstream audio-stream URL for the
+// given migu contentId via the MIGUM3.0 listen.do endpoint.
+//
+// The old /audio_only/data route was retired upstream (299996) and listen.do
+// rejects the legacy numeric songid (参数校验失败 contentId:must not be blank).
+// Song.Id now IS the contentId (see doSearch), so GetAudioURL needs no
+// in-process cache: contentId + copyrightId=0 (verified 2026-08 to return a
+// playable url) + the verified resourceType=2 / toneFlag=HQ combo resolve a
+// stream for any caller, across gateway/worker restarts. This mirrors the
+// reference go-music-dl design where the download tuple travels inside the
+// song id rather than process memory.
+//
+// Best-effort contract preserved: paid / region-locked tracks return empty
+// songListens → ("", nil); callers keep the gateway /api/stream proxy
+// fallback.
 func (s *Server) GetAudioURL(ctx context.Context, req *pb.GetAudioRequest) (*pb.GetAudioResponse, error) {
 	if req.Id == "" {
 		return &pb.GetAudioResponse{}, nil
 	}
-	httpReq, _ := http.NewRequestWithContext(ctx, "GET", miguAudioURL+req.Id, nil)
+	urlStr := fmt.Sprintf("%s?netType=01&resourceType=2&contentId=%s&copyrightId=0&channel=0&toneFlag=HQ",
+		miguListenURL, req.Id)
+	httpReq, _ := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	for k, v := range headers {
 		httpReq.Header.Set(k, v)
 	}
 	resp, err := s.client.Do(httpReq)
 	if err != nil {
+		log.Printf("[migu] GetAudioURL http error id=%s: %v", req.Id, err)
 		return &pb.GetAudioResponse{}, nil
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	// Response shape: { "code": "000000", "data": { "playUrl": "https://..." } }
 	var raw struct {
-		Data struct {
-			PlayUrl string `json:"playUrl"`
-		} `json:"data"`
+		Code        string `json:"code"`
+		SongListens []struct {
+			URL string `json:"url"`
+		} `json:"songListens"`
 	}
-	if err := json.Unmarshal(body, &raw); err != nil || raw.Data.PlayUrl == "" {
+	if err := json.Unmarshal(body, &raw); err != nil {
+		log.Printf("[migu] GetAudioURL unmarshal id=%s (head=%q): %v", req.Id, previewMigu(body, 256), err)
 		return &pb.GetAudioResponse{}, nil
 	}
-	return &pb.GetAudioResponse{Url: raw.Data.PlayUrl}, nil
+	if raw.Code != "000000" || len(raw.SongListens) == 0 || raw.SongListens[0].URL == "" {
+		// Ops signal: paid / region-locked track or endpoint drift. Body
+		// head (256 bytes) lets `docker logs | grep '[migu] GetAudioURL'`
+		// distinguish 299999 param errors from legit empty songListens.
+		log.Printf("[migu] GetAudioURL empty url code=%q id=%s status=%d body=%q",
+			raw.Code, req.Id, resp.StatusCode, previewMigu(body, 256))
+		return &pb.GetAudioResponse{}, nil
+	}
+	return &pb.GetAudioResponse{Url: raw.SongListens[0].URL}, nil
+}
+
+// previewMigu returns the first n bytes of body for log lines. Mirrors
+// kuwo/server.go::preview and kg/server.go::previewKg; kept
+// plugin-local so each plugin binary remains independently testable.
+func previewMigu(b []byte, n int) string {
+	if len(b) <= n {
+		return string(b)
+	}
+	return string(b[:n]) + "...(truncated)"
 }
