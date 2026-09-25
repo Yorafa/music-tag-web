@@ -10,7 +10,6 @@ import {
 } from '@/components/ui/tabs';
 import { readString, writeString } from '@/utils/persist';
 import { PATH_ALIAS, formatDisplayPath, parseDisplayPath } from '@/utils/path';
-import { OperationLogsTab } from '@/components/audit/OperationLogsTab';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { SourcesTabContent } from './SourcesTabContent';
 
@@ -41,7 +40,6 @@ export function SettingsView() {
           <TabsList className="bg-muted/60 p-1 rounded-xl">
             <TabsTrigger value="general" className="rounded-lg text-xs">通用设置</TabsTrigger>
             <TabsTrigger value="sources" className="rounded-lg text-xs">音乐源管理</TabsTrigger>
-            <TabsTrigger value="logs" className="rounded-lg text-xs">审计日志</TabsTrigger>
           </TabsList>
 
           {/* General Tab */}
@@ -87,11 +85,6 @@ export function SettingsView() {
           {/* Sources Tab */}
           <TabsContent value="sources" className="py-2">
             <SourcesTabContent />
-          </TabsContent>
-
-          {/* Logs Tab */}
-          <TabsContent value="logs" className="py-2">
-            <OperationLogsTab />
           </TabsContent>
         </Tabs>
       </div>

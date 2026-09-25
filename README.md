@@ -94,7 +94,7 @@
 - 外部播放端统计上报（Subsonic-compatible `/rest/` endpoints） ❌
 
 ### 操作日志 ✅
-- 完整 changelog（每次编辑可追溯） ✅ — GORM `OperationLog` 模型与持久化 + 自动记录单曲/批量标签编辑、自动刮削、文件名解析应用、目录整理、音频下载与封面上传 + SettingsModal「操作日志」管理面板（支持操作类型/状态多维过滤、模糊检索、查看变动详情与一键清空日志）
+- 完整 changelog（每次编辑可追溯） ✅ — GORM `OperationLog` 模型与持久化 + 自动记录单曲/批量标签编辑、自动刮削、文件名解析应用、目录整理、音频下载与封面上传 + 侧边栏「操作审计」管理面板（支持操作类型/状态多维过滤、模糊检索、查看变动详情与一键清空日志）
 
 ➡️ 完整 status 表 + 每个 feature 的 `path` 引用见 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md)。
 

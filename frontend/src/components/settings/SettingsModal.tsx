@@ -18,7 +18,6 @@ import {
 import { Settings } from 'lucide-react';
 import { readString, writeString } from '@/utils/persist';
 import { PATH_ALIAS, formatDisplayPath, parseDisplayPath } from '@/utils/path';
-import { OperationLogsTab } from '@/components/audit/OperationLogsTab';
 import { SourcesTabContent } from './SourcesTabContent';
 
 const DOWNLOAD_PATH_KEY = 'settings.downloadPath';
@@ -95,7 +94,6 @@ export function SettingsModal({ open, onOpenChange }: Props) {
           <TabsList>
             <TabsTrigger value="general">通用</TabsTrigger>
             <TabsTrigger value="sources">音乐源</TabsTrigger>
-            <TabsTrigger value="logs">操作日志</TabsTrigger>
           </TabsList>
 
           <TabsContent value="general" className="space-y-3 py-2">
@@ -154,15 +152,11 @@ export function SettingsModal({ open, onOpenChange }: Props) {
           <TabsContent value="sources" className="py-2">
             <SourcesTabContent />
           </TabsContent>
-
-          <TabsContent value="logs" className="py-2">
-            <OperationLogsTab />
-          </TabsContent>
         </Tabs>
 
-        {/* Save button only applies to the 通用 form. The音乐源 tab
-            has its own reload button inside SourcesTab so Save closes
-            the dialog without acting on sources state. */}
+        {/* Save button only applies to the 通用 form. 音乐源 is a
+            read-only registry view, so Save is hidden there rather
+            than acting on state it cannot change. */}
         {activeTab === 'general' ? (
           <DialogFooter showCloseButton className="border-t border-border pt-2">
             <Button size="sm" onClick={handleSave}>保存</Button>

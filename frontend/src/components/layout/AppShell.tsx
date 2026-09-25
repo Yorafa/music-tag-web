@@ -2,8 +2,11 @@
 //   - library:  Local library tracks, playback, filter, instant editor
 //   - scraper:  Worklist queue, auto-scraping, filename parser, folder tidy
 //   - search:   Cloud multi-source search, preview stream & download
-//   - audit:    Operation history logs, action/status filters & details
-//   - settings: General paths, music sources manager & hot reload
+//   - audit:    Operation history logs, action/status filters & details.
+//               The sole home for 操作审计 — the settings surfaces
+//               deliberately don't re-expose it (see git history for the
+//               duplicate 审计日志 / 操作日志 tabs that used to live there).
+//   - settings: General paths & the registered music-source registry view
 //
 // Hosts the global song-detail Dialog (TrackDetailDialog), bottom
 // PlayerBar, mobile navigation sheet, and ToastHost.
