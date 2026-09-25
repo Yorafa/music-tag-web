@@ -219,20 +219,27 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
   const coverSrc = resolveCoverSrc(formData);
 
   return (
-    // w-full, not the w-80 lg:w-96 this had as a column: the dialog owns
-    // the width now, and a hardcoded 320/384px fought it — the column
-    // wrapper set an inline width that the aside's own class overrode,
-    // so a 340px column rendered a 384px panel and spilled.
-    // No select-none: it belonged to the fixed column (nothing there is
-    // draggable) and it would have made the 歌词 textarea the one field
-    // the user could not select text in — and that textarea is now a
-    // primary surface on phones.
-    <aside className="flex flex-col h-full w-full bg-surface-1 overflow-hidden">
+    // No bg-* here on purpose. The design system layers surfaces by
+    // altitude (index.css: surface-1 = main work area, surface-3 = dialog
+    // / popover), and DialogContent already paints bg-popover. Setting
+    // surface-1 on the contents made the detail area the *main work area*
+    // again — in dark mode surface-1 is oklch(0.165) against a popover of
+    // oklch(0.205), so the panel rendered darker than the frame around it
+    // and the layering inverted.
+    //
+    // Also no w-80 lg:w-96 (the old column width, which fought the dialog's
+    // own width) and no select-none (it belonged to the fixed column, and it
+    // would have made the 歌词 textarea the one field the user could not
+    // select text in).
+    <aside className="flex flex-col h-full w-full overflow-hidden">
       {/* Hero Header: Big Artwork & Quick Actions */}
-      <div className="p-4 border-b border-border bg-surface-2/40 space-y-3 shrink-0">
+      {/* /60 rather than the /40 it had: every other panel in the app
+          (toolbar, search cards, audit log) tints surface-2 at /60-/70,
+          and /40 left this header visibly lighter than its neighbours. */}
+      <div className="p-6 border-b border-border bg-surface-2/60 space-y-4 shrink-0">
         <div className="flex items-start gap-3">
           {/* Cover Art Box with Play Trigger */}
-          <div className="relative w-16 h-16 rounded-lg overflow-hidden shrink-0 bg-muted group ring-1 ring-border/80 shadow-md">
+          <div className="relative w-20 h-20 rounded-xl overflow-hidden shrink-0 bg-muted group ring-1 ring-border/80 shadow-md">
             {coverSrc ? (
               <img
                 src={coverSrc}
@@ -241,7 +248,7 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
               />
             ) : (
               <div
-                className="w-full h-full flex items-center justify-center text-white text-base font-bold"
+                className="w-full h-full flex items-center justify-center text-white text-lg font-bold"
                 style={{ background: COVER_PLACEHOLDER_GRADIENTS[0] }}
               >
                 {(formData.title || row.fileName).charAt(0)}
@@ -256,24 +263,24 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
               className="absolute inset-0 bg-black/40 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 flex items-center justify-center transition-opacity text-white"
               title="即时试听播放"
             >
-              {isThisPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6 fill-white" />}
+              {isThisPlaying ? <Pause className="w-7 h-7" /> : <Play className="w-7 h-7 fill-white" />}
             </button>
           </div>
 
           {/* Quick Info & Save */}
           <div className="flex-1 min-w-0 space-y-1">
-            <h3 className="text-sm font-bold text-foreground truncate leading-tight" title={formData.title}>
+            <h3 className="text-base font-bold text-foreground truncate leading-tight" title={formData.title}>
               {formData.title || row.fileName}
             </h3>
-            <p className="text-xs text-muted-foreground truncate" title={formData.artist}>
+            <p className="text-sm text-muted-foreground truncate" title={formData.artist}>
               {formData.artist || '未知艺术家'} {formData.album ? `· ${formData.album}` : ''}
             </p>
             <div className="flex items-center gap-1.5 pt-0.5">
-              <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 font-mono uppercase bg-muted/60">
+              <Badge variant="outline" className="text-[11px] px-1.5 h-5 font-mono uppercase bg-muted/60">
                 {row.fileName.split('.').pop() || 'AUDIO'}
               </Badge>
               {formData.year && (
-                <Badge variant="secondary" className="text-[10px] px-1 py-0 h-4 font-mono">
+                <Badge variant="secondary" className="text-[11px] px-1.5 h-5 font-mono">
                   {formData.year}
                 </Badge>
               )}
@@ -284,27 +291,25 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
         {/* Action Buttons Row */}
         <div className="flex items-center gap-2">
           <Button
-            size="sm"
             onClick={handleSaveTags}
             disabled={saving}
-            className="flex-1 h-8 text-xs font-semibold bg-primary text-primary-foreground gap-1.5 shadow-xs"
-          >
-            <Save className={`w-3.5 h-3.5 ${saving ? 'animate-spin' : ''}`} />
+            className="flex-1 h-9 text-sm font-semibold bg-primary text-primary-foreground gap-1.5 shadow-xs"
+            >
+            <Save className={`w-4 h-4 ${saving ? 'animate-spin' : ''}`} />
             <span>{saving ? '正在保存…' : '保存标签'}</span>
           </Button>
 
           <Button
             variant="outline"
-            size="sm"
             onClick={() => {
               setActiveTab('candidates');
               handleSearchCandidates();
             }}
             disabled={loadingCandidates}
-            className="h-8 px-2.5 text-xs gap-1 border-primary/40 text-primary hover:bg-primary/10"
+            className="h-9 px-3 text-sm gap-1.5 border-primary/40 text-primary hover:bg-primary/10"
             title="全网并发刮削多源候选"
-          >
-            <Sparkles className={`w-3.5 h-3.5 ${loadingCandidates ? 'animate-spin' : ''}`} />
+            >
+            <Sparkles className={`w-4 h-4 ${loadingCandidates ? 'animate-spin' : ''}`} />
             <span>智能刮削</span>
           </Button>
         </div>
@@ -316,111 +321,125 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
         onValueChange={(v) => setActiveTab(v as typeof activeTab)}
         className="flex-1 flex flex-col min-h-0"
       >
-        <TabsList className="grid grid-cols-5 h-9 p-1 bg-surface-2 rounded-none border-b border-border shrink-0">
-          <TabsTrigger value="tags" className="text-[11px] px-1 py-1">
+        {/* The app's tab idiom is SettingsView's: a `bg-muted/60 p-1
+            rounded-xl` pill row whose active tab lifts to `bg-background`
+            + `shadow-sm` via the primitive's own data-active rules. This
+            used to override the primitive instead — grid + h-9 + p-1 +
+            rounded-none + a border-b — which desynced two things it draws
+            internally: the trigger is `h-[calc(100%-1px)]` with an `after:`
+            indicator at `bottom-[-5px]`, both tuned for the primitive's own
+            metrics, so a custom box made the active state a filled
+            `bg-background` rectangle floating in a `bg-surface-2` strip.
+            `grid grid-cols-5` is kept only to keep 5 labels evenly divided
+            in a 56rem dialog. */}
+        <TabsList className="grid grid-cols-5 w-full h-11 bg-muted/60 p-1 rounded-xl shrink-0 mx-6 mt-5">
+          <TabsTrigger value="tags" className="rounded-lg text-sm">
             标签
           </TabsTrigger>
-          <TabsTrigger value="candidates" className="text-[11px] px-1 py-1 relative">
+          <TabsTrigger value="candidates" className="rounded-lg text-sm relative">
             候选
             {candidates.length > 0 && (
-              <span className="w-1.5 h-1.5 rounded-full bg-primary absolute top-1 right-1" />
+              <span
+                className="absolute top-1.5 right-2.5 w-2 h-2 rounded-full bg-primary"
+                aria-label="有新候选"
+              />
             )}
           </TabsTrigger>
-          <TabsTrigger value="lyrics" className="text-[11px] px-1 py-1">
+          <TabsTrigger value="lyrics" className="rounded-lg text-sm">
             歌词
           </TabsTrigger>
-          <TabsTrigger value="cover" className="text-[11px] px-1 py-1">
+          <TabsTrigger value="cover" className="rounded-lg text-sm">
             封面
           </TabsTrigger>
-          <TabsTrigger value="audio" className="text-[11px] px-1 py-1">
+          <TabsTrigger value="audio" className="rounded-lg text-sm">
             指纹
           </TabsTrigger>
         </TabsList>
 
         {/* Tab 1: Tags Form */}
         <TabsContent value="tags" className="flex-1 overflow-hidden m-0 p-0">
-          <ScrollArea className="h-full p-4">
-            <div className="space-y-3 pb-8">
+          <ScrollArea className="h-full p-6">
+            <div className="space-y-4 pb-10">
               <div>
-                <Label className="text-xs mb-1 block">歌曲标题 (Title)</Label>
+                <Label className="text-sm mb-1.5 block">歌曲标题 (Title)</Label>
                 <Input
                   value={formData.title || ''}
                   onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                  className="h-8 text-xs font-medium"
+                  className="h-9 text-sm font-medium"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label className="text-xs mb-1 block">艺术家 (Artist)</Label>
+                  <Label className="text-sm mb-1.5 block">艺术家 (Artist)</Label>
                   <Input
                     value={formData.artist || ''}
                     onChange={(e) => setFormData({ ...formData, artist: e.target.value })}
-                    className="h-8 text-xs"
+                    className="h-9 text-sm"
                   />
                 </div>
                 <div>
-                  <Label className="text-xs mb-1 block">专辑 (Album)</Label>
+                  <Label className="text-sm mb-1.5 block">专辑 (Album)</Label>
                   <Input
                     value={formData.album || ''}
                     onChange={(e) => setFormData({ ...formData, album: e.target.value })}
-                    className="h-8 text-xs"
+                    className="h-9 text-sm"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label className="text-xs mb-1 block">专辑艺术家 (Album Artist)</Label>
+                  <Label className="text-sm mb-1.5 block">专辑艺术家 (Album Artist)</Label>
                   <Input
                     value={formData.albumartist || ''}
                     onChange={(e) => setFormData({ ...formData, albumartist: e.target.value })}
-                    className="h-8 text-xs"
+                    className="h-9 text-sm"
                   />
                 </div>
                 <div>
-                  <Label className="text-xs mb-1 block">流派 (Genre)</Label>
+                  <Label className="text-sm mb-1.5 block">流派 (Genre)</Label>
                   <Input
                     value={formData.genre || ''}
                     onChange={(e) => setFormData({ ...formData, genre: e.target.value })}
-                    className="h-8 text-xs"
+                    className="h-9 text-sm"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <Label className="text-xs mb-1 block">年份 (Year)</Label>
+                  <Label className="text-sm mb-1.5 block">年份 (Year)</Label>
                   <Input
                     value={formData.year || ''}
                     onChange={(e) => setFormData({ ...formData, year: e.target.value })}
-                    className="h-8 text-xs font-mono"
+                    className="h-9 text-sm font-mono"
                   />
                 </div>
                 <div>
-                  <Label className="text-xs mb-1 block">音轨号 (Track#)</Label>
+                  <Label className="text-sm mb-1.5 block">音轨号 (Track#)</Label>
                   <Input
                     value={formData.tracknumber || ''}
                     onChange={(e) => setFormData({ ...formData, tracknumber: e.target.value })}
-                    className="h-8 text-xs font-mono"
+                    className="h-9 text-sm font-mono"
                   />
                 </div>
                 <div>
-                  <Label className="text-xs mb-1 block">光盘 (Disc#)</Label>
+                  <Label className="text-sm mb-1.5 block">光盘 (Disc#)</Label>
                   <Input
                     value={formData.discnumber || ''}
                     onChange={(e) => setFormData({ ...formData, discnumber: e.target.value })}
-                    className="h-8 text-xs font-mono"
+                    className="h-9 text-sm font-mono"
                   />
                 </div>
               </div>
 
               <div>
-                <Label className="text-xs mb-1 block">备注与描述 (Comment)</Label>
+                <Label className="text-sm mb-1.5 block">备注与描述 (Comment)</Label>
                 <Textarea
                   value={formData.comment || ''}
                   onChange={(e) => setFormData({ ...formData, comment: e.target.value })}
-                  className="text-xs resize-none h-16"
+                  className="text-sm resize-none h-24"
                   placeholder="ID3 备注信息..."
                 />
               </div>
@@ -430,33 +449,32 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
 
         {/* Tab 2: Scrape Candidates */}
         <TabsContent value="candidates" className="flex-1 flex flex-col min-h-0 m-0 p-0">
-          <div className="p-2 border-b border-border/80 bg-surface-2 flex items-center gap-1.5 shrink-0">
+          <div className="px-6 py-4 border-b border-border bg-surface-2/60 flex items-center gap-2 shrink-0">
             <Input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSearchCandidates()}
               placeholder="输入歌名/关键字检索..."
-              className="h-7 text-xs flex-1 bg-surface-1"
+              className="h-9 text-sm flex-1 bg-background"
             />
             <Button
-              size="sm"
               onClick={() => handleSearchCandidates()}
               disabled={loadingCandidates}
-              className="h-7 px-2.5 text-xs"
-            >
-              <Search className={`w-3 h-3 ${loadingCandidates ? 'animate-spin' : ''}`} />
+              className="h-9 px-3"
+              >
+              <Search className={`w-4 h-4 ${loadingCandidates ? 'animate-spin' : ''}`} />
             </Button>
           </div>
 
-          <ScrollArea className="flex-1 p-2">
+          <ScrollArea className="flex-1 p-4">
             {loadingCandidates ? (
-              <div className="py-12 text-center text-xs text-muted-foreground space-y-2">
-                <RefreshCw className="w-6 h-6 animate-spin text-primary mx-auto" />
+              <div className="py-16 text-center text-sm text-muted-foreground space-y-3">
+                <RefreshCw className="w-7 h-7 animate-spin text-primary mx-auto" />
                 <p>正在全网多源检索候选…</p>
               </div>
             ) : candidates.length === 0 ? (
-              <div className="py-12 text-center text-xs text-muted-foreground space-y-2">
-                <Sparkles className="w-6 h-6 text-muted-foreground/40 mx-auto" />
+              <div className="py-16 text-center text-sm text-muted-foreground space-y-3">
+                <Sparkles className="w-7 h-7 text-muted-foreground/40 mx-auto" />
                 <p>点击上方搜索或「智能刮削」检索候选</p>
               </div>
             ) : (
@@ -466,14 +484,14 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
                   return (
                     <div
                       key={`${c.id}-${i}`}
-                      className="p-2.5 rounded-lg border border-border/80 bg-surface-2 hover:border-primary/50 transition-all space-y-2"
+                      className="p-4 rounded-xl border border-border/70 bg-surface-2/60 hover:bg-surface-2 hover:border-primary/50 transition-all space-y-3"
                     >
                       <div className="flex items-start gap-2.5">
-                        <div className="w-10 h-10 rounded overflow-hidden bg-muted shrink-0 ring-1 ring-border/50">
+                        <div className="w-12 h-12 rounded-lg overflow-hidden bg-muted shrink-0 ring-1 ring-border/50">
                           {c.album_img ? (
                             <img src={c.album_img} alt="" className="w-full h-full object-cover" />
                           ) : (
-                            <div className="w-full h-full flex items-center justify-center bg-primary/10 text-primary text-xs font-bold">
+                            <div className="w-full h-full flex items-center justify-center bg-primary/10 text-primary text-sm font-bold">
                               {(c.name || '?').charAt(0)}
                             </div>
                           )}
@@ -481,30 +499,30 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
 
                         <div className="flex-1 min-w-0 space-y-0.5">
                           <div className="flex items-center justify-between gap-1">
-                            <span className="text-xs font-semibold text-foreground truncate">
+                            <span className="text-sm font-semibold text-foreground truncate">
                               {c.name}
                             </span>
-                            <Badge variant="outline" className="text-[9px] px-1 h-3.5 uppercase font-mono">
+                            <Badge variant="outline" className="text-[10px] px-1.5 h-4 uppercase font-mono">
                               {c.source || 'cloud'}
                             </Badge>
                           </div>
-                          <p className="text-[11px] text-muted-foreground truncate">
+                          <p className="text-xs text-muted-foreground truncate">
                             {c.artist || '未知'} · {c.album || '单曲'}
                           </p>
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between pt-1 border-t border-border/40">
-                        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                      <div className="flex items-center justify-between pt-2 border-t border-border/40">
+                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                           <span>匹配度:</span>
-                          <span className="font-mono font-bold text-emerald-500">{score}%</span>
+                          {/* A match score is a measurement, not a success state. `text-emerald-500` was a raw palette value with no dark-mode counterpart, so it rendered as the same fixed green in both themes while everything around it followed the design tokens. */}
+                          <span className="font-mono font-bold text-foreground">{score}%</span>
                         </div>
                         <Button
-                          size="sm"
                           variant="secondary"
                           onClick={() => handleApplyCandidate(c)}
-                          className="h-6 px-2 text-[11px] text-primary hover:bg-primary hover:text-primary-foreground font-semibold"
-                        >
+                          className="h-8 px-3 text-xs text-primary hover:bg-primary hover:text-primary-foreground font-semibold"
+                          >
                           应用此标签
                         </Button>
                       </div>
@@ -517,16 +535,15 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
         </TabsContent>
 
         {/* Tab 3: Lyrics Editor & Sync */}
-        <TabsContent value="lyrics" className="flex-1 flex flex-col min-h-0 m-0 p-3 space-y-2">
+        <TabsContent value="lyrics" className="flex-1 flex flex-col min-h-0 m-0 p-6 space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-foreground">LRC 歌词文本</span>
+            <span className="text-sm font-semibold text-foreground">LRC 歌词文本</span>
             <Button
               variant="outline"
-              size="sm"
               onClick={handleFetchLyric}
-              className="h-6 text-[11px] px-2 gap-1 text-primary"
-            >
-              <Search className="w-3 h-3" />
+              className="h-8 px-3 text-xs gap-1.5 text-primary"
+              >
+              <Search className="w-4 h-4" />
               <span>在线获取歌词</span>
             </Button>
           </div>
@@ -534,20 +551,20 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
             value={formData.lyrics || ''}
             onChange={(e) => setFormData({ ...formData, lyrics: e.target.value })}
             placeholder="[00:00.00] 暂无歌词或直接粘贴 LRC 歌词文本..."
-            className="flex-1 font-mono text-xs leading-relaxed resize-none bg-surface-2 p-2.5"
+            className="flex-1 font-mono text-sm leading-relaxed resize-none bg-surface-2/60 p-4"
           />
         </TabsContent>
 
         {/* Tab 4: Cover Artwork */}
-        <TabsContent value="cover" className="flex-1 p-4 space-y-4 m-0">
-          <div className="flex flex-col items-center space-y-3">
-            <div className="w-44 h-44 rounded-xl overflow-hidden bg-muted ring-1 ring-border shadow-md flex items-center justify-center">
+        <TabsContent value="cover" className="flex-1 p-6 space-y-5 m-0">
+          <div className="flex flex-col items-center space-y-4">
+            <div className="w-56 h-56 rounded-xl overflow-hidden bg-muted ring-1 ring-border shadow-md flex items-center justify-center">
               {coverSrc ? (
                 <img src={coverSrc} alt="" className="w-full h-full object-cover" />
               ) : (
-                <div className="text-muted-foreground/60 flex flex-col items-center gap-1">
-                  <ImageIcon className="w-8 h-8" />
-                  <span className="text-xs">暂无内嵌封面</span>
+                <div className="text-muted-foreground/60 flex flex-col items-center gap-2">
+                  <ImageIcon className="w-10 h-10" />
+                  <span className="text-sm">暂无内嵌封面</span>
                 </div>
               )}
             </div>
@@ -563,21 +580,19 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
             <div className="flex items-center gap-2 w-full max-w-xs">
               <Button
                 variant="outline"
-                size="sm"
                 onClick={() => fileInputRef.current?.click()}
-                className="flex-1 h-8 text-xs gap-1.5"
-              >
-                <Upload className="w-3.5 h-3.5" />
+                className="flex-1 h-9 text-sm gap-1.5"
+                >
+                <Upload className="w-4 h-4" />
                 <span>上传本地图片</span>
               </Button>
               {formData.album_img && (
                 <Button
                   variant="ghost"
-                  size="sm"
                   onClick={() => setFormData({ ...formData, album_img: '' })}
-                  className="h-8 text-xs text-destructive hover:text-destructive"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  className="h-9 text-sm text-destructive hover:text-destructive"
+                  >
+                  <Trash2 className="w-4 h-4" />
                 </Button>
               )}
             </div>
@@ -585,33 +600,32 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
         </TabsContent>
 
         {/* Tab 5: Audio info & AcoustID */}
-        <TabsContent value="audio" className="flex-1 p-4 space-y-3 text-xs m-0">
-          <div className="p-3 rounded-lg border border-border/80 bg-surface-2 space-y-2">
+        <TabsContent value="audio" className="flex-1 p-6 space-y-4 text-sm m-0">
+          <div className="p-4 rounded-xl border border-border/70 bg-surface-2/60 space-y-3">
             <h4 className="font-semibold text-foreground flex items-center gap-1.5">
-              <Fingerprint className="w-4 h-4 text-primary" />
+              <Fingerprint className="w-5 h-5 text-primary" />
               AcoustID 声学指纹
             </h4>
-            <p className="text-muted-foreground text-[11px] leading-relaxed">
+            <p className="text-muted-foreground text-xs leading-relaxed">
               基于 Chromaprint (fpcalc) 的物理波形分析，不受文件名与已有标签影响，可精准完成听歌识曲与文件查重。
             </p>
             <Button
               variant="outline"
-              size="sm"
               onClick={() => {
                 setSelectedSource('acoustid');
                 setActiveTab('candidates');
                 handleSearchCandidates(row.fullPath);
               }}
-              className="w-full h-7 text-xs text-primary border-primary/40"
-            >
+              className="w-full h-9 text-sm text-primary border-primary/40"
+              >
               计算声纹并在线识别
             </Button>
           </div>
 
-          <div className="p-3 rounded-lg border border-border/80 bg-surface-2 space-y-1.5 font-mono text-[11px]">
+          <div className="p-4 rounded-xl border border-border/70 bg-surface-2/60 space-y-2 font-mono text-xs">
             <div className="flex justify-between text-muted-foreground">
               <span>文件路径:</span>
-              <span className="text-foreground truncate max-w-[180px]">{row.fullPath}</span>
+              <span className="text-foreground truncate max-w-[60%]">{row.fullPath}</span>
             </div>
             <div className="flex justify-between text-muted-foreground">
               <span>音频格式:</span>
@@ -627,13 +641,13 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
 export function TrackInspector({ row }: Props) {
   if (!row) {
     return (
-      <aside className="flex flex-col h-full w-full bg-surface-1 p-6 items-center justify-center text-center space-y-3 text-muted-foreground">
-        <div className="w-14 h-14 rounded-2xl bg-muted/60 flex items-center justify-center text-muted-foreground/60">
-          <Music className="w-7 h-7" />
+      <aside className="flex flex-col h-full w-full p-8 items-center justify-center text-center space-y-4 text-muted-foreground">
+        <div className="w-16 h-16 rounded-2xl bg-muted/60 flex items-center justify-center text-muted-foreground/60">
+          <Music className="w-8 h-8" />
         </div>
         <div className="space-y-1">
-          <p className="text-sm font-semibold text-foreground">未选择曲目</p>
-          <p className="text-xs text-muted-foreground/80 max-w-[220px]">
+          <p className="text-base font-semibold text-foreground">未选择曲目</p>
+          <p className="text-sm text-muted-foreground/80 max-w-sm">
             在中间曲目列表中点击任意歌曲，即可在此即时查看与深度编辑标签、歌词、封面与多源刮削
           </p>
         </div>
