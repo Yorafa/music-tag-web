@@ -11,8 +11,13 @@ venv
 .git
 /docs/
 /scripts/
+# Host-built SPA output is NOT sent to the daemon: Dockerfile.gateway's
+# `frontend` stage builds it inside the image instead.
 /static/
-/frontend/
+# frontend/ itself must stay in the build context — Dockerfile.gateway
+# copies it into the node stage. Only the installed dep tree is excluded
+# (it is ~hundreds of MB and `npm ci` regenerates it in-image).
+frontend/node_modules/
 /templates/
 /web/
 /build/

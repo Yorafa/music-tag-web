@@ -1,16 +1,27 @@
-FROM golang:1.23-alpine AS builder
+FROM golang:alpine AS builder
 
-RUN apk add --no-cache git
+# go-sqlite3 needs cgo; pure alpine + CGO_ENABLED=0 produces a stub that
+# crashes worker at boot with "Binary was compiled with 'CGO_ENABLED=0'".
+# upx compresses the Go binary (musl cgo links statically; verified to run).
+RUN apk add --no-cache git gcc musl-dev upx
 
 WORKDIR /build
 COPY go.mod go.sum ./
-RUN go mod download
+# BuildKit cache mounts share the Go module + compile caches across
+# gateway/worker/plugin image builds (see Dockerfile.plugin).
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /worker ./cmd/worker
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /worker ./cmd/worker \
+    && upx -q /worker
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata yt-dlp
+# Pure-Go runtime: the only yt-dlp consumer is the youtube plugin (the
+# worker's download:generic task delegates the exec over gRPC via
+# plugin.DownloadSource), so python3 / yt-dlp / ffmpeg live exclusively in
+# the youtube plugin image (see Dockerfile.plugin). This image stays ~15 MB.
+RUN apk add --no-cache ca-certificates tzdata
 ENV TZ=Asia/Shanghai
 
 COPY --from=builder /worker /usr/local/bin/worker

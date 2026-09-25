@@ -1,25 +1,60 @@
-# Multi-stage build for the Go API gateway.
-# Stage 1: build
-FROM golang:1.23-alpine AS builder
+# Stage 1: frontend build
+#
+# The React SPA is baked into the image rather than bind-mounted from the
+# host. Previously docker-compose mounted host ./static:/app/static:ro,
+# which meant (a) the operator had to run `npm run build` before the very
+# first `docker compose up` or `/` returned 404, and (b) the hashed Vite
+# output had to be committed to git, so every rebuild churned static/dist
+# in `git status`. Baking it here makes the image self-contained.
+#
+# vite.config.ts sets `outDir: '../static/dist'` (relative to frontend/),
+# so building from /app/frontend lands the bundle at /app/static/dist —
+# the exact layout the gateway's router expects under STATIC_DIR.
+FROM node:22-alpine AS frontend
 
-RUN apk add --no-cache git protoc protobuf-dev
+WORKDIR /app/frontend
+
+# package.json + package-lock.json first so the npm layer is cached
+# independently of source edits.
+COPY frontend/package.json frontend/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
+# Stage 2: Go build
+FROM golang:alpine AS builder
+
+# go-sqlite3 needs cgo (same reason as Dockerfile.worker). Without gcc the
+# binary boots in "DB unavailable — handlers run in env-only mode".
+# protoc / protobuf-dev are NOT needed: the api/proto/*.pb.go files are
+# checked in, and `go build` never invokes protoc.
+# upx compresses the cgo gateway binary (musl links statically; verified
+# to boot after packing).
+RUN apk add --no-cache git gcc musl-dev upx
 
 WORKDIR /build
 
-# Cache dependencies
+# BuildKit cache mounts share the Go module + compile caches across
+# gateway/worker/plugin image builds (see Dockerfile.plugin).
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /gateway ./cmd/gateway
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /gateway ./cmd/gateway \
+    && upx -q /gateway
 
-# Stage 2: runtime
+# Stage 3: runtime
 FROM alpine:3.20
-
 RUN apk add --no-cache ca-certificates tzdata
 ENV TZ=Asia/Shanghai
 
 COPY --from=builder /gateway /usr/local/bin/gateway
+# router.Setup serves STATIC_DIR (default /app/static) at /static and reads
+# <STATIC_DIR>/dist/index.html for the SPA fallback.
+COPY --from=frontend /app/static/dist /app/static/dist
 
 EXPOSE 8001
+
 ENTRYPOINT ["gateway"]

@@ -1,26 +1,81 @@
 # Multi-stage build for gRPC plugin servers.
 # Each plugin is built from the same codebase with a different entry point.
 # Build with: docker build --build-arg PLUGIN=netease -f Dockerfile.plugin -t music-tag-netease .
+#
+# ARG PLUGIN must be re-declared in EVERY stage that uses it — a stage-local
+# ARG goes out of scope at the end of its stage. The builder stage expands it
+# in `go build ./cmd/plugins/${PLUGIN}`; the runtime stage gates the
+# youtube-only yt-dlp install on it. compose passes `args: PLUGIN: <name>`
+# which overrides the default in both stages.
 
-FROM golang:1.23-alpine AS builder
-
-RUN apk add --no-cache git
+FROM golang:alpine AS builder
 
 ARG PLUGIN=netease
+# upx compresses the static Go binary (~16 MB → ~6 MB) in the builder
+# stage; the runtime stage copies the packed file. Verified safe for the
+# CGO_ENABLED=0 static plugin binaries.
+RUN apk add --no-cache git upx
+
 WORKDIR /build
 
+# BuildKit cache mounts share the Go module + compile caches across the eight
+# plugin image builds, so `docker compose build` compiles each plugin's own
+# main package once and reuses the cached dependency tree for the rest —
+# instead of re-downloading go.mod and recompiling every dependency 8×.
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /plugin ./cmd/plugins/${PLUGIN}
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /plugin ./cmd/plugins/${PLUGIN} \
+    && upx -q /plugin
 
 FROM alpine:3.20
-# yt-dlp is included unconditionally so every plugin image is built from the
-# same Dockerfile template. Only the youtube plugin (~15 MB binary weight) uses
-# it; the other plugins (netease/kugou/...) carry the binary for image
-# uniformity. If space matters more than uniformity, gate with `ARG PLUGIN`.
-RUN apk add --no-cache ca-certificates tzdata yt-dlp yt-dlp
+# Only the youtube plugin shells out to yt-dlp (search + download with
+# optional --extract-audio transcode, see internal/plugin/youtube/server.go).
+# Since the 2026 refactor the worker delegates its download:generic youtube
+# branch to THIS plugin over gRPC (plugin.DownloadOptions carries format /
+# output_format / quality), so python3 + yt-dlp + ffmpeg live only here —
+# the worker image is pure Go. The other seven plugin images stay ~13 MB
+# by skipping the Python/ffmpeg runtime entirely (previously every plugin
+# image carried yt-dlp + its dependency tree → ~220 MB each).
+#
+# yt-dlp is installed fresh via pip (nightly) rather than Alpine's frozen
+# 2024.x package, which breaks YouTube signature extraction weekly.
+# ffmpeg is required by yt-dlp's --extract-audio post-processor (the worker
+# forwards output_format mp3/m4a/vorbis/wav from the frontend).
+#
+# The acoustid plugin shells out to fpcalc (chromaprint) — see
+# internal/plugin/acoustid/server.go::NewServer, which LookPath's it and sets
+# disabled=true when absent, making every FetchId3ByTitle return zero songs.
+# Until this install existed the plugin was a permanent no-op in Docker even
+# though the feature matrix listed it as implemented. chromaprint costs
+# ~92 MB here because it pulls the ffmpeg libav* decoder stack (unlike the
+# worker image, which already has ffmpeg, so there it is only +96 KB). That
+# cost lands on this one plugin image; the other six stay ~13 MB.
+ARG PLUGIN=netease
+RUN apk add --no-cache ca-certificates tzdata \
+    && if [ "${PLUGIN}" = "acoustid" ]; then \
+         apk add --no-cache chromaprint \
+         && fpcalc -version; \
+       fi \
+    && if [ "${PLUGIN}" = "youtube" ]; then \
+         apk add --no-cache python3 py3-pip ffmpeg \
+         && pip3 install --no-cache-dir --break-system-packages -U --pre "yt-dlp[default]" \
+         && yt-dlp --version \
+         # pip / setuptools / pkg_resources are build-time only; yt-dlp is a
+         # self-contained script, so strip them + bytecode caches from the
+         # runtime image (~24 MB saved).
+         && rm -rf /usr/lib/python3.12/site-packages/pip \
+                   /usr/lib/python3.12/site-packages/setuptools* \
+                   /usr/lib/python3.12/site-packages/pkg_resources* \
+                   /usr/lib/python3.12/site-packages/_distutils_hack \
+                   # remove this too — it imports _distutils_hack at startup,
+                   # which would print a warning on every yt-dlp invocation.
+                   /usr/lib/python3.12/site-packages/distutils-precedence.pth \
+                   /usr/bin/pip*; \
+         find /usr/lib/python3.12 -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true; \
+       fi
 ENV TZ=Asia/Shanghai
 
 COPY --from=builder /plugin /usr/local/bin/plugin

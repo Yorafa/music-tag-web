@@ -38,6 +38,13 @@ bin/
 static/admin/
 static/rest_framework/
 
+# Vite SPA output. Built inside Dockerfile.gateway's `frontend` stage, so
+# the hashed bundle no longer needs to be committed — keeping it tracked
+# churned dozens of renamed asset files in `git status` on every rebuild.
+# Host-side `npm run build` still writes here for local dev (vite.config.ts
+# outDir), it just stays out of git.
+static/dist/
+
 # Local media/data for dev testing — never commit
 /music/
 /data/
@@ -45,3 +52,11 @@ static/rest_framework/
 # Local scratch/temp scripts
 /a1
 /verify_yaml.sh
+
+# Working notes that are deliberately NOT part of the project's history:
+#  - .scratch/ holds per-feature design drafts whose Status lines go stale
+#    once the feature ships (the authoritative record lives in docs/plans/).
+#  - REVIEW.md is a point-in-time audit report against a specific baseline
+#    commit; it describes work already landed in the history below it.
+.scratch/
+/REVIEW.md

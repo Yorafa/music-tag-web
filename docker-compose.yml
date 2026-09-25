@@ -1,6 +1,6 @@
 # =============================================================================
 # Music Tag Web - Go 后端（项目根，gRPC 插件架构）
-# 分布式布局：gateway + worker + 7 个 gRPC 音源插件。
+# 分布式布局：gateway + worker + 8 个 gRPC 音源插件。
 #
 # 服务清单：
 #   gateway      - gin-gonic HTTP 服务器：API + 静态 SPA + 媒体（容器内端口 8001，通过 ${GATEWAY_PORT:-9150} 暴露到宿主机）
@@ -23,14 +23,19 @@ services:
     volumes:
       - ./music:/app/media:rw
       - ./data:/app/data:rw
-      - ./static:/app/static:ro
+      # NOTE: no ./static mount — the React SPA is baked into the gateway
+      # image by Dockerfile.gateway's `frontend` stage. Re-adding a host
+      # mount here would shadow /app/static/dist with an empty dir and
+      # make `/` return "SPA not built".
+      # Shared with worker so /api/stream long-poll can see yt-dlp output.
+      - audio-cache:/tmp/audio_cache
     environment:
       # JWT_SECRET / ADMIN_USERS / WEBHOOK_INTERNAL_TOKEN 故意默认为空，
       # 让 gateway 在首次启动时执行自动引导（见 internal/config/bootstrap.go），
       # 生成加密随机值并写入 /app/data/.bootstrap-creds（该目录 bind mount
       # 自宿主机 ./data）。明文管理员密码会在启动日志里打印一次——
       # `docker compose logs gateway | grep FIRST-BOOT`。若要手动固定
-      # 值，可以在 .env 中创建并取消下方对应行的注释；自动引导会
+      # 值，可以在 .env 中设置并取消下方对应行的注释；自动引导会
       # 跳过任何已经有值的 env。
       JWT_SECRET: ${JWT_SECRET:-}
       # 由 handler/auth.go::loadUsers 通过 os.Getenv() 读取。
@@ -56,6 +61,8 @@ services:
       DB_DSN: /app/data/db.sqlite3
       DB_DRIVER: ${DB_DRIVER:-sqlite3}
       REDIS_ADDR: redis:6379
+      # MUST match worker (and yt_dl.go / stream.go audioCacheDir defaults).
+      AUDIO_CACHE_DIR: /tmp/audio_cache
       # 各插件的 gRPC 地址。服务启动时通过 parsePluginAddrs() 读取。
       # 若插件以独立进程或在不同宿主机上运行，请相应调整。
       PLUGIN_NETEASE_ADDR: ${PLUGIN_NETEASE_ADDR:-netease:50051}
@@ -83,12 +90,31 @@ services:
     volumes:
       - ./music:/app/media:rw
       - ./data:/app/data:rw
+      # Shared with gateway so StreamAudio can ServeFile after yt-dlp lands.
+      - audio-cache:/tmp/audio_cache
     environment:
       REDIS_ADDR: redis:6379
       # 与上方宿主机 ./music:/app/media 与 ./data:/app/data bind mount 对应；
       # 修改请同步调整宿主机挂载目标。
       MUSIC_DIR: /app/media
       DATA_DIR: /app/data
+      DB_DSN: /app/data/db.sqlite3
+      DB_DRIVER: ${DB_DRIVER:-sqlite3}
+      AUDIO_CACHE_DIR: /tmp/audio_cache
+      # Same plugin map as gateway (download:generic youtube branch uses
+      # local yt-dlp, but other tasks may dial plugins later).
+      PLUGIN_NETEASE_ADDR: ${PLUGIN_NETEASE_ADDR:-netease:50051}
+      PLUGIN_KUGOU_ADDR: ${PLUGIN_KUGOU_ADDR:-kugou:50052}
+      PLUGIN_KUWO_ADDR: ${PLUGIN_KUWO_ADDR:-kuwo:50053}
+      PLUGIN_MIGU_ADDR: ${PLUGIN_MIGU_ADDR:-migu:50054}
+      PLUGIN_QMUSIC_ADDR: ${PLUGIN_QMUSIC_ADDR:-qmusic:50055}
+      PLUGIN_MUSICBRAINZ_ADDR: ${PLUGIN_MUSICBRAINZ_ADDR:-musicbrainz:50056}
+      PLUGIN_ACOUSTID_ADDR: ${PLUGIN_ACOUSTID_ADDR:-acoustid:50057}
+      PLUGIN_YOUTUBE_ADDR: ${PLUGIN_YOUTUBE_ADDR:-youtube:50058}
+      GRPC_USE_TLS: ${GRPC_USE_TLS:-0}
+      GRPC_TLS_CA_FILE: ${GRPC_TLS_CA_FILE:-}
+      WEBHOOK_INTERNAL_TOKEN: ${WEBHOOK_INTERNAL_TOKEN:-}
+      ALLOW_INSECURE_DEFAULTS: ${ALLOW_INSECURE_DEFAULTS:-}
     restart: unless-stopped
     depends_on:
       - redis
@@ -188,7 +214,25 @@ services:
     container_name: go-music-youtube
     expose:
       - "50058"
+    # The youtube plugin is the process that actually RUNS yt-dlp and writes
+    # the audio file (internal/plugin/youtube/server.go::tmpDir →
+    # $AUDIO_CACHE_DIR/youtube). It must therefore share the same volume as
+    # gateway + worker:
+    #   - gateway globs <cache>/youtube/<id>.* to ServeFile the preview and
+    #     reads <id>.error to fail-closed instead of looping 202;
+    #   - worker os.Stat()s the plugin-reported FilePath and copies it into
+    #     MUSIC_DIR for the "加入库" path.
+    # Without this mount the plugin wrote into its own container layer, so
+    # every download "succeeded" while both consumers saw an empty directory —
+    # surfacing to the user as a bogus "下载超时". See REVIEW.md P0-1.
+    volumes:
+      - audio-cache:/tmp/audio_cache
+    environment:
+      # MUST match gateway + worker (and the audioCacheDir defaults in
+      # internal/tasks/yt_dl.go / internal/gateway/handler/stream.go).
+      AUDIO_CACHE_DIR: /tmp/audio_cache
     restart: unless-stopped
 
 volumes:
   redis-data:
+  audio-cache:
