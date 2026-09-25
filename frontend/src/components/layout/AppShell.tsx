@@ -8,7 +8,7 @@
 // Hosts global Dialog for TagEditor/ScrapeResults, bottom PlayerBar,
 // mobile navigation sheet, and ToastHost.
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { TagEditor } from '@/components/editor/TagEditor';
 import { ScrapeResults } from '@/components/editor/ScrapeResults';
 import { WorkstationView } from '@/components/workstation/WorkstationView';
@@ -24,6 +24,12 @@ import { useEditorStore, editorActions } from '@/store/useEditorStore';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ResizeHandle } from '@/components/layout/ResizeHandle';
 import { readNumber, writeNumber, readBool, writeBool } from '@/utils/persist';
+import {
+  SCRAPE_RIGHT_MIN,
+  applyResize,
+  resolveSplitLayout,
+  sanitizeStoredWidth,
+} from '@/components/layout/splitLayout';
 import { cn } from '@/lib/utils';
 import { X } from 'lucide-react';
 
@@ -37,7 +43,6 @@ interface Props {
 const SECTION_KEY = 'appShell.section';
 const SIDEBAR_COLLAPSED_KEY = 'appShell.sidebarCollapsed';
 const SCRAPE_RIGHT_KEY = 'appShell.scrapeRightWidth';
-const DEFAULT_SCRAPE_RIGHT = 448;
 
 function readStoredSection(): AppSection {
   try {
@@ -85,8 +90,8 @@ export function AppShell({ initialSection }: Props) {
     });
   }, []);
 
-  const [scrapeRightWidth, setScrapeRightWidth] = useState<number>(
-    () => readNumber(SCRAPE_RIGHT_KEY) ?? DEFAULT_SCRAPE_RIGHT,
+  const [scrapeRightWidth, setScrapeRightWidth] = useState<number>(() =>
+    sanitizeStoredWidth(readNumber(SCRAPE_RIGHT_KEY)),
   );
   useEffect(() => {
     const timer = setTimeout(
@@ -95,6 +100,26 @@ export function AppShell({ initialSection }: Props) {
     );
     return () => clearTimeout(timer);
   }, [scrapeRightWidth]);
+
+  // Measure the dialog's split row so the panel width can be capped
+  // against what is actually available, not just against an absolute
+  // maximum. Without this, shrinking the window (or opening the dialog
+  // on a smaller display) left a 448px panel inside a 400px dialog and
+  // the editor column collapsed to nothing.
+  const splitRef = useRef<HTMLDivElement>(null);
+  const [splitWidth, setSplitWidth] = useState(0);
+  useEffect(() => {
+    const el = splitRef.current;
+    if (!el) return;
+    const measure = () => setSplitWidth(el.clientWidth);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [editorOpen, scrapeHasResults]);
+
+  const split = resolveSplitLayout(splitWidth, scrapeRightWidth);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
@@ -178,28 +203,50 @@ export function AppShell({ initialSection }: Props) {
                 </DialogTitle>
               </DialogHeader>
             </div>
-            <div className="flex-1 min-h-0 flex overflow-hidden">
+            <div
+              ref={splitRef}
+              className={cn(
+                'flex-1 min-h-0 flex overflow-hidden',
+                // Stacked: editor on top, scrape results underneath. The
+                // row layout is impossible below SCRAPE_STACK_BELOW
+                // because the two minimums do not fit side by side.
+                split.stacked ? 'flex-col' : 'flex-row',
+              )}
+            >
               <div
                 className={cn(
-                  'flex-1 overflow-auto px-6 pb-6',
-                  scrapeHasResults && 'border-r border-border',
+                  'flex-1 min-h-0 overflow-auto px-6 pb-6',
+                  scrapeHasResults &&
+                    (split.stacked
+                      ? 'border-b border-border'
+                      : 'border-r border-border'),
                 )}
               >
                 <TagEditor />
               </div>
               {scrapeHasResults && (
                 <>
-                  <ResizeHandle
-                    onResize={(d) =>
-                      setScrapeRightWidth((w) => Math.max(200, w - d))
-                    }
-                    valueNow={scrapeRightWidth}
-                    min={200}
-                    max={800}
-                  />
+                  {!split.stacked && (
+                    <ResizeHandle
+                      onResize={(d) =>
+                        setScrapeRightWidth((w) =>
+                          applyResize(w, d, resolveSplitLayout(splitWidth, w)),
+                        )
+                      }
+                      valueNow={split.right}
+                      min={SCRAPE_RIGHT_MIN}
+                      max={split.maxRight}
+                    />
+                  )}
                   <div
-                    style={{ width: scrapeRightWidth }}
-                    className="shrink-0 overflow-hidden"
+                    style={
+                      split.stacked ? undefined : { width: split.right }
+                    }
+                    className={cn(
+                      'shrink-0 min-h-0 overflow-hidden',
+                      split.stacked &&
+                        'w-full basis-[45%] border-t border-border',
+                    )}
                   >
                     <ScrapeResults
                       onApply={(field, value) =>
