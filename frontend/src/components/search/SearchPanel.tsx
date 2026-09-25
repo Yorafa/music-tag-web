@@ -11,6 +11,7 @@ import { useSourceStore } from '@/store/useSourceStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { resolveDownloadUrl, audioDownloadBasename } from '@/lib/streamUrl';
 import { formatDuration } from '@/utils/duration';
+import { searchCoverForTrack } from '@/components/search/searchCover';
 
 // Static color map preserves visual consistency across restarts for the
 // search-eligible sources we ship today (YouTube is intentionally
@@ -271,6 +272,7 @@ export function SearchPanel() {
           <div className="p-3 space-y-2">
             {results.map((song, idx) => {
               const srcInfo = sourceList.find((s) => s.name === song.source);
+              const cover = searchCoverForTrack(song);
               return (
                 <div
                   key={`${song.source}-${song.id}-${idx}`}
@@ -279,9 +281,9 @@ export function SearchPanel() {
                   <div className="flex items-start gap-2.5">
                     {/* Cover */}
                     <div className="w-10 h-10 rounded overflow-hidden bg-muted shrink-0 ring-1 ring-border/50">
-                      {song.cover ? (
+                      {cover ? (
                         <img
-                          src={song.cover}
+                          src={cover}
                           alt={song.name}
                           className="w-full h-full object-cover"
                           onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
@@ -326,7 +328,7 @@ export function SearchPanel() {
                         url: song.url || '',
                         title: song.title || song.name,
                         artist: song.artist || '',
-                        cover: song.cover,
+                        cover,
                         durationSec:
                           typeof song.duration === 'number'
                             ? song.duration

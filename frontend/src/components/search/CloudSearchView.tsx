@@ -10,6 +10,7 @@ import { useSourceStore } from '@/store/useSourceStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { resolveDownloadUrl, audioDownloadBasename } from '@/lib/streamUrl';
 import { formatDuration, toSeconds } from '@/utils/duration';
+import { searchCoverForTrack } from '@/components/search/searchCover';
 import { COVER_PLACEHOLDER_GRADIENTS } from '@/utils/cover';
 import type { SearchResult } from '@/types';
 import {
@@ -210,6 +211,9 @@ export function CloudSearchView() {
                 );
                 const isDlSource = song.source === 'youtube';
                 const gradIdx = gradientIdx(`${song.name}-${song.artist}`);
+                // The plugins send album_img, not cover — reading song.cover
+                // here is why every card showed a letter placeholder.
+                const cover = searchCoverForTrack(song);
                 // Empty for sources that report no length (MusicBrainz
                 // search carries none), which is why it is interpolated
                 // rather than rendered unconditionally.
@@ -223,12 +227,18 @@ export function CloudSearchView() {
                     <CardContent className="p-3 flex items-center gap-3">
                       {/* Album Cover Thumbnail */}
                       <div className="relative w-12 h-12 rounded-lg overflow-hidden shrink-0 bg-muted flex items-center justify-center">
-                        {song.cover ? (
+                        {cover ? (
                           <img
-                            src={song.cover}
+                            src={cover}
                             alt=""
                             className="w-full h-full object-cover"
                             loading="lazy"
+                            // A cover host can 404 or hotlink-block after
+                            // the row is drawn; fall back to the gradient
+                            // rather than leaving a broken image icon.
+                            onError={(e) => {
+                              (e.currentTarget as HTMLImageElement).style.display = 'none';
+                            }}
                           />
                         ) : (
                           <div
@@ -245,7 +255,7 @@ export function CloudSearchView() {
                               url: song.url || '',
                               title: song.title || song.name,
                               artist: song.artist || '',
-                              cover: song.cover,
+                              cover,
                               durationSec: toSeconds(song.duration) ?? undefined,
                               source: { kind: 'plugin', source: song.source, songId: song.id },
                             }}

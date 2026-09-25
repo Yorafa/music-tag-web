@@ -164,6 +164,47 @@ func (s *Server) GetPluginInfo(_ context.Context, _ *pb.DownloadPluginInfoReques
 	}, nil
 }
 
+// ytSearchEntry is one `--dump-json` line from a yt-dlp search.
+//
+// The two thumbnail fields are both read because --flat-playlist does not
+// emit the `thumbnail` string at all: it emits a `thumbnails` array
+// ordered smallest-first. Reading only the string is why every YouTube
+// search row came back with an empty cover — the key was never there, and
+// a missing JSON key is not an error, it is just "".
+type ytSearchEntry struct {
+	ID         string  `json:"id"`
+	Title      string  `json:"title"`
+	Duration   float64 `json:"duration"`
+	URL        string  `json:"url"`
+	Channel    string  `json:"channel"`
+	Thumbnail  string  `json:"thumbnail"`
+	Thumbnails []struct {
+		URL    string `json:"url"`
+		Width  int    `json:"width"`
+		Height int    `json:"height"`
+	} `json:"thumbnails"`
+}
+
+// thumbnailURL returns the highest-resolution cover available, falling
+// back to the legacy single-string field. Entries with an empty url are
+// skipped, since yt-dlp emits placeholders for sizes it could not fetch.
+func (e ytSearchEntry) thumbnailURL() string {
+	best := ""
+	bestW := -1
+	for _, t := range e.Thumbnails {
+		if t.URL == "" {
+			continue
+		}
+		if t.Width > bestW {
+			best, bestW = t.URL, t.Width
+		}
+	}
+	if best != "" {
+		return best
+	}
+	return e.Thumbnail
+}
+
 // Search wraps `yt-dlp --no-playlist --flat-playlist --dump-json 'ytsearchN:QUERY'`.
 // `--flat-playlist` keeps each entry as a flat metadata blob (no full
 // resolution), which bounds response time at the cost of slightly
@@ -246,14 +287,7 @@ func (s *Server) Search(ctx context.Context, req *pb.DownloadSearchRequest) (*pb
 		if len(line) == 0 {
 			continue
 		}
-		var entry struct {
-			ID        string  `json:"id"`
-			Title     string  `json:"title"`
-			Duration  float64 `json:"duration"`
-			URL       string  `json:"url"`
-			Channel   string  `json:"channel"`
-			Thumbnail string  `json:"thumbnail"`
-		}
+		var entry ytSearchEntry
 		if err := json.Unmarshal(line, &entry); err != nil {
 			// yt-dlp occasionally intersperses metadata lines (e.g.
 			// "[generic] Extracting URL...") with JSON. Skip them.
@@ -268,7 +302,7 @@ func (s *Server) Search(ctx context.Context, req *pb.DownloadSearchRequest) (*pb
 			Duration:  entry.Duration,
 			Url:       entry.URL,
 			Channel:   entry.Channel,
-			Thumbnail: entry.Thumbnail,
+			Thumbnail: entry.thumbnailURL(),
 		})
 	}
 	if scanErr := scanner.Err(); scanErr != nil {

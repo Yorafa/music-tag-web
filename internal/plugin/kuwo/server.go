@@ -168,6 +168,13 @@ type kuwoSearchItem struct {
 	Singer   string `json:"SINGER"` // musiclist cohort uses SINGER (legacy fallback)
 	Album    string `json:"ALBUM"`
 	AlbumID  string `json:"ALBUMID"`
+	// HtsMVPIC is the historical cover field and is empty on current
+	// responses. The replacement, web_albumpic_short, is a RELATIVE path
+	// ("120/s3s47/0/4225818044.jpg") meant to be joined onto Kuwo's cover
+	// CDN — but that CDN is gone: img.kuwo.cn no longer resolves in DNS
+	// and img1.kuwo.cn 404s every path variant (verified 2026-09). So
+	// there is no URL we can build, and Kuwo rows render without a cover
+	// rather than with one that 404s. See the comment on AlbumImg below.
 	HtsMVPIC string `json:"hts_MVPIC"`
 	// Kuwo sends the track length twice: DURATION in seconds and
 	// TIMELENGTH in milliseconds, and which one is populated varies by
@@ -235,11 +242,15 @@ func (s *Server) doSearch(ctx context.Context, title string, page, limit int) ([
 			dur = plugin.DurationFromMillis(it.TimeLength)
 		}
 		out = append(out, song{
-			ID:       strings.TrimPrefix(it.MusicRID, "MUSIC_"),
-			Name:     it.SongName,
-			Artist:   artist,
-			Album:    it.Album,
-			AlbumID:  it.AlbumID,
+			ID:      strings.TrimPrefix(it.MusicRID, "MUSIC_"),
+			Name:    it.SongName,
+			Artist:  artist,
+			Album:   it.Album,
+			AlbumID: it.AlbumID,
+			// AlbumImg stays empty on current responses: see the note on
+			// HtsMVPIC. Mapping the unusable web_albumpic_short path here
+			// would trade a missing cover for a broken-image icon on every
+			// Kuwo row, which is worse than showing the placeholder.
 			AlbumImg: it.HtsMVPIC,
 			Duration: dur,
 		})

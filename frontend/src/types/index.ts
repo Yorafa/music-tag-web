@@ -137,6 +137,11 @@ export interface SearchResult {
   cover?: string;
   duration?: string | number;
   album_id?: string;
+  // Wire-shape match against `internal/plugin/interface.go::Song.AlbumImg`.
+  // This is the field every tag-source plugin fills; `cover` above is
+  // only set by the YouTube download path. Both search surfaces read
+  // through searchCoverSrc rather than picking one.
+  album_img?: string;
   // Wire-shape match against `internal/plugin/interface.go::Song.Mid`
   // (json tag "mid"). The old `song_mid?` name had no readers; this
   // rename is purely payload-shape, not behavioural.
