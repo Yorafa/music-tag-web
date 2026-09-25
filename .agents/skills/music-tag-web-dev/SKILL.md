@@ -222,12 +222,23 @@ cd frontend
 npm install
 npm run dev              # HMR at http://localhost:5173
 npm run build            # production build → ../static/dist/
-npx tsc --noEmit         # typecheck
+npm run typecheck        # typecheck — MUST be `tsc -b`
 npm run lint             # lint
 
 # Docker full stack
 docker compose up -d --build
 ```
+
+> **Do not "simplify" `npm run typecheck` to `npx tsc --noEmit`.**
+> `frontend/tsconfig.json` is a solution config — `{"files": [],
+> "references": [app, node, test]}` — so invoking `tsc` against it directly
+> type-checks **zero files** and exits 0. It looks like a passing
+> typecheck and is not one. Only `tsc -b` follows the references and
+> covers `app` / `node` / `test` (including `*.test.ts`). This is not
+> hypothetical: a commit landed two missing imports through it, and the
+> failure only surfaced when the Docker build ran `tsc -b`.
+> To confirm the command still works, inject
+> `const bad: number = someString;` and check it reports TS2322.
 
 ## UI Component Creation Pattern
 
@@ -272,7 +283,7 @@ When a shadcn component is missing:
 
 - [ ] `go vet ./...` passes
 - [ ] `go build ./cmd/gateway/ ./cmd/worker/` succeeds
-- [ ] `npx tsc --noEmit` passes (frontend typecheck)
+- [ ] `npm run typecheck` passes (frontend typecheck; `= tsc -b`)
 - [ ] `npm run lint` passes
 - [ ] `docker compose config --quiet` validates compose file
 - [ ] `GET /api/sources/` returns 7+ entries

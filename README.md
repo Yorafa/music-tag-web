@@ -259,9 +259,12 @@ NETEASE_PORT=50051 go run ./cmd/plugins/netease
 ```bash
 cd frontend
 
-# typecheck（不触发 build，最快）
-npx tsc --noEmit -p tsconfig.app.json
-npx tsc --noEmit -p tsconfig.node.json
+# typecheck（不触发 vite build，最快）
+# ⚠️ 不要用 `npx tsc --noEmit`：本目录的 tsconfig.json 是 solution 配置
+#    （"files": [] + references），直接对它跑 tsc 会检查 0 个文件并静默
+#    返回 0。必须走 `tsc -b` 才会跟随 references 覆盖
+#    app / node / test 三个 project（含 *.test.ts）。
+npm run typecheck
 
 # dev server，HMR；默认 http://localhost:5173
 npm run dev
@@ -281,7 +284,7 @@ npm run lint:fix          # eslint --fix 自动修
 docker compose config --quiet
 go vet ./...
 go build ./cmd/gateway/ ./cmd/worker/  # go.mod 在仓库根
-( cd frontend && npx tsc --noEmit )
+( cd frontend && npm run typecheck )   # = tsc -b；别用 tsc --noEmit，见上
 ( cd frontend && npm run lint --silent )
 ```
 
@@ -329,7 +332,7 @@ curl 'http://localhost:8001/api/search_music/?q=test'
 | gateway `FATAL: cannot persist bootstrap creds to /app/data/.bootstrap-creds` | `./data` 不存在或不可写；`mkdir -p ./data` 并确保 host 上 777 权限 / 非 root 用户。也可以绕开：`cp .env.example .env` 然后填真值。 |
 | 看不到 `FIRST-BOOT auto-bootstrap` banner | 大约需要 25–40 s：gateway 在做 DB init、dial 所有 plugin、bbolt 加载。不要 grep `docker compose logs gateway`，改用 `docker compose logs -f gateway` 跟随。重启后该 banner 不会再出现，仅明文 admin 密码被回收（首启后清零）。|
 | `docker compose up` 报 `volume source not found` | 先 `mkdir -p ./music ./data` |
-| `npx tsc --noEmit` 类型错 | 先看 `frontend/src/types/index.ts` 是否漏类型定义 |
+| `npm run typecheck` 类型错 | 先看 `frontend/src/types/index.ts` 是否漏类型定义。注意这个命令必须用 `tsc -b`；`npx tsc --noEmit` 对本仓库的 solution 配置不检查任何文件，会假绿 |
 | `npm run lint` 报 `react-hooks/exhaustive-deps` 等 | `npm run lint:fix` 自动修，或手动补依赖项 |
 | gateway healthcheck 一直 unhealthy | `docker compose logs gateway` + `docker compose logs redis` 看联通 |
 | AcoustID 搜索没结果 | worker 镜像缺 `libchromaprint-tools`；host 侧 `apt-get install -y libchromaprint-tools` 或自行把它塞进 `Dockerfile.worker` |
