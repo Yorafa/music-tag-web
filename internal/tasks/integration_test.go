@@ -42,6 +42,8 @@ import (
 	"go-music-tag/internal/tag"
 	"go-music-tag/internal/tasks"
 	"go-music-tag/internal/utils"
+
+	"go-music-tag/internal/testaudio"
 )
 
 // ─── TagSource mock for BatchAutoTag ────────────────────────────────────────
@@ -274,13 +276,11 @@ func TestIntegration_FullScanFolder_ProducerToConsumer(t *testing.T) {
 	if err := os.MkdirAll(musicDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	// Write a minimal "ID3v2 header" file. dhowden/tag.ReadFrom sniffs the
-	// ID3 magic and parses frames; we don't need actual MPEG audio frames —
-	// the file type is decided by extension during scanning.
-	mp3Path := filepath.Join(musicDir, "track1.mp3")
-	if err := os.WriteFile(mp3Path, []byte("ID3\x04\x00\x00\x00\x00\x00\x00FAKE-FRAMES"), 0o644); err != nil {
-		t.Fatalf("write mp3: %v", err)
-	}
+	// A real decodable MP3. The old "ID3 header + FAKE-FRAMES" stub worked
+	// only because dhowden dispatched on the extension; tag.Read now
+	// requires a real audio stream, and BatchAutoTag would reject the
+	// fixture rather than exercise the state machine under test.
+	mp3Path := testaudio.SeedMP3(t, musicDir, "track1.mp3")
 
 	// Consumer (worker side)
 	rig.Start(t, func(mux *asynq.ServeMux) {
@@ -347,10 +347,7 @@ func TestIntegration_BatchAutoTag_StateTransitions(t *testing.T) {
 	rig := newTestRig(t)
 
 	// Music file
-	mp3Path := filepath.Join(rig.MusicRoot, "song.mp3")
-	if err := os.WriteFile(mp3Path, []byte("ID3\x04\x00\x00\x00\x00\x00\x00FAKE"), 0o644); err != nil {
-		t.Fatalf("write mp3: %v", err)
-	}
+	mp3Path := testaudio.SeedMP3(t, rig.MusicRoot, "song.mp3")
 
 	// Seed one TaskRecord in state=wait with batch id
 	const batch = "batch-int-001"
@@ -500,23 +497,16 @@ func TestIntegration_ApplyParsedFilenames_WritesTags(t *testing.T) {
 	// env var must point at it.
 	t.Setenv("MUSIC_DIR", rig.MusicRoot)
 
-	// Real ID3v2 fixture (same builder as the TidyFolder test) so
-	// tag.Write has a parseable file to update.
-	srcPath := filepath.Join(rig.MusicRoot, "Song - Original.mp3")
-	if err := os.WriteFile(srcPath, []byte("ID3\x04\x00\x00\x00\x00\x00\x00"), 0o644); err != nil {
-		t.Fatalf("init mp3: %v", err)
-	}
-	tag0, openErr := id3v2.Open(srcPath, id3v2.Options{Parse: true})
-	if openErr != nil {
-		t.Fatalf("id3v2.Open: %v", openErr)
-	}
-	tag0.AddTextFrame("TIT2", id3v2.EncodingUTF8, "Original")
-	tag0.AddTextFrame("TPE1", id3v2.EncodingUTF8, "Old Artist")
-	if err := tag0.Save(); err != nil {
-		t.Fatalf("id3v2.Save: %v", err)
-	}
-	if err := tag0.Close(); err != nil {
-		t.Logf("id3v2.Close warning: %v", err)
+	// A real decodable MP3 carrying real ID3v2 tags. tag.Write now
+	// requires an actual audio stream (an "ID3" magic with no frames is
+	// rejected), so the old header-only stub could not exercise the
+	// overwrite path at all.
+	srcPath := testaudio.SeedMP3(t, rig.MusicRoot, "Song - Original.mp3")
+	if err := tag.Write(srcPath, &tag.TagUpdate{
+		Title:  ptr("Original"),
+		Artist: []string{"Old Artist"},
+	}); err != nil {
+		t.Fatalf("seed tags: %v", err)
 	}
 
 	// Consumer registers the C.2 bulk-apply worker — the exact wiring that
@@ -541,9 +531,9 @@ func TestIntegration_ApplyParsedFilenames_WritesTags(t *testing.T) {
 
 	// The tag must have been overwritten — this is the real proof the task
 	// was consumed (queue-empty alone would also pass on retry/archive).
-	parsed, err := tag.Read(srcPath)
-	if err != nil {
-		t.Fatalf("tag.Read after apply: %v", err)
+	parsed, rerr := tag.Read(srcPath)
+	if rerr != nil {
+		t.Fatalf("tag.Read after apply: %v", rerr)
 	}
 	if parsed.Title != "New Title" {
 		t.Errorf("title after apply = %q, want %q", parsed.Title, "New Title")
@@ -831,3 +821,6 @@ func summarizeRecorded(rs []events.Recorded) string {
 	}
 	return out + "]"
 }
+
+// ptr is a local helper for building *string TagUpdate fields in fixtures.
+func ptr[T any](v T) *T { return &v }

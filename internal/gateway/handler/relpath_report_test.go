@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"go-music-tag/internal/testaudio"
 )
 
 // TestBatchUpdateID3_ReportsRelativePaths is REVIEW.md P3-9 driven through
@@ -32,9 +34,7 @@ func TestBatchUpdateID3_ReportsRelativePaths(t *testing.T) {
 	if err := os.MkdirAll(leaf, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(leaf, "01 - Song.mp3"), []byte("payload"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	testaudio.SeedMP3(t, leaf, "01 - Song.mp3")
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

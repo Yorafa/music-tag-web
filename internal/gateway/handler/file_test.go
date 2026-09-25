@@ -26,6 +26,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"go-music-tag/internal/config"
+
+	"go-music-tag/internal/testaudio"
 )
 
 // TestMain 给他 handler 包下所有测试一个统一的"干净环境"，避免被现有
@@ -180,13 +182,11 @@ func TestFileList_EmptyFilePathListsRoot(t *testing.T) {
 // (/media + music-metadata), which is less efficient for batch hydrate.
 func TestMusicID3_ReadsTagsFromMusicDir(t *testing.T) {
 	dir := t.TempDir()
-	// Minimal parseable ID3v2 header — dhowden/tag sniffs "ID3" and
-	// returns empty tags rather than error; handler still fills
-	// filename/size and SuccessData's envelope.
-	stub := []byte("ID3\x03\x00\x00\x00\x00\x00\x00")
-	if err := os.WriteFile(filepath.Join(dir, "song.mp3"), stub, 0o644); err != nil {
-		t.Fatalf("seed mp3: %v", err)
-	}
+	// A real decodable MP3, not a bare "ID3" magic. tag.Read now requires
+	// an actual audio stream (see internal/tag.ensureAudioFile) and
+	// returns ErrUnsupportedFormat otherwise, so an ID3-header stub would
+	// make this spec assert the rejection path instead of the read path.
+	testaudio.SeedMP3(t, dir, "song.mp3")
 	t.Setenv("MUSIC_DIR", dir)
 
 	gin.SetMode(gin.TestMode)

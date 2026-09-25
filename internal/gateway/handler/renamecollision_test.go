@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"go-music-tag/internal/tag"
+	"go-music-tag/internal/testaudio"
 	"go-music-tag/internal/utils"
 )
 
@@ -23,20 +26,22 @@ func TestApplyFileUpdate_RefusesToOverwrite(t *testing.T) {
 	music := t.TempDir()
 	t.Setenv("MUSIC_DIR", music)
 
-	// The file being edited.
-	src := filepath.Join(music, "source.mp3")
-	if err := os.WriteFile(src, []byte("original"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// A different file already sitting at the target name, with content
-	// that must survive.
-	dst := filepath.Join(music, "target.mp3")
+	// Both sides are real decodable MP3s. The bystander additionally
+	// carries a marker tag so we can assert the whole file survives the
+	// refused update, not just that it still exists.
+	src := testaudio.SeedMP3(t, music, "source.mp3")
+	dst := testaudio.SeedMP3(t, music, "target.mp3")
 	const precious = "PRECIOUS-DO-NOT-LOSE"
-	if err := os.WriteFile(dst, []byte(precious), 0o644); err != nil {
+	if err := tag.Write(dst, &tag.TagUpdate{Title: &[]string{precious}[0]}); err != nil {
+		t.Fatalf("mark the bystander: %v", err)
+	}
+	srcBefore, err := os.ReadFile(src)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	err := applyFileUpdate(src, map[string]interface{}{
+	err = applyFileUpdate(src, map[string]interface{}{
+		"title":    "Renamed Title",
 		"filename": "target",
 	})
 	if err == nil {
@@ -47,12 +52,24 @@ func TestApplyFileUpdate_RefusesToOverwrite(t *testing.T) {
 	}
 
 	// The decisive assertion: the bystander is intact.
-	got, readErr := os.ReadFile(dst)
+	info, readErr := tag.Read(dst)
 	if readErr != nil {
-		t.Fatalf("target vanished: %v", readErr)
+		t.Fatalf("target vanished or became unreadable: %v", readErr)
 	}
-	if string(got) != precious {
-		t.Errorf("target content = %q, want %q — a file was destroyed", got, precious)
+	if info.Title != precious {
+		t.Errorf("target title = %q, want %q — a file was modified", info.Title, precious)
+	}
+
+	// A refused update must also leave the source byte-identical. The
+	// conflict check used to run after tag.Write, so the source was
+	// already rewritten before the function reported the conflict.
+	srcAfter, readErr := os.ReadFile(src)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(srcBefore, srcAfter) {
+		t.Errorf("source was modified by a refused update (%d -> %d bytes)",
+			len(srcBefore), len(srcAfter))
 	}
 }
 
@@ -62,10 +79,7 @@ func TestApplyFileUpdate_AllowsFreeTarget(t *testing.T) {
 	music := t.TempDir()
 	t.Setenv("MUSIC_DIR", music)
 
-	src := filepath.Join(music, "before.mp3")
-	if err := os.WriteFile(src, []byte("payload"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	src := testaudio.SeedMP3(t, music, "before.mp3")
 
 	if err := applyFileUpdate(src, map[string]interface{}{
 		"filename": "after",
@@ -89,10 +103,7 @@ func TestApplyFileUpdate_RenamesOntoItselfIsANoOp(t *testing.T) {
 	music := t.TempDir()
 	t.Setenv("MUSIC_DIR", music)
 
-	src := filepath.Join(music, "same.mp3")
-	if err := os.WriteFile(src, []byte("payload"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	src := testaudio.SeedMP3(t, music, "same.mp3")
 
 	if err := applyFileUpdate(src, map[string]interface{}{
 		"filename": "same",

@@ -39,6 +39,17 @@ func Write(path string, upd *TagUpdate) error {
 		return nil
 	}
 
+	// Refuse to touch a file that is not audio.
+	//
+	// taglib.WriteTags does not validate the container: handed a text file
+	// named bogus.mp3 it prepends a well-formed ID3v2 header and returns
+	// nil, so the caller sees a successful tag save on a file whose audio
+	// is now behind a fabricated frame. The old code only reached this
+	// path by accident, and the write was silently destructive.
+	if err := ensureAudioFile(path); err != nil {
+		return err
+	}
+
 	// 优先使用 taglib 统一写入各种主流格式（OGG, FLAC, M4A, MP3, WAV 等）
 	err := writeWithTagLib(path, upd)
 	if err == nil {
@@ -54,6 +65,33 @@ func Write(path string, upd *TagUpdate) error {
 	}
 
 	return fmt.Errorf("write audio tags for %s: %w", filepath.Base(path), err)
+}
+
+// ensureAudioFile rejects paths that do not hold a decodable audio stream.
+//
+// It reuses Read's readability rule (a non-zero duration from taglib,
+// because that is the one property ReadProperties cannot fake from a file
+// extension) rather than inventing a second, weaker check. Sharing the
+// predicate is the point: if the two ever disagree, a file the editor
+// refuses to open is a file the editor can still overwrite.
+func ensureAudioFile(path string) error {
+	st, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat: %w", err)
+	}
+	if st.Size() == 0 {
+		return fmt.Errorf("%w: %s: file is empty",
+			ErrUnsupportedFormat, filepath.Base(path))
+	}
+	props, err := taglib.ReadProperties(path)
+	if err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrUnsupportedFormat, filepath.Base(path), err)
+	}
+	if props.Length <= 0 {
+		return fmt.Errorf("%w: %s: no audio stream found",
+			ErrUnsupportedFormat, filepath.Base(path))
+	}
+	return nil
 }
 
 func writeWithTagLib(path string, upd *TagUpdate) error {
@@ -106,11 +144,18 @@ func writeWithTagLib(path string, upd *TagUpdate) error {
 		}
 	}
 
-	// 嵌入式封面写入
+	// Embedded cover art.
+	//
+	// This used to swallow the error (`_ = err`) on the theory that a
+	// failed image write should not block the text tags. That is the wrong
+	// trade here: HandleSidecars reads the cover back out of the file to
+	// write a sidecar, so a silently-failed cover means the next save
+	// writes a *stale* sidecar from the old artwork while reporting
+	// success. The tags are already committed at this point, so returning
+	// an error costs the caller a warning, not the text-tag write.
 	if len(upd.AlbumImg) > 0 {
 		if err := taglib.WriteImage(path, upd.AlbumImg); err != nil {
-			// 图片写入若失败，不阻断文本标签保存
-			_ = err
+			return fmt.Errorf("taglib write image: %w", err)
 		}
 	}
 
