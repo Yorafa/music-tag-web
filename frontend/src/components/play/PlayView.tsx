@@ -10,8 +10,9 @@
 //       rows == 0       → <EmptyState/>    (centered CTA → onAddMusic)
 //     <DirPickerDrawer/>             from Plan A; open state owned here.
 //
-// Click contract on a row (matches Worklist.tsx's openEditor + play path):
-//   - row body click  → editorActions hydration sequence + Dialog open
+// Click contract on a row:
+//   - row body click  → openDetail(row): the one song-detail dialog,
+//                       shared with 智能刮削, at every viewport width
 //   - Play icon click → usePlayerStore.playTrack(local PlayerTrack) and
 //                       swallow the click so the row body handler doesn't
 //                       double-fire.
@@ -25,7 +26,7 @@ import { PlayTopBar } from '@/components/play/PlayTopBar';
 import { DirPickerDrawer } from '@/components/scraper/DirPickerDrawer';
 import { CloudSearchDialog } from '@/components/search/CloudSearchDialog';
 import { useLibraryStore, type LibraryRow } from '@/store/useLibraryStore';
-import { openEditorForRow } from '@/components/editor/openEditor';
+import { useDetailStore } from '@/store/useDetailStore';
 import { usePlayerStore, type PlayerTrack } from '@/store/usePlayerStore';
 import { buildMediaUrl } from '@/lib/mediaUrl';
 import { COVER_PLACEHOLDER_GRADIENTS, resolveCoverSrc } from '@/utils/cover';
@@ -70,24 +71,6 @@ function RowCover({ row }: { row: LibraryRow }) {
       {initial}
     </div>
   );
-}
-
-// Row click handler factory (openeditor sequence mirrors Worklist.tsx
-// `openEditor`). Hydrates the editor's fields synchronously so the
-// Dialog can mount immediately, then fires /api/music_id3/ in the
-// background when the row's lazy cache is empty. The mirror is
-// deliberate: PlayView rows share the same per-row cache contract as
-// Worklist rows so a user toggling between modes sees the same
-// fetch-once-then-instant behaviour. Plan B's play-mode editor is a
-// pure read-only-ish copy of the row's id3; tag editing is scrape-
-// mode's job (Plan A) but the Dialog is shared.
-async function openEditorFor(row: LibraryRow) {
-  await openEditorForRow({
-    fileName: row.fileName,
-    fullPath: row.fullPath,
-    musicInfo: row.musicInfo ?? null,
-    cache: (info) => useLibraryStore.getState().setMusicInfo(row.id, info),
-  });
 }
 
 function buildLocalTrack(row: LibraryRow): PlayerTrack {
@@ -142,7 +125,13 @@ function LibraryTable() {
             <button
               key={row.id}
               type="button"
-              onClick={() => openEditorFor(row)}
+              onClick={() =>
+                useDetailStore.getState().openDetail({
+                  fullPath: row.fullPath,
+                  fileName: row.fileName,
+                  musicInfo: row.musicInfo ?? null,
+                })
+              }
               className={cn(
                 'group w-full flex items-center gap-3 px-3 py-2 text-left transition-colors',
                 'hover:bg-surface-2 focus:bg-surface-2 focus:outline-none',

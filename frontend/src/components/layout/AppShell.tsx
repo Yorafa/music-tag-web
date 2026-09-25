@@ -5,12 +5,13 @@
 //   - audit:    Operation history logs, action/status filters & details
 //   - settings: General paths, music sources manager & hot reload
 //
-// Hosts global Dialog for TagEditor/ScrapeResults, bottom PlayerBar,
-// mobile navigation sheet, and ToastHost.
+// Hosts the global song-detail Dialog (TrackDetailDialog), bottom
+// PlayerBar, mobile navigation sheet, and ToastHost.
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { TagEditor } from '@/components/editor/TagEditor';
 import { ScrapeResults } from '@/components/editor/ScrapeResults';
+import { TrackDetailDialog } from '@/components/detail/TrackDetailDialog';
 import { WorkstationView } from '@/components/workstation/WorkstationView';
 import { PlayView } from '@/components/play/PlayView';
 import { CloudSearchView } from '@/components/search/CloudSearchView';
@@ -260,6 +261,9 @@ export function AppShell({ initialSection }: Props) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Song detail Dialog — one surface for 音乐库 and 智能刮削 */}
+      <TrackDetailDialog />
 
       {/* Global Toast Host */}
       <ToastHost />

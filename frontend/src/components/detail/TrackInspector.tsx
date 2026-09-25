@@ -1,3 +1,12 @@
+// The song-detail surface: 标签 / 候选 / 歌词 / 封面 / 指纹 for one
+// local file, plus the 智能刮削 action. Rendered inside
+// TrackDetailDialog, which is the only place it appears — it used to be
+// the scraper view's right-hand column, but a column cannot exist on a
+// phone, so the same content now opens as a dialog at every width and
+// the phone gets the identical surface rather than a different one.
+//
+// Lives in components/detail/ rather than components/workstation/ because
+// it is no longer owned by the scraper: 音乐库 opens the same dialog.
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Save,
@@ -20,6 +29,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useWorklistStore } from '@/store/useWorklistStore';
+import { useLibraryStore } from '@/store/useLibraryStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import {
@@ -30,13 +40,17 @@ import {
   getMusicId3,
 } from '@/api/client';
 import { resolveCoverSrc, COVER_PLACEHOLDER_GRADIENTS } from '@/utils/cover';
-import type { MusicSource, MusicTagInfo, SongInfo, WorklistRow } from '@/types';
+import type { MusicSource, MusicTagInfo, SongInfo } from '@/types';
+import type { DetailTarget } from '@/store/useDetailStore';
 
 interface Props {
-  row: WorklistRow | null;
+  /** The file being inspected, or null when the dialog has no target —
+   *  only reachable if the row was removed from its store while the
+   *  dialog was open, so the empty state is a guard, not a screen. */
+  row: DetailTarget | null;
 }
 
-function getInitialFormData(row: WorklistRow): Partial<MusicTagInfo> {
+function getInitialFormData(row: DetailTarget): Partial<MusicTagInfo> {
   const info = row.musicInfo ?? {};
   return {
     title: info.title || row.fileName.replace(/\.[^/.]+$/, '').trim(),
@@ -53,9 +67,10 @@ function getInitialFormData(row: WorklistRow): Partial<MusicTagInfo> {
   };
 }
 
-function TrackInspectorInner({ row }: { row: WorklistRow }) {
+function TrackInspectorInner({ row }: { row: DetailTarget }) {
   const setMusicInfo = useWorklistStore((s) => s.setMusicInfo);
   const setStatus = useWorklistStore((s) => s.setStatus);
+  const setLibraryMusicInfo = useLibraryStore((s) => s.setMusicInfo);
   const playTrack = usePlayerStore((s) => s.playTrack);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const currentTrack = usePlayerStore((s) => s.currentTrack);
@@ -139,8 +154,14 @@ function TrackInspectorInner({ row }: { row: WorklistRow }) {
           ...formData,
         },
       ]);
+      // Both stores key rows by fullPath, and both setters ignore ids
+      // they don't own — so writing to both lets a save made from
+      // 音乐库 also refresh the scraper table's status badge and
+      // preview, and vice versa, without either view knowing which
+      // section the dialog was opened from.
       setMusicInfo(row.fullPath, formData);
       setStatus(row.fullPath, 'scraped');
+      setLibraryMusicInfo(row.fullPath, formData);
       useNoticeStore.getState().push(`已成功保存「${formData.title || row.fileName}」标签`, 'info');
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -198,7 +219,15 @@ function TrackInspectorInner({ row }: { row: WorklistRow }) {
   const coverSrc = resolveCoverSrc(formData);
 
   return (
-    <aside className="w-80 lg:w-96 flex flex-col h-full bg-surface-1 border-l border-border overflow-hidden select-none">
+    // w-full, not the w-80 lg:w-96 this had as a column: the dialog owns
+    // the width now, and a hardcoded 320/384px fought it — the column
+    // wrapper set an inline width that the aside's own class overrode,
+    // so a 340px column rendered a 384px panel and spilled.
+    // No select-none: it belonged to the fixed column (nothing there is
+    // draggable) and it would have made the 歌词 textarea the one field
+    // the user could not select text in — and that textarea is now a
+    // primary surface on phones.
+    <aside className="flex flex-col h-full w-full bg-surface-1 overflow-hidden">
       {/* Hero Header: Big Artwork & Quick Actions */}
       <div className="p-4 border-b border-border bg-surface-2/40 space-y-3 shrink-0">
         <div className="flex items-start gap-3">
@@ -221,7 +250,10 @@ function TrackInspectorInner({ row }: { row: WorklistRow }) {
             <button
               type="button"
               onClick={handleTogglePlay}
-              className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white"
+              // Always visible below sm: a phone has no hover, so the
+              // 试听 control was simply absent there. Now that this is
+              // the phone's detail surface too, that gap is visible.
+              className="absolute inset-0 bg-black/40 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 flex items-center justify-center transition-opacity text-white"
               title="即时试听播放"
             >
               {isThisPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6 fill-white" />}
@@ -595,7 +627,7 @@ function TrackInspectorInner({ row }: { row: WorklistRow }) {
 export function TrackInspector({ row }: Props) {
   if (!row) {
     return (
-      <aside className="w-80 lg:w-96 flex flex-col h-full bg-surface-1 border-l border-border p-6 items-center justify-center text-center space-y-3 text-muted-foreground select-none">
+      <aside className="flex flex-col h-full w-full bg-surface-1 p-6 items-center justify-center text-center space-y-3 text-muted-foreground">
         <div className="w-14 h-14 rounded-2xl bg-muted/60 flex items-center justify-center text-muted-foreground/60">
           <Music className="w-7 h-7" />
         </div>

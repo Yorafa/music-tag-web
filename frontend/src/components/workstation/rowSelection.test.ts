@@ -1,35 +1,22 @@
-// Specs for the scraper's row-tap behaviour across breakpoints.
+// Specs for selectWorklistRow, the same function WorkstationView calls.
 //
-// Reported bug: on a phone, tapping a song in 智能刮削 did nothing. The
-// row's onClick only set a selection highlight, and the panel that
-// renders the selected row's detail (TrackInspector) is `hidden lg:flex`
-// — so below 1024px the tap had no visible effect whatsoever.
+// These import the real module rather than re-implementing it. An
+// earlier draft of this file re-implemented the branch inline and passed
+// even after the component's copy had been mutated back to the bug — a
+// duplicated test of duplicated code proves nothing, which is why the
+// logic was extracted rather than the assertion kept.
 //
-// These import selectWorklistRow, the same function WorkstationView
-// calls. An earlier draft of this file re-implemented the branch inline
-// and passed even after the component's copy had been mutated back to
-// the bug — a duplicated test of duplicated code proves nothing, which
-// is why the logic was extracted rather than the assertion kept.
-//
-// The contract: the tap always records the selection, and it additionally
-// opens the song-detail Dialog exactly when no inspector is on screen to
-// show the selection. Opening it unconditionally would be a regression —
-// on a wide screen the inspector is right there, and a modal the user
-// did not ask for would replace a two-column workspace with a dialog.
+// The contract: the tap always records the selection AND always opens
+// the song-detail dialog. There is no viewport branch any more. The old
+// one read a 1024px media query and skipped the dialog when the
+// TrackInspector column was on screen, which is what let the phone and
+// the desktop drift onto two different detail UIs; both are correct
+// against their own spec and wrong against the user's.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { selectWorklistRow } from './rowSelection';
+import { useDetailStore } from '@/store/useDetailStore';
 import type { WorklistRow } from '@/types';
-
-const openEditorForRow = vi.hoisted(() => vi.fn());
-vi.mock('@/components/editor/openEditor', () => ({ openEditorForRow }));
-
-const setMusicInfo = vi.hoisted(() => vi.fn());
-vi.mock('@/store/useWorklistStore', () => ({
-  useWorklistStore: { getState: () => ({ setMusicInfo }) },
-}));
-
-const INSPECTOR_QUERY = '(min-width: 1024px)';
 
 function row(over: Partial<WorklistRow> = {}): WorklistRow {
   return {
@@ -40,78 +27,90 @@ function row(over: Partial<WorklistRow> = {}): WorklistRow {
   } as WorklistRow;
 }
 
+function target() {
+  return useDetailStore.getState().target;
+}
+
 beforeEach(() => {
-  openEditorForRow.mockReset();
-  setMusicInfo.mockReset();
+  useDetailStore.setState({ target: null });
 });
 
 describe('selectWorklistRow', () => {
-  it('opens the detail dialog when no inspector is on screen', () => {
-    // The phone case: nothing else would reveal the selection.
+  it('records the selection', () => {
     const setSelectedPath = vi.fn();
-    selectWorklistRow(row(), { inspectorVisible: false, setSelectedPath });
+    selectWorklistRow(row(), { setSelectedPath });
 
-    expect(setSelectedPath).toHaveBeenCalledWith('Artist/Album/song.mp3');
-    expect(openEditorForRow).toHaveBeenCalledTimes(1);
-    expect(openEditorForRow).toHaveBeenCalledWith(
-      expect.objectContaining({
-        fileName: 'song.mp3',
-        fullPath: 'Artist/Album/song.mp3',
-      }),
-    );
-  });
-
-  it('only selects when the inspector is visible', () => {
-    // Desktop: TrackInspector is on screen, so a modal the user did not
-    // ask for would be a regression, not a fix.
-    const setSelectedPath = vi.fn();
-    selectWorklistRow(row(), { inspectorVisible: true, setSelectedPath });
-
-    expect(setSelectedPath).toHaveBeenCalledWith('Artist/Album/song.mp3');
-    expect(openEditorForRow).not.toHaveBeenCalled();
-  });
-
-  it('always records the selection, even when opening the dialog', () => {
-    const setSelectedPath = vi.fn();
-    selectWorklistRow(row(), { inspectorVisible: false, setSelectedPath });
     expect(setSelectedPath).toHaveBeenCalledWith('Artist/Album/song.mp3');
   });
 
-  it('passes the row cache through so the dialog is not blank', () => {
-    selectWorklistRow(row(), { inspectorVisible: false, setSelectedPath: vi.fn() });
-    expect(openEditorForRow).toHaveBeenCalledWith(
-      expect.objectContaining({ musicInfo: { title: 'T' } }),
-    );
-  });
+  it('opens the song-detail dialog', () => {
+    selectWorklistRow(row(), { setSelectedPath: vi.fn() });
 
-  it('handles a row with no cached tags', () => {
-    const setSelectedPath = vi.fn();
-    selectWorklistRow(row({ musicInfo: undefined }), {
-      inspectorVisible: false,
-      setSelectedPath,
-    });
-
-    expect(setSelectedPath).toHaveBeenCalled();
-    expect(openEditorForRow).toHaveBeenCalledWith(
-      expect.objectContaining({ musicInfo: null }),
-    );
-  });
-
-  it('seeds the worklist cache so the next open is instant', () => {
-    // Without this, every tap on a phone re-fetches the same file.
-    selectWorklistRow(row(), { inspectorVisible: false, setSelectedPath: vi.fn() });
-    const { cache } = openEditorForRow.mock.calls[0][0];
-    cache({ title: 'Fresh' });
-    expect(setMusicInfo).toHaveBeenCalledWith('Artist/Album/song.mp3', {
-      title: 'Fresh',
+    expect(target()).toEqual({
+      fullPath: 'Artist/Album/song.mp3',
+      fileName: 'song.mp3',
+      musicInfo: { title: 'T' },
     });
   });
 
-  it('uses the same 1024px the inspector column is hidden below', () => {
-    // The TrackInspector column is `hidden lg:flex` and Tailwind's lg is
-    // 1024px. If the query drifts from the class, a tap opens a dialog
-    // on a screen that already has an inspector — or nothing happens on
-    // one that does not.
-    expect(INSPECTOR_QUERY).toBe('(min-width: 1024px)');
+  it('opens the dialog on a wide viewport too — no breakpoint branch', () => {
+    // The regression this guards: the tap behaved differently above and
+    // below 1024px, so each width got a different detail UI. Nothing
+    // about this function reads the viewport now, so there is no width
+    // at which the dialog stays shut.
+    selectWorklistRow(row(), { setSelectedPath: vi.fn() });
+    expect(target()).not.toBeNull();
+  });
+
+  it('opens the dialog even when a row is already selected', () => {
+    // Re-tapping the highlighted row must still be able to show detail.
+    const setSelectedPath = vi.fn();
+    selectWorklistRow(row(), { setSelectedPath });
+    selectWorklistRow(row(), { setSelectedPath });
+
+    expect(setSelectedPath).toHaveBeenCalledTimes(2);
+    expect(target()).not.toBeNull();
+  });
+
+  it('switches the target when a different row is tapped', () => {
+    selectWorklistRow(row(), { setSelectedPath: vi.fn() });
+    selectWorklistRow(
+      row({ fullPath: 'Artist/Album/other.mp3', fileName: 'other.mp3' }),
+      { setSelectedPath: vi.fn() },
+    );
+
+    expect(target()?.fullPath).toBe('Artist/Album/other.mp3');
+  });
+
+  it('normalises a missing cache to null', () => {
+    // TrackInspector treats undefined and null the same way; leaving
+    // the field off the target would make the two paths differ in
+    // exactly the one case (an untagged file) worth being consistent on.
+    selectWorklistRow(row({ musicInfo: undefined }), { setSelectedPath: vi.fn() });
+
+    expect(target()?.musicInfo).toBeNull();
+  });
+});
+
+describe('the detail store', () => {
+  it('treats a null target as closed', () => {
+    useDetailStore.getState().openDetail({
+      fullPath: 'a.mp3',
+      fileName: 'a.mp3',
+    });
+    expect(target()).not.toBeNull();
+
+    useDetailStore.getState().closeDetail();
+    expect(target()).toBeNull();
+  });
+
+  it('has no open-without-a-target state to get out of sync', () => {
+    // `open` is derived from the target rather than stored beside it, so
+    // a separate boolean could never disagree with what is displayed.
+    useDetailStore.getState().openDetail({ fullPath: 'a.mp3', fileName: 'a.mp3' });
+    expect(target() !== null).toBe(true);
+
+    useDetailStore.getState().closeDetail();
+    expect(target() !== null).toBe(false);
   });
 });
