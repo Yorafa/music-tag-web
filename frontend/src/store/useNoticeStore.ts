@@ -27,6 +27,7 @@
 // when it migrates its surface to <NoticeHost>.
 
 import { create } from 'zustand';
+import { newId } from '@/utils/id';
 
 export type NoticeVariant = 'info' | 'warn' | 'error';
 
@@ -80,7 +81,10 @@ export const useNoticeStore = create<NoticeState>((set, get) => ({
   messages: [],
   backlog: [],
   push: (text, variant = 'info') => {
-    const id = crypto.randomUUID();
+    // newId, not crypto.randomUUID: this is a secure-context API and the
+    // app is served over plain HTTP on a LAN address, where it is
+    // undefined — so every toast in the app threw from here.
+    const id = newId();
     const createdAt = Date.now();
     const notice: Notice = { id, text, variant, createdAt };
     const record: NoticeRecord = { ...notice, readAt: null };
