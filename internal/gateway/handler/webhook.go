@@ -15,8 +15,8 @@ import (
 // webhookState owns the optional Bus + the in-process registered cache.
 //
 // Both fields are process-global because:
-//   • there is exactly one gateway process per binary, but
-//   • tests may inject a NullBus independently — handlers don't reach
+//   - there is exactly one gateway process per binary, but
+//   - tests may inject a NullBus independently — handlers don't reach
 //     into global state for Bus calls; the lifecycle is owned here.
 //
 // We use sync.RWMutex for the cache pointer so SetCache can be swapped at
@@ -114,9 +114,9 @@ func FileMovedWebhook(c *gin.Context) {
 	}
 	cachePtr.HandleFileMoved(e.OldPath, e.NewPath)
 	SuccessData(c, gin.H{
-		"status":    "refreshed",
-		"old_path":  e.OldPath,
-		"new_path":  e.NewPath,
+		"status":     "refreshed",
+		"old_path":   e.OldPath,
+		"new_path":   e.NewPath,
 		"cache_size": cachePtr.Size(),
 	})
 }

@@ -213,16 +213,16 @@ func TestEnsureBootstrap_FillsCompoundPlaceholderAdminPair(t *testing.T) {
 
 func TestIsBootstrapTarget(t *testing.T) {
 	cases := map[string]bool{
-		"":                          true,
-		"__REPLACE_ME__":            true,
-		"  __REPLACE_ME__  ":        true,
-		"CHANGEME":                  true,
-		"TODO":                      true,
-		"change-me-in-production":   true,
-		"CHANGE-ME-IN-PRODUCTION":   true,
-		"real-secret":               false,
-		"$2a$10$abc...":             false,
-		"alice:realpwd":             false,
+		"":                        true,
+		"__REPLACE_ME__":          true,
+		"  __REPLACE_ME__  ":      true,
+		"CHANGEME":                true,
+		"TODO":                    true,
+		"change-me-in-production": true,
+		"CHANGE-ME-IN-PRODUCTION": true,
+		"real-secret":             false,
+		"$2a$10$abc...":           false,
+		"alice:realpwd":           false,
 	}
 	for in, want := range cases {
 		if got := isBootstrapTarget(in); got != want {

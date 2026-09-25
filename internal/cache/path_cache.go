@@ -50,13 +50,13 @@ type lruNode struct {
 //
 // Integrity model:
 //
-//   • Set replaces the entry at `path` (idempotent) and moves it to the
+//   - Set replaces the entry at `path` (idempotent) and moves it to the
 //     front of the LRU.
-//   • Get returns (entry, true) on hit and moves the entry to the front;
+//   - Get returns (entry, true) on hit and moves the entry to the front;
 //     (zero, false) on miss.
-//   • Invalidate removes `path` from the cache regardless of whether it
+//   - Invalidate removes `path` from the cache regardless of whether it
 //     exists; the (now-free) list position is also removed.
-//   • HandleFileMoved is the rename-invalidation primitive: evict OldPath
+//   - HandleFileMoved is the rename-invalidation primitive: evict OldPath
 //     and tombstone NewPath so a caller reading the post-rename path
 //     will hit-miss and re-query the DB (which has the freshly-updated
 //     row).

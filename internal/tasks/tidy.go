@@ -11,6 +11,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"go-music-tag/internal/audit"
 	"go-music-tag/internal/db"
 	"go-music-tag/internal/events"
 	"go-music-tag/internal/tag"
@@ -119,6 +120,11 @@ func (h *TidyFolderHandler) tidyOne(ctx context.Context, musicPath string, p Tid
 			log.Printf("[tidy] publish FileMoved %s: %v", musicPath, err)
 		}
 	}
+	audit.Log(ctx, audit.ActionTidyFolder, filepath.Base(dst), "worker", audit.StatusSuccess, 1, map[string]interface{}{
+		"old_path":  musicPath,
+		"new_path":  dst,
+		"root_path": p.RootPath,
+	}, nil)
 	fmt.Printf("[tidy] %s -> %s\n", musicPath, dst)
 	return nil
 }

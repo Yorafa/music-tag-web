@@ -3,7 +3,9 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,10 +15,33 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
 
+	"go-music-tag/internal/audioext"
 	"go-music-tag/internal/plugin"
 	"go-music-tag/internal/taskclient"
 	"go-music-tag/internal/tasks"
 )
+
+// sanitizeLogField strips control characters (CRLF + <0x20 + 0x7f) and
+// truncates an event-tag field for log lines / user-visible messages.
+// Defence-in-depth so a hostile `id=` query / upstream payload can't
+// smuggle CRLF into docker logs (breaking grep) or JSON envelope
+// (breaking axios interceptor parsing).
+//
+// Truncation is at 64 bytes; song ids are short numerics so this is
+// generous. Type stays string so callers don't need unquoting in
+// printf verbs.
+func sanitizeLogField(s string, max int) string {
+	s = strings.Map(func(r rune) rune {
+		if r == 0 || r == '\n' || r == '\r' || r < 0x20 || r == 0x7f {
+			return '?'
+		}
+		return r
+	}, s)
+	if len(s) > max {
+		s = s[:max] + "..."
+	}
+	return s
+}
 
 // streamBodyCapBytes caps how many bytes we'll proxy from an upstream audio
 // URL in a single response. 50 MiB is comfortably above any preview-length
@@ -155,7 +180,10 @@ func StreamAudio(c *gin.Context) {
 	src := strings.TrimSpace(c.Query("src"))
 	id := strings.TrimSpace(c.Query("id"))
 	if src == "" || id == "" {
-		Failure(c, "missing src or id")
+		// 400 — caller asked for an invalid URL; nothing else can route
+		// meaningfully. FailureStatus (not Failure) so <audio> consumers
+		// still see this as an error and the onerror path fires a toast.
+		FailureStatus(c, http.StatusBadRequest, "missing src or id")
 		return
 	}
 
@@ -187,27 +215,49 @@ func StreamAudio(c *gin.Context) {
 // the browser saves the file to Downloads/ (the user's "下载到浏览器"
 // row button path). The attachment filename is taken from ?filename=
 // (sanitized) or, when absent, falls back to the on-disk basename.
+// unsafeCacheID reports whether id contains characters that would alter
+// filepath.Glob semantics (`*?[`) or escape the per-source cache dir
+// (`/\`). The stream + download handlers glob `<cache>/<source>/<id>.*`
+// with the raw id, so a hostile id must not be able to expand the pattern
+// across the whole cache dir (e.g. `id=*` → matches every cached file) or
+// walk out of the source subdir. Legit ids — youtube 11-char IDs, kuwo /
+// migu numeric rids — never contain these characters, so the guard is
+// lossless in practice.
+func unsafeCacheID(id string) bool {
+	return strings.ContainsAny(id, `/\*?[]`)
+}
+
 func streamDownload(c *gin.Context, source, videoID string) {
-	if strings.ContainsAny(videoID, "/\\") {
-		// Defensive: a video id should never contain a path separator.
-		// If one does, refuse the lookup so a malicious id cannot
-		// escape the cache dir via glob.
-		Failure(c, "invalid source id")
+	if unsafeCacheID(videoID) {
+		// Defensive: refuse the lookup so a malicious id cannot escape
+		// the cache dir via glob. 400 + envelope so <audio>'s onerror
+		// path is reliably triggered (see FailureStatus comment).
+		FailureStatus(c, http.StatusBadRequest, "invalid source id")
 		return
 	}
 	cacheDir := audioCacheDir(source)
 	attachment := c.Query("as_attachment") == "1"
 	filename := strings.TrimSpace(c.Query("filename"))
 
-	matches, err := filepath.Glob(filepath.Join(cacheDir, videoID+".*"))
-	if err != nil || len(matches) == 0 {
-		// Cache miss — enqueue a generic download task (deduped by asynq
-		// UniqueTTL; fine-grained UniqueTTL set in handler.Download), then
-		// long-poll until the file lands or the long-poll budget elapses.
+	matches, _ := filepath.Glob(filepath.Join(cacheDir, videoID+".*"))
+	matches = filterAudioMatches(matches)
+	if len(matches) == 0 {
+		// Prefer a concrete worker failure over another 202 loop. The
+		// worker writes <id>.error next to the cache dir when yt-dlp
+		// exhausts retries (signature / format / bot checks).
+		if msg := tasks.ReadDownloadError(source, videoID); msg != "" {
+			// 502 so waitForStreamReady stops retrying 202 and surfaces
+			// the real reason (vs endless "下载中").
+			FailureStatus(c, http.StatusBadGateway, "download failed: "+truncateErr(msg, 240))
+			return
+		}
+		// Cache miss / only incomplete stubs — enqueue a generic download
+		// task (deduped by asynq UniqueTTL), then long-poll until a
+		// non-empty audio file lands or the long-poll budget elapses.
 		if !enqueueDownloadTask(source, videoID) {
-			// Enqueue failed — return 503 without body so the frontend
-			// shows the generic "试听失败" toast via the <audio>.error path.
-			Failure(c, "download 异步入队失败")
+			// Enqueue failed — return 503 + envelope so <audio>.error
+			// fires reliably (vs 200+JSON which browsers silently drop).
+			FailureStatus(c, http.StatusServiceUnavailable, "download 异步入队失败")
 			return
 		}
 		// Long-poll: re-glob every streamDownloadLongPollInterval until
@@ -218,12 +268,23 @@ func streamDownload(c *gin.Context, source, videoID string) {
 				// Client disconnected — stop polling free the goroutine.
 				return
 			}
+			if msg := tasks.ReadDownloadError(source, videoID); msg != "" {
+				FailureStatus(c, http.StatusBadGateway, "download failed: "+truncateErr(msg, 240))
+				return
+			}
 			matches, _ = filepath.Glob(filepath.Join(cacheDir, videoID+".*"))
+			// Ignore .error / .part / empty stubs.
+			matches = filterAudioMatches(matches)
 			if len(matches) > 0 {
 				break
 			}
 		}
 		if len(matches) == 0 {
+			// Check once more for a late-arriving failure marker.
+			if msg := tasks.ReadDownloadError(source, videoID); msg != "" {
+				FailureStatus(c, http.StatusBadGateway, "download failed: "+truncateErr(msg, 240))
+				return
+			}
 			// 10s elapsed, file still absent → 202 + Retry-After so the
 			// frontend keeps showing the buffering spinner and re-issues
 			// GET /api/stream?... after a short backoff. Failure-after-N
@@ -233,12 +294,50 @@ func streamDownload(c *gin.Context, source, videoID string) {
 			// We also emit the retry budget so the frontend doesn't need
 			// to hardcode the ceiling independently of the backend.
 			c.Writer.Header().Set("X-Download-Retry-Budget", "5")
+			// charset=utf-8 so Chinese "下载中…" is not Latin-1 mojibake in
+			// DevTools / any intermediate that re-decodes the body.
+			c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 			c.Writer.WriteHeader(http.StatusAccepted)
 			_, _ = c.Writer.Write([]byte(`{"result":false,"code":"download_pending","message":"下载中，请稍后重试"}`))
 			return
 		}
 	}
 	serveAudioFile(c, matches[0], attachment, filename)
+}
+
+// filterAudioMatches drops non-audio cache siblings (notably <id>.error
+// and yt-dlp's `<id>.mp3.part` incomplete temps) and zero-byte stubs.
+// Zero-byte / tiny files must not be served: ServeFile + Range bytes=0-1
+// returns 416 Requested Range Not Satisfiable, which the frontend used
+// to treat as a hard failure mid-download.
+func filterAudioMatches(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		// audioext.IsStreamablePath is the shared whitelist (REVIEW.md
+		// P0-4 / P2-1). It notably INCLUDES .flac, which this switch used
+		// to omit while resolveLibraryDest accepted it — a lossless
+		// download therefore landed in the cache and could never be
+		// served.
+		if !audioext.IsStreamablePath(p) {
+			continue
+		}
+		// Reject incomplete / empty stubs. Real audio previews are well
+		// above 1 KiB; keep a low floor so short clips still pass.
+		fi, err := os.Stat(p)
+		if err != nil || fi.IsDir() || fi.Size() < 1024 {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func truncateErr(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 // serveAudioFile wraps http.ServeFile with an optional attachment header.
@@ -293,21 +392,47 @@ func enqueueDownloadTask(source, videoID string) bool {
 			// persist) path goes through POST /api/download with its
 			// own dest_dir carry-and-copy; this long-poll trigger is
 			// ONLY for transient playback file.
+			// Default ogg so cache/preview matches 加入库 extension.
+			ExtraJSON: `{"output_format":"ogg"}`,
 		},
 		asynq.Unique(30*time.Second),
 		asynq.Queue("default"),
 		asynq.MaxRetry(1),
-		asynq.Timeout(30*60*1e9),
+		asynq.Timeout(30*time.Minute),
 	)
 	if err != nil {
+		log.Printf("[stream] NewTypedTask download failed src=%s id=%s: %v",
+			sanitizeLogField(source, 32), sanitizeLogField(videoID, 64), err)
 		return false
 	}
 	if _, err := taskclient.Enqueue(t); err != nil {
-		// asynq returns an error if a task with the same uniqueness key is
-		// already pending — we treat that as success (dedup did its job).
-		return err == nil || strings.Contains(err.Error(), "duplicate")
+		// asynq Unique: ErrDuplicateTask.Error() == "task already exists"
+		// (NOT the substring "duplicate"). Treat as success so concurrent
+		// play clicks keep long-polling the same in-flight download.
+		if isAsynqDuplicate(err) {
+			return true
+		}
+		log.Printf("[stream] enqueue download failed src=%s id=%s: %v",
+			sanitizeLogField(source, 32), sanitizeLogField(videoID, 64), err)
+		return false
 	}
 	return true
+}
+
+// isAsynqDuplicate reports asynq Unique-window collisions. Prefer
+// errors.Is(ErrDuplicateTask); also accept historical string forms
+// used by older call sites / wrapped errors.
+func isAsynqDuplicate(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, asynq.ErrDuplicateTask) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "task already exists") ||
+		strings.Contains(msg, "duplicate") ||
+		strings.Contains(msg, "already enqueued")
 }
 
 // SleepCtx is a context-aware time.Sleep. It returns the duration it
@@ -320,6 +445,39 @@ func SleepCtx(ctx context.Context, dur time.Duration) (time.Duration, error) {
 		return dur, nil
 	case <-ctx.Done():
 		return 0, ctx.Err()
+	}
+}
+
+// applyStreamUpstreamHeaders copies the inbound request's whitelist
+// headers onto an upstream request we are about to send. Used for both the
+// primary request and the HEAD→GET retry so the two stay identical:
+//   - Range — so byte-range scrubbing from <audio> works against the
+//     upstream CDN's 206 supports.
+//   - User-Agent — kugou specifically 403s when UA mismatches the
+//     signed-URL's recorded UA (the plugin fetched with a Mozilla UA
+//     first, so we replay that fingerprint).
+//   - Cookie — keeps the same session if the user's browser carried it.
+//   - Referer — some upstream CDNs (migu in particular) gate signed URLs
+//     on Referer; replaying the inbound value keeps the proxy consistent
+//     with the plugin's direct fetch.
+//
+// We deliberately DO NOT forward Authorization / Origin — those break
+// cross-origin hops and the JWT Authorization belongs to /api/*, not the
+// public CDN.
+func applyStreamUpstreamHeaders(req *http.Request, c *gin.Context) {
+	if r := c.GetHeader("Range"); r != "" {
+		req.Header.Set("Range", r)
+	}
+	if ua := c.GetHeader("User-Agent"); ua != "" {
+		req.Header.Set("User-Agent", ua)
+	} else {
+		req.Header.Set("User-Agent", fallbackUserAgent)
+	}
+	if ck := c.GetHeader("Cookie"); ck != "" {
+		req.Header.Set("Cookie", ck)
+	}
+	if ref := c.GetHeader("Referer"); ref != "" {
+		req.Header.Set("Referer", ref)
 	}
 }
 
@@ -343,47 +501,138 @@ func SleepCtx(ctx context.Context, dur time.Duration) (time.Duration, error) {
 func streamFromPlugin(c *gin.Context, src, id string) {
 	ts, err := plugin.GetTagSource(src)
 	if err != nil {
-		Failure(c, "unsupported source: "+src)
+		// 400 — the caller asked for a source name we don't know about;
+		// this is a client-side mistake, not a transient infrastructure
+		// failure.
+		FailureStatus(c, http.StatusBadRequest, "unsupported source: "+src)
 		return
 	}
 	upstreamURL, err := ts.GetAudioURL(c.Request.Context(), id)
 	if err != nil {
-		Failure(c, "preview unavailable: "+err.Error())
+		// 502 — upstream plugin reported an error reaching its CDN.
+		// distinct from the empty-URL case below so the front-end can
+		// tease them apart in the toast if desired. Ops-side debug line
+		// carries the sanitised id and the err details into docker logs
+		// so a future "preview unavailable" report is greppable.
+		log.Printf("[stream] 502 src=%s id=%s reason=plugin_get_audio_err err=%v",
+			src, sanitizeLogField(id, 64), err)
+		FailureStatus(c, http.StatusBadGateway, "preview unavailable: "+err.Error())
 		return
 	}
 	if upstreamURL == "" {
-		Failure(c, "preview unavailable")
+		// 502 — most common: source is documented as a stub (netease /
+		// qmusic) OR the upstream CDN returned 200 + empty data.url /
+		// play_url / playUrl (kuwo Secret rotated, kg missing dfid
+		// cookie, migu cohort retired). The empty URL is the plugin's
+		// signal that preview cannot be served; the gateway surfaces
+		// that as 502 so <audio>.error reliably fires and PlayButton's
+		// onMediaError handler pushes the warning toast.
+		//
+		// The widened message includes `source=<src>` so a user opening
+		// DevTools can read which plugin path failed (was previously
+		// indistinguishable from the netease/qmusic designed stub case).
+		log.Printf("[stream] 502 src=%s id=%s reason=empty_url upstream_body=%s",
+			src, sanitizeLogField(id, 64), "<see plugin log line for body>")
+		FailureStatus(c, http.StatusBadGateway,
+			fmt.Sprintf("preview unavailable: source=%s", src))
 		return
 	}
 
-	req, err := http.NewRequestWithContext(c.Request.Context(), "GET", upstreamURL, nil)
+	// Mirror the inbound method upstream. The frontend's waitForStreamReady
+	// preflights /api/stream with HEAD before committing <audio>.src; if we
+	// hardcoded GET here that preflight would pull the ENTIRE upstream body
+	// from the CDN just to have net/http discard it for the HEAD response —
+	// a 2×-bandwidth waste on every preview click. Forwarding HEAD as HEAD
+	// makes the preflight cheap (headers only) and the subsequent GET stays
+	// untouched.
+	method := c.Request.Method
+	if method != http.MethodGet && method != http.MethodHead {
+		method = http.MethodGet
+	}
+	req, err := http.NewRequestWithContext(c.Request.Context(), method, upstreamURL, nil)
 	if err != nil {
-		Failure(c, "build upstream request: "+err.Error())
+		// 500 — we cannot even build the upstream request; that's a
+		// bug in the handler, not an upstream failure.
+		log.Printf("[stream] 500 src=%s id=%s reason=build_upstream_req err=%v",
+			src, sanitizeLogField(id, 64), err)
+		FailureStatus(c, http.StatusInternalServerError, "build upstream request: "+err.Error())
 		return
 	}
-	if r := c.GetHeader("Range"); r != "" {
-		req.Header.Set("Range", r)
-	}
-	if ua := c.GetHeader("User-Agent"); ua != "" {
-		req.Header.Set("User-Agent", ua)
-	} else {
-		req.Header.Set("User-Agent", fallbackUserAgent)
-	}
-	if ck := c.GetHeader("Cookie"); ck != "" {
-		req.Header.Set("Cookie", ck)
-	}
+	applyStreamUpstreamHeaders(req, c)
 
 	resp, err := streamUpstreamClient.Do(req)
 	if err != nil {
-		Failure(c, "upstream error: "+err.Error())
+		// 502 — we successfully built the upstream request but the
+		// network round-trip failed. Boundary between "plugin/Kong"
+		// and the source CDN; the browser sees upstream as untrusted.
+		log.Printf("[stream] 502 src=%s id=%s reason=upstream_network err=%v upstream_url=%s",
+			src, sanitizeLogField(id, 64), err, sanitizeLogField(upstreamURL, 128))
+		FailureStatus(c, http.StatusBadGateway, "upstream error: "+err.Error())
 		return
 	}
 	defer resp.Body.Close()
 
+	// HEAD-preflight resilience: a few signed-URL CDNs (kuwo / kugou) reject
+	// HEAD with 403/404 while answering GET fine. The frontend's
+	// waitForStreamReady only falls back to GET on 405/501, so a HEAD-only
+	// CDN would otherwise fail the preflight where it previously succeeded
+	// (the old code always issued upstream GET). Retry once as GET and let
+	// the HEAD inbound discard the body at the net/http layer — the real
+	// <audio> GET still fetches the bytes. CDNs that support HEAD keep the
+	// zero-body bandwidth win.
+	if method == http.MethodHead && (resp.StatusCode < 200 || resp.StatusCode > 299) {
+		_ = resp.Body.Close()
+		retry, rerr := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, upstreamURL, nil)
+		if rerr != nil {
+			log.Printf("[stream] 500 src=%s id=%s reason=build_upstream_get_retry err=%v",
+				src, sanitizeLogField(id, 64), rerr)
+			FailureStatus(c, http.StatusInternalServerError, "build upstream request: "+rerr.Error())
+			return
+		}
+		// Re-apply the same whitelist header forwarding as the main request
+		// so the retried GET is indistinguishable from a direct user GET.
+		applyStreamUpstreamHeaders(retry, c)
+		retryResp, rerr := streamUpstreamClient.Do(retry)
+		if rerr != nil {
+			log.Printf("[stream] 502 src=%s id=%s reason=upstream_network_get_retry err=%v upstream_url=%s",
+				src, sanitizeLogField(id, 64), rerr, sanitizeLogField(upstreamURL, 128))
+			FailureStatus(c, http.StatusBadGateway, "upstream error: "+rerr.Error())
+			return
+		}
+		// NOTE: the outer `defer resp.Body.Close()` already captured the
+		// FIRST response's body at defer time — reassigning `resp` does NOT
+		// change what it closes. Close the retried response explicitly or
+		// its connection leaks from the transport pool on every HEAD
+		// preflight that hits a HEAD-rejecting CDN.
+		defer retryResp.Body.Close()
+		resp = retryResp
+		// method stays "HEAD" below: net/http discards the body writes on a
+		// HEAD response, so the retried GET bytes are fetched and dropped —
+		// the <audio> GET will re-fetch them with full Range support.
+	}
+
+	// The body below is capped at streamBodyCapBytes. If the upstream
+	// declares a length ABOVE the cap, io.CopyN truncates mid-stream and
+	// the advertised Content-Length would make the browser wait for bytes
+	// that never arrive (a hung <audio>, no error event). Only in that
+	// case drop Content-Length so net/http falls back to close-delimited
+	// framing and the client learns the stream ended from EOF. Under-cap
+	// responses (and Range / 206 partials) keep their exact byte count.
+	// Content-Range is always preserved — that's what <audio> uses to seek.
+	if resp.ContentLength > streamBodyCapBytes {
+		resp.Header.Del("Content-Length")
+	}
 	for k, v := range resp.Header {
 		c.Writer.Header()[k] = v
 	}
 	c.Writer.WriteHeader(resp.StatusCode)
+
+	// HEAD preflight carries no body — net/http already gives us NoBody for
+	// the upstream HEAD, but skip the copy explicitly so we never stream a
+	// body into a HEAD response if a future upstream misbehaves.
+	if method == http.MethodHead {
+		return
+	}
 
 	// Cap the proxy body so an upstream returning a multi-GB blob can't
 	// exhaust gateway memory. io.CopyN caps writes at exactly n bytes;

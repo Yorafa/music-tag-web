@@ -8,15 +8,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"go-music-tag/internal/audioext"
 	"go-music-tag/internal/utils"
 )
-
-// allowedAudioExts matches Python's ALLOW_TYPE.
-var allowedAudioExts = map[string]bool{
-	"flac": true, "mp3": true, "ape": true, "wav": true, "aiff": true,
-	"wv": true, "tta": true, "m4a": true, "ogg": true, "mpc": true,
-	"opus": true, "wma": true, "dsf": true, "dff": true, "wmv": true,
-}
 
 var lyricExts = map[string]bool{"lrc": true, "txt": true}
 
@@ -105,19 +99,29 @@ func FileList(c *gin.Context) {
 			continue
 		}
 
-		ext := strings.TrimPrefix(filepath.Ext(name), ".")
-		if !allowedAudioExts[ext] {
+		// Case-insensitive via audioext (REVIEW.md P2-2): the previous
+		// literal map was keyed on lowercase but compared against the raw
+		// extension, so `Track.MP3` / `song.FLAC` were silently dropped from
+		// the listing even though the tag editor would happily write them.
+		ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))
+		if !audioext.IsLibraryExt(ext) {
 			continue
 		}
 
+		// Sidecar lyric detection (REVIEW.md P2-3): the old code checked
+		// `lyricExts[ext]` *after* the audio-extension guard above, so the
+		// branch was unreachable (lrc/txt are not audio) and lrcMap stayed
+		// empty forever — `icon-script-files` could never be emitted. Probe
+		// the filesystem for a same-stem .lrc instead, which is what the
+		// icon actually means: "this track has lyrics next to it".
 		baseName := strings.TrimSuffix(name, "."+ext)
-		if lyricExts[ext] {
-			lrcMap[baseName] = name
-		}
-
 		icon := "icon-script-file"
-		if _, ok := lrcMap[baseName]; ok {
-			icon = "icon-script-files"
+		for lyricExt := range lyricExts {
+			if _, err := os.Stat(filepath.Join(rooted, baseName+"."+lyricExt)); err == nil {
+				icon = "icon-script-files"
+				lrcMap[baseName] = name
+				break
+			}
 		}
 
 		children = append(children, FileItem{
@@ -168,8 +172,59 @@ func FileList(c *gin.Context) {
 	})
 }
 
-// MusicID3 handler removed — frontend now reads tags locally via
-// fetch(Range) + music-metadata (see frontend/src/lib/id3Reader.ts).
-// Backend keeps tag.Read around for internal use (worker batch
-// scrape + sidecar cover extraction in internal/tag/writer.go),
-// but no longer exposes it over HTTP.
+// MusicID3Request is the POST body for /api/music_id3/.
+// file_path is the parent dir relative to MUSIC_DIR ("" = root);
+// file_name is the basenamed audio file under that dir.
+type MusicID3Request struct {
+	FilePath string `json:"file_path"`
+	FileName string `json:"file_name" binding:"required"`
+}
+
+// MusicID3 handles POST /api/music_id3/ — reads embedded tags server-side.
+//
+// Restored so batch hydrate (添加音乐) and detail openEditor go through
+// backend tag.Read instead of shipping audio Range chunks to the browser.
+// Path-traversal guard: both FilePath and FileName are joined via
+// utils.SafeJoin under MUSIC_DIR.
+func MusicID3(c *gin.Context) {
+	var req MusicID3Request
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Failure(c, "invalid request")
+		return
+	}
+
+	ext := strings.TrimPrefix(filepath.Ext(req.FileName), ".")
+	if lyricExts[ext] {
+		Success(c, "success", nil)
+		return
+	}
+
+	root := utils.MusicRoot()
+	dir, err := utils.SafeJoin(root, req.FilePath)
+	if err != nil {
+		Failure(c, "路径不安全: "+err.Error())
+		return
+	}
+	fullPath, err := utils.SafeJoin(dir, req.FileName)
+	if err != nil {
+		Failure(c, "路径不安全: "+err.Error())
+		return
+	}
+
+	// Existing edge-case parity: when the directory's basename matches
+	// the requested file name, treat it as a redundant request and
+	// return an empty success.
+	subPath := filepath.Base(dir)
+	if subPath == req.FileName {
+		Success(c, "success", nil)
+		return
+	}
+
+	tags, err := ReadMusicTags(fullPath)
+	if err != nil {
+		Failure(c, err.Error())
+		return
+	}
+
+	SuccessData(c, tags)
+}

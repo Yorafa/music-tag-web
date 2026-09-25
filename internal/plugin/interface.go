@@ -86,6 +86,18 @@ type DownloadResult struct {
 	Error    string `json:"error,omitempty"`
 }
 
+// DownloadOptions carries the optional yt-dlp tuning knobs forwarded from
+// the worker's download:generic task (DownloadPayload.ExtraJSON). Empty
+// fields mean "plugin default" (bestaudio/best, keep original container,
+// 192 kbps). The worker and the plugin each sanitize these independently
+// (see internal/ytdlp) — the values may NOT be concatenated into a shell
+// string anywhere without going through SanitizeYTDLP* first.
+type DownloadOptions struct {
+	Format       string
+	OutputFormat string
+	Quality      string
+}
+
 // DownloadSource handles searching and downloading audio from platforms
 // like YouTube.
 type DownloadSource interface {
@@ -93,5 +105,5 @@ type DownloadSource interface {
 	DisplayName() string
 
 	Search(ctx context.Context, query string, maxResults int) ([]DownloadItem, error)
-	Download(ctx context.Context, videoID, downloadDir string) (*DownloadResult, error)
+	Download(ctx context.Context, videoID, downloadDir string, opts DownloadOptions) (*DownloadResult, error)
 }

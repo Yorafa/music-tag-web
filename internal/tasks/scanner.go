@@ -16,15 +16,16 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"go-music-tag/internal/audioext"
 	"go-music-tag/internal/db"
 )
 
-// audioExt / coverExt 与 applications/task/constants.go 对齐。
-var audioExt = map[string]bool{
-	"flac": true, "mp3": true, "ape": true, "wav": true, "aiff": true,
-	"wv": true, "tta": true, "m4a": true, "ogg": true, "mpc": true,
-	"opus": true, "wma": true, "dsf": true, "dff": true,
-}
+// coverExt 与 applications/task/constants.go 对齐。
+//
+// The former `audioExt` literal here was the third of four copies of the
+// audio-extension whitelist; it now lives in internal/audioext so the
+// scanner can never diverge from the file browser / tag writer again
+// (REVIEW.md P2-1). Use audioext.IsLibraryExt for audio checks.
 var coverExt = map[string]bool{"jpg": true, "jpeg": true, "png": true}
 
 // UpdateScanPayload 与 FullScanPayload 同 schema（worker 入口可选传 sub_paths）。
@@ -111,7 +112,7 @@ func (h *FullScanHandler) fullScan(ctx context.Context, subPaths [][2]string) er
 					fileUID := uuid.New().String()
 					filePath := filepath.Join(dir, e.Name())
 					ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filePath), "."))
-					if audioExt[ext] {
+					if audioext.IsLibraryExt(ext) {
 						batch = append(batch, db.Folder{
 							Name: filepath.Base(filePath), Path: filePath,
 							FileType: "music", UID: fileUID, ParentID: myUID,
@@ -130,7 +131,7 @@ func (h *FullScanHandler) fullScan(ctx context.Context, subPaths [][2]string) er
 			// file entry (already-popped from parent dir); record inline
 			myUID := uuid.New().String()
 			ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(dir), "."))
-			if audioExt[ext] {
+			if audioext.IsLibraryExt(ext) {
 				batch = append(batch, db.Folder{
 					Name: filepath.Base(dir), Path: dir,
 					FileType: "music", UID: myUID, ParentID: parentUID,
@@ -226,7 +227,7 @@ func (h *UpdateScanHandler) updateScan(ctx context.Context, subPaths [][2]string
 		}
 		if !isDir {
 			ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(dir), "."))
-			if !audioExt[ext] && !coverExt[ext] {
+			if !audioext.IsLibraryExt(ext) && !coverExt[ext] {
 				continue
 			}
 			fileType := "music"

@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -49,7 +50,7 @@ type storedCred struct {
 //     in production (e.g. `htpasswd -bnBC 10 "" "secret" | tr -d ':\n'`
 //     and slice off the username prefix).
 //
-//   - config.Load() is expected to log.Fatalf at startup when JWT_SECRET
+//   - config.LoadAtBoot() is expected to log.Fatalf at startup when JWT_SECRET
 //     is the placeholder value; we re-check here so the request refuses
 //     explicitly rather than minting tokens that trust an
 //     attacker-controlled secret.
@@ -123,24 +124,24 @@ func Login(c *gin.Context) {
 		Password string `json:"password"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		Failure(c, "Invalid input")
+		FailureStatus(c, http.StatusBadRequest, "Invalid input")
 		return
 	}
 
 	if config.JWTSecretIsDefault() {
 		log.Printf("[auth] REFUSED /api/token/: JWT_SECRET is the placeholder value")
-		Failure(c, "用户名或密码错误")
+		FailureStatus(c, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
 
 	users := loadUsers()
 	cred, ok := users[req.Username]
 	if !ok || !verifyCred(cred, req.Password) {
-		Failure(c, "用户名或密码错误")
+		FailureStatus(c, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
 
-	cfg := config.Load()
+	cfg := config.Current()
 
 	accessToken, _ := generateJWT(cfg.JWTSecret, req.Username)
 	refreshToken, _ := generateJWT(cfg.JWTSecret, req.Username)
@@ -157,23 +158,24 @@ func RefreshToken(c *gin.Context) {
 		Refresh string `json:"refresh"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		Failure(c, "Invalid input")
+		FailureStatus(c, http.StatusBadRequest, "Invalid input")
 		return
 	}
-	cfg := config.Load()
+	cfg := config.Current()
 	if config.JWTSecretIsDefault() {
-		Failure(c, "Invalid refresh token")
+		log.Printf("[auth] REFUSED /api/token/refresh/: JWT_SECRET is the placeholder value")
+		FailureStatus(c, http.StatusUnauthorized, "Invalid refresh token")
 		return
 	}
 	token, err := jwt.Parse(req.Refresh, jwtKeyFunc(cfg.JWTSecret))
 	if err != nil || !token.Valid {
-		Failure(c, "Invalid refresh token")
+		FailureStatus(c, http.StatusUnauthorized, "Invalid refresh token")
 		return
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		Failure(c, "Invalid token claims")
+		FailureStatus(c, http.StatusUnauthorized, "Invalid token claims")
 		return
 	}
 	username, _ := claims["sub"].(string)
@@ -187,17 +189,18 @@ func VerifyToken(c *gin.Context) {
 		Token string `json:"token"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		Failure(c, "Invalid input")
+		FailureStatus(c, http.StatusBadRequest, "Invalid input")
 		return
 	}
-	cfg := config.Load()
+	cfg := config.Current()
 	if config.JWTSecretIsDefault() {
-		Failure(c, "Invalid token")
+		log.Printf("[auth] REFUSED /api/token/verify/: JWT_SECRET is the placeholder value")
+		FailureStatus(c, http.StatusUnauthorized, "Invalid token")
 		return
 	}
 	token, err := jwt.Parse(req.Token, jwtKeyFunc(cfg.JWTSecret))
 	if err != nil || !token.Valid {
-		Failure(c, "Invalid token")
+		FailureStatus(c, http.StatusUnauthorized, "Invalid token")
 		return
 	}
 	SuccessData(c, gin.H{})

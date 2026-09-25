@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 )
 
 // Config holds all application configuration.
@@ -62,7 +63,7 @@ const (
 	// placeholderAdminUsers / placeholderWebhookToken are the obvious
 	// sentinel tokens shipped in .env.example. When any of
 	// these (or the equivalent string "__REPLACE_ME__") is detected,
-	// config.Load() refuses to start outside dev mode — siloed the same
+	// config.LoadAtBoot() refuses to start outside dev mode — siloed the same
 	// way as defaultJWTSecret so an operator who copies the example
 	// without editing can't accidentally boot the gateway with a public
 	// placeholder credential.
@@ -132,15 +133,39 @@ func containsPlaceholderAdminPair(raw string) bool {
 	return false
 }
 
-// Load reads config from environment variables. In secure mode (the
-// default) it refuses to start with the placeholder JWT_SECRET; ops must
-// pin ALLOW_INSECURE_DEFAULTS=1 explicitly to tolerate dev defaults.
+// ─── Boot-time vs request-time config (REVIEW.md P0-3) ────────────────────
 //
-// ADMIN_USERS unset behaviour: Login() always rejects; warning is logged
-// here so a log-only deployment sees a loud signal.
-func Load() *Config {
-	insecure := isTruthyEnv(envAllowInsecure)
+// Load() used to be called from BOTH main() and every auth handler. Because
+// Load() unconditionally ran ensureBootstrap() — which reads AND rewrites
+// ./data/.bootstrap-creds — that meant every unauthenticated POST
+// /api/token/ performed a file read + write + rename. Three consequences:
+//
+//  1. DoS amplification: anonymous requests drove disk IO.
+//  2. Concurrent stomping: the temp file is named `.tmp.<pid>`, so two
+//     in-flight Load() calls in the same process raced on one path.
+//  3. Anonymous process kill: loadOrGenerate() calls log.Fatalf when the
+//     creds file can neither be read nor written. A full disk or a chmod on
+//     ./data turned one anonymous HTTP request into a gateway exit.
+//
+// The split:
+//
+//	LoadAtBoot() — bootstrap + fail-closed validation + snapshot. main() only.
+//	Current()    — read-only snapshot. Handlers only. Never touches disk.
+//
+// Current() falls back to a pure env read when no snapshot has been
+// installed. That path exists for unit tests, which drive handlers directly
+// with t.Setenv and never call LoadAtBoot(); it deliberately skips both
+// ensureBootstrap and the log.Fatalf guards so a test binary can exercise
+// placeholder-credential behaviour without writing to /app/data or dying.
+var (
+	snapshotMu sync.RWMutex
+	snapshot   *Config
+)
 
+// LoadAtBoot performs first-boot bootstrap, runs the fail-closed secret
+// validation (log.Fatalf on placeholder JWT_SECRET / ADMIN_USERS), caches
+// the result, and returns it. Call exactly once, from main().
+func LoadAtBoot() *Config {
 	// ─── First-boot auto-bootstrap (lazy deploy) ───
 	// In non-insecure mode, fill any missing/placeholder JWT_SECRET /
 	// ADMIN_USERS / WEBHOOK_INTERNAL_TOKEN from ./data/.bootstrap-creds
@@ -149,6 +174,47 @@ func Load() *Config {
 	if !isInsecureDevMode() {
 		ensureBootstrap()
 	}
+	validateSecrets()
+	cfg := loadFromEnv()
+
+	snapshotMu.Lock()
+	snapshot = cfg
+	snapshotMu.Unlock()
+	return cfg
+}
+
+// Current returns the boot-time snapshot. Safe to call per request: it does
+// no disk IO and cannot terminate the process. When LoadAtBoot has not run
+// (unit tests), it returns a fresh env-only read instead.
+func Current() *Config {
+	snapshotMu.RLock()
+	c := snapshot
+	snapshotMu.RUnlock()
+	if c != nil {
+		return c
+	}
+	return loadFromEnv()
+}
+
+// ResetSnapshotForTest drops the cached snapshot so a following Current()
+// re-reads the environment. Test-only; production never calls this.
+func ResetSnapshotForTest() {
+	snapshotMu.Lock()
+	snapshot = nil
+	snapshotMu.Unlock()
+}
+
+// Load is retained as the boot-time entry point under its historical name.
+//
+// Deprecated: call LoadAtBoot() from main() and Current() from request
+// handlers. Kept so existing callers/tests keep compiling; it is exactly
+// LoadAtBoot().
+func Load() *Config { return LoadAtBoot() }
+
+// validateSecrets runs the fail-closed startup guards. Separated from
+// loadFromEnv so that the request-time path (Current) can never log.Fatalf.
+func validateSecrets() {
+	insecure := isTruthyEnv(envAllowInsecure)
 
 	jwtSecret := os.Getenv(envJWTSecret)
 	if !insecure && (jwtSecret == "" || strings.EqualFold(jwtSecret, defaultJWTSecret) || isPlaceholderEnv(jwtSecret)) {
@@ -210,7 +276,14 @@ func Load() *Config {
 	if insecure && os.Getenv(envWebhookInternalToken) == "" {
 		log.Printf("[config] WARNING: %s unset; dev webhook auth bypassed (only because %s=1)", envWebhookInternalToken, envAllowInsecure)
 	}
+}
 
+// loadFromEnv builds a Config purely by reading the environment. It performs
+// NO disk IO and never calls log.Fatalf, which is what makes it safe on the
+// request-time path via Current(). All fail-closed enforcement lives in
+// validateSecrets, which only LoadAtBoot() calls.
+func loadFromEnv() *Config {
+	insecure := isTruthyEnv(envAllowInsecure)
 	origins := parseCORSOrigins(os.Getenv(envCORSAllowed))
 
 	return &Config{
@@ -219,7 +292,7 @@ func Load() *Config {
 		DBDriver:                 getEnv("DB_DRIVER", "sqlite3"),
 		DBDSN:                    getEnv("DB_DSN", "/app/data/db.sqlite3"),
 		RedisAddr:                getEnv("REDIS_ADDR", "127.0.0.1:6379"),
-		JWTSecret:                jwtSecret,
+		JWTSecret:                os.Getenv(envJWTSecret),
 		MusicDir:                 getEnv("MUSIC_DIR", "/app/media"),
 		DataDir:                  getEnv("DATA_DIR", "/app/data"),
 		PluginGRPCAddrs:          parsePluginAddrs(),

@@ -2,11 +2,13 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -47,10 +49,14 @@ func (f *fakeTagSource) GetAudioURL(_ context.Context, _ string) (string, error)
 
 // newStreamTestRouter wires /api/stream/ behind a bare JWT-skipping
 // router — these tests cover the handler, not the auth middleware.
+// HEAD is registered alongside GET to mirror the production router
+// (router.go registers both so the frontend's waitForStreamReady HEAD
+// preflight works).
 func newStreamTestRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.GET("/api/stream/", StreamAudio)
+	r.HEAD("/api/stream/", StreamAudio)
 	return r
 }
 
@@ -119,7 +125,11 @@ func TestStreamAudio_DownloadSourceServesFileWithRange(t *testing.T) {
 	if err := os.MkdirAll(ytDir, 0o755); err != nil {
 		t.Fatalf("mkdir yt subdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(ytDir, "abc123.mp3"), []byte("0123456789ABCDEF"), 0o644); err != nil {
+	// filterAudioMatches refuses <1KiB stubs (avoids 416 on empty/half files).
+	// Pad so ServeFile is exercised without falling into the enqueue path.
+	payload := make([]byte, 2048)
+	copy(payload, []byte("0123456789ABCDEF"))
+	if err := os.WriteFile(filepath.Join(ytDir, "abc123.ogg"), payload, 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
 	t.Setenv("AUDIO_CACHE_DIR", dir)
@@ -189,6 +199,57 @@ func TestStreamAudio_EmptyURLFromPluginReturnsFailure(t *testing.T) {
 	}
 }
 
+// TestStreamAudio_EmptyURLFromPluginReturns502 pins HTTP status contract:
+// when the upstream plugin returns ("", nil) — i.e. preview unavailable —
+// the gateway must surface 502 (not 200). 200-with-JSON is silently
+// dropped by `<audio>` elements: they never fire `error`, so the toast
+// path in PlayerBar.tsx::onMediaError is never reached. Returning 502
+// makes every browser fire `error` reliably.
+func TestStreamAudio_EmptyURLFromPluginReturns502(t *testing.T) {
+	plugin.ResetForTesting()
+	t.Cleanup(plugin.ResetForTesting)
+	plugin.InstallMockTagSource("testplugin", &fakeTagSource{
+		name: "testplugin", displayName: "Test",
+		audioURL: "", audioErr: nil,
+	})
+
+	r := newStreamTestRouter()
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/stream/?src=testplugin&id=track1", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("status=%d (want 502 so <audio>.error fires), body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestStreamAudio_PluginErrorReturns502 covers the *other* preview-
+// unavailable branch: when GetAudioURL returns ("", err) with a non-nil
+// error. The message embeds the upstream error text (different from the
+// empty-URL path), so we assert both status=502 AND body contains the
+// simulated error message. Without this test the FailureStatus code path
+// that string-concatenates err.Error() is not locked.
+func TestStreamAudio_PluginErrorReturns502(t *testing.T) {
+	plugin.ResetForTesting()
+	t.Cleanup(plugin.ResetForTesting)
+	plugin.InstallMockTagSource("testplugin", &fakeTagSource{
+		name: "testplugin", displayName: "Test",
+		audioURL: "", audioErr: errors.New("simulated upstream timeout"),
+	})
+
+	r := newStreamTestRouter()
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/stream/?src=testplugin&id=track1", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("status=%d (want 502 so <audio>.error fires), body=%s", w.Code, w.Body.String())
+	}
+	if !contains(w.Body.String(), "simulated upstream timeout") {
+		t.Errorf("body=%q (want upstream error message in body)", w.Body.String())
+	}
+}
+
 func TestStreamAudio_ProxiesUpstreamBytes(t *testing.T) {
 	plugin.ResetForTesting()
 	t.Cleanup(plugin.ResetForTesting)
@@ -216,6 +277,146 @@ func TestStreamAudio_ProxiesUpstreamBytes(t *testing.T) {
 	body, _ := io.ReadAll(w.Body)
 	if string(body) != "upstream-bytes" {
 		t.Errorf("body=%q (want upstream-bytes)", body)
+	}
+}
+
+// TestStreamAudio_HeadUsesUpstreamHead pins the preflight fix: the
+// frontend waitForStreamReady does a HEAD first. The handler must forward
+// HEAD as HEAD to the upstream plugin URL — not a GET that would pull the
+// entire audio body just to have net/http discard it for the HEAD
+// response (a 2×-bandwidth waste on every preview click).
+func TestStreamAudio_HeadUsesUpstreamHead(t *testing.T) {
+	plugin.ResetForTesting()
+	t.Cleanup(plugin.ResetForTesting)
+
+	var gotMethod string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	plugin.InstallMockTagSource("testplugin", &fakeTagSource{
+		name: "testplugin", displayName: "Test",
+		audioURL: upstream.URL,
+	})
+
+	r := newStreamTestRouter()
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("HEAD", "/api/stream/?src=testplugin&id=track1", nil)
+	r.ServeHTTP(w, req)
+
+	if gotMethod != http.MethodHead {
+		t.Errorf("upstream method=%q (want HEAD for HEAD preflight)", gotMethod)
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("status=%d (want 200)", w.Code)
+	}
+}
+
+// TestStreamAudio_HeadFallsBackToGetWhenUpstreamRejectsHEAD pins the
+// preflight resilience fix: signed-URL CDNs (kuwo / kugou) sometimes
+// reject HEAD with 403/404 while answering GET fine. The frontend's
+// waitForStreamReady only falls back to GET on 405/501, so the handler
+// must retry the upstream once as GET on a non-2xx HEAD and let the
+// HEAD inbound discard the body.
+func TestStreamAudio_HeadFallsBackToGetWhenUpstreamRejectsHEAD(t *testing.T) {
+	plugin.ResetForTesting()
+	t.Cleanup(plugin.ResetForTesting)
+
+	var headHits, getHits int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodHead:
+			headHits++
+			w.WriteHeader(http.StatusForbidden) // CDN rejects HEAD
+		case http.MethodGet:
+			getHits++
+			w.Header().Set("Content-Type", "audio/mpeg")
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected upstream method %q", r.Method)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+
+	plugin.InstallMockTagSource("testplugin", &fakeTagSource{
+		name: "testplugin", displayName: "Test",
+		audioURL: upstream.URL,
+	})
+
+	r := newStreamTestRouter()
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("HEAD", "/api/stream/?src=testplugin&id=track1", nil)
+	r.ServeHTTP(w, req)
+
+	if headHits != 1 || getHits != 1 {
+		t.Errorf("upstream hits head=%d get=%d (want 1/1 after GET retry)", headHits, getHits)
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("status=%d (want 200 from the GET retry)", w.Code)
+	}
+}
+
+// TestStreamAudio_DropsContentLengthOnlyWhenOverCap pins the targeted
+// truncation guard: the handler strips Content-Length only when the
+// upstream declares a length ABOVE streamBodyCapBytes (otherwise the
+// proxied io.CopyN-truncated stream would advertise bytes that never
+// arrive and <audio> would hang waiting for them). Under-cap responses
+// keep their exact byte count so browsers get accurate progress.
+func TestStreamAudio_DropsContentLengthOnlyWhenOverCap(t *testing.T) {
+	plugin.ResetForTesting()
+	t.Cleanup(plugin.ResetForTesting)
+
+	// Over-cap: declare a length above the proxy cap while serving a tiny
+	// body — simulates a multi-GB upstream track the gateway truncates.
+	overCap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(int(streamBodyCapBytes)+1))
+		_, _ = w.Write([]byte("overcap"))
+	}))
+	t.Cleanup(overCap.Close)
+
+	// Under-cap: normal small preview; the exact byte count must survive.
+	underCap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("under-cap-preview"))
+	}))
+	t.Cleanup(underCap.Close)
+
+	cases := []struct {
+		name     string
+		upstream string
+		wantBody string
+		wantCL   bool
+	}{
+		{name: "over-cap drops Content-Length", upstream: overCap.URL, wantBody: "overcap", wantCL: false},
+		{name: "under-cap keeps Content-Length", upstream: underCap.URL, wantBody: "under-cap-preview", wantCL: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plugin.ResetForTesting()
+			t.Cleanup(plugin.ResetForTesting)
+			plugin.InstallMockTagSource("testplugin", &fakeTagSource{
+				name: "testplugin", displayName: "Test",
+				audioURL: tc.upstream,
+			})
+
+			r := newStreamTestRouter()
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/api/stream/?src=testplugin&id=track1", nil)
+			r.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d (want 200), body=%s", w.Code, w.Body.String())
+			}
+			if got := w.Body.String(); got != tc.wantBody {
+				t.Errorf("body=%q (want %q)", got, tc.wantBody)
+			}
+			gotCL := w.Header().Get("Content-Length")
+			if (gotCL != "") != tc.wantCL {
+				t.Errorf("Content-Length present=%v value=%q (want present=%v)", gotCL != "", gotCL, tc.wantCL)
+			}
+		})
 	}
 }
 
@@ -265,6 +466,45 @@ func TestStreamAudio_UnknownSourceReturnsFailure(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if !contains(w.Body.String(), "unsupported source") {
 		t.Errorf("body=%q (expected unsupported-source failure)", w.Body.String())
+	}
+}
+
+// TestStreamAudio_UnknownSourceReturns400 pins that an unsupported source
+// name surfaces as 400 + envelope (caller-side mistake), NOT 200+envelope.
+// The 200 path silently fails through <audio>.error — see FailureStatus
+// comment in response.go.
+func TestStreamAudio_UnknownSourceReturns400(t *testing.T) {
+	plugin.ResetForTesting()
+	t.Cleanup(plugin.ResetForTesting)
+
+	r := newStreamTestRouter()
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/stream/?src=doesnotexist&id=track1", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status=%d (want 400), body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestStreamAudio_RejectPathSeparatorReturns400 pins the invalid-id
+// guard at 400 + envelope. The legacy test only checked the body; this
+// one locks the HTTP status so a regression to 200 is caught.
+func TestStreamAudio_RejectPathSeparatorReturns400(t *testing.T) {
+	plugin.ResetForTesting()
+	t.Cleanup(plugin.ResetForTesting)
+
+	plugin.InstallMockDownloadSource("youtube", &fakeListDownload{
+		name:        "youtube",
+		displayName: "YouTube",
+	})
+
+	r := newStreamTestRouter()
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/stream/?src=youtube&id=..%2Fetc%2Fpasswd", nil)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status=%d (want 400 for invalid-id guard), body=%s", w.Code, w.Body.String())
 	}
 }
 

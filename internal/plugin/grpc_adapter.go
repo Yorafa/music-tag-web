@@ -139,8 +139,12 @@ func (g *GRPCTagSource) ensureConn() error {
 	g.displayName = info.DisplayName
 	g.mu.Unlock()
 
-	// Register with the global registry AFTER releasing g.mu (avoid lock ordering).
-	RegisterTagSource(g)
+	// Register only on first successful handshake. Re-dials after a
+	// Shutdown/EOF must NOT re-register — RegisterTagSource panics on
+	// duplicate names (same contract as RegisterDownloadSource).
+	if _, err := GetTagSource(info.Name); err != nil {
+		RegisterTagSource(g)
+	}
 	return nil
 }
 
@@ -284,12 +288,36 @@ func (g *GRPCDownloadSource) ensureConn() error {
 	}
 	g.name = info.Name
 	g.displayName = info.DisplayName
-	RegisterDownloadSource(g)
+	// Register only on first successful handshake. Re-dials after a
+	// Shutdown/EOF must NOT re-register — RegisterDownloadSource panics
+	// on duplicate names (same contract as RegisterTagSource).
+	if _, err := GetDownloadSource(g.name); err != nil {
+		RegisterDownloadSource(g)
+	}
 	return nil
 }
 
-func (g *GRPCDownloadSource) Name() string        { return g.name }
-func (g *GRPCDownloadSource) DisplayName() string { return g.displayName }
+// Name matches GRPCTagSource: lazy-dial on first read so gateway boot
+// (`ds.Name()` in cmd/gateway) actually registers the download plugin.
+// The previous pure field-read never called ensureConn, so a cold boot
+// while youtube was briefly unreachable left download sources: [] forever
+// until process restart — and even a healthy youtube never registered
+// because Name() never dialed.
+func (g *GRPCDownloadSource) Name() string {
+	if g.name != "" {
+		return g.name
+	}
+	_ = g.ensureConn()
+	return g.name
+}
+
+func (g *GRPCDownloadSource) DisplayName() string {
+	if g.displayName != "" {
+		return g.displayName
+	}
+	_ = g.ensureConn()
+	return g.displayName
+}
 
 func (g *GRPCDownloadSource) Search(ctx context.Context, query string, max int) ([]DownloadItem, error) {
 	if err := g.ensureConn(); err != nil {
@@ -316,13 +344,16 @@ func (g *GRPCDownloadSource) Search(ctx context.Context, query string, max int) 
 	return items, nil
 }
 
-func (g *GRPCDownloadSource) Download(ctx context.Context, videoID, dir string) (*DownloadResult, error) {
+func (g *GRPCDownloadSource) Download(ctx context.Context, videoID, dir string, opts DownloadOptions) (*DownloadResult, error) {
 	if err := g.ensureConn(); err != nil {
 		return nil, err
 	}
 	resp, err := g.client.Download(ctx, &pb.DownloadRequest{
-		VideoId:     videoID,
-		DownloadDir: dir,
+		VideoId:      videoID,
+		DownloadDir:  dir,
+		Format:       opts.Format,
+		OutputFormat: opts.OutputFormat,
+		Quality:      opts.Quality,
 	})
 	if err != nil {
 		return nil, err

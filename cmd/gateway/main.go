@@ -18,6 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"go-music-tag/internal/audit"
 	"go-music-tag/internal/cache"
 	"go-music-tag/internal/config"
 	"go-music-tag/internal/db"
@@ -28,17 +29,17 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg := config.LoadAtBoot()
 	log.Printf("[gateway] starting on %s:%s", cfg.Host, cfg.Port)
 
 	dialOpts := plugin.DialOptions{UseTLS: cfg.GRPCUseTLS, CAFile: cfg.GRPCCAFile}
 	if cfg.GRPCUseTLS {
 		log.Printf("[gateway] gRPC plugins: TLS enabled (CA=%q)", cfg.GRPCCAFile)
 	} else if cfg.AllowInsecureDevDefaults {
-		log.Printf("[gateway] WARNING: gRPC plugins connect via insecure credentials "+
+		log.Printf("[gateway] WARNING: gRPC plugins connect via insecure credentials " +
 			"(only because ALLOW_INSECURE_DEFAULTS=1). Set GRPC_USE_TLS=1 for production.")
 	} else {
-		// Should be unreachable because config.Load() would have fatal'd
+		// Should be unreachable because config.LoadAtBoot() would have fatal'd
 		// already on the placeholder JWT_SECRET path; defensive log.
 		log.Printf("[gateway] WARNING: gRPC plugins are insecure; set GRPC_USE_TLS=1")
 	}
@@ -103,9 +104,20 @@ func main() {
 		gormDB = nil
 	} else if err := db.AutoMigrate(gormDB); err != nil {
 		log.Printf("[gateway] auto-migrate failed: %v", err)
+	} else {
+		audit.SetDB(gormDB)
 	}
 
 	router.Setup(r, cfg, gormDB)
+
+	// NOTE (REVIEW.md P0-2): the Stage B source-override load used to run
+	// here (config.LoadSourceOverrides + plugin.RefreshOverrides). It was a
+	// guaranteed no-op: the registry holds *plugin.GRPCTagSource values,
+	// which implement neither SecretConfigurable nor APIBaseConfigurable —
+	// those live on the plugin-side *migu.Server / *kuwo.Server structs in
+	// separate containers, and no proto RPC exists to reach them. Removed
+	// rather than left in place so the startup log can't imply that
+	// data/sources/*.yaml is being applied.
 
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
 	log.Printf("[gateway] listening on %s", addr)

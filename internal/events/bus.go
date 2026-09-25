@@ -2,10 +2,10 @@
 //
 // Two implementations live here:
 //
-//   • RedisBus — production. Uses go-redis/v9 Pub/Sub against the same
+//   - RedisBus — production. Uses go-redis/v9 Pub/Sub against the same
 //     REDIS_ADDR asynq uses. Survives worker ⇄ gateway binary boundary.
 //
-//   • NullBus — test capture. Records every Publish into an in-memory slice
+//   - NullBus — test capture. Records every Publish into an in-memory slice
 //     and fans the payload out to registered subscribers (so tests can
 //     observe the worker→gateway flow without a real Redis).
 //

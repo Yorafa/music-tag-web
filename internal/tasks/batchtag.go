@@ -1,13 +1,15 @@
 // Package tasks 批量刮削 handler。Ported from
 // applications/task/tasks.py `batch_auto_tag_task` 但做 P1 简化：
 //
-//   1. lock: 批量把 wait → processing（防多 worker 抢同一批）
-//   2. 对每条 record：gRPC plugin FetchID3ByTitle → match_score → tag.Write
-//   3. update state。P1 不再 fan-out 到子任务（避免引入 asynq.Client + 重复
-//      inspect 状态），改为单 thread 串行处理；P2 再讨论并发子任务。
+//  1. lock: 批量把 wait → processing（防多 worker 抢同一批）
 //
-//   P1 已知边界：cover art 写入跳过（避免 worker 内部 HTTP fetch）；用户可走
-//   /api/update_id3/ 单独写 cover。Lyrics 写入同样跳过（P1.5 再补）。
+//  2. 对每条 record：gRPC plugin FetchID3ByTitle → match_score → tag.Write
+//
+//  3. update state。P1 不再 fan-out 到子任务（避免引入 asynq.Client + 重复
+//     inspect 状态），改为单 thread 串行处理；P2 再讨论并发子任务。
+//
+//     P1 已知边界：cover art 写入跳过（避免 worker 内部 HTTP fetch）；用户可走
+//     /api/update_id3/ 单独写 cover。Lyrics 写入同样跳过（P1.5 再补）。
 package tasks
 
 import (
@@ -20,6 +22,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"go-music-tag/internal/audit"
 	"go-music-tag/internal/db"
 	"go-music-tag/internal/dedup"
 	"go-music-tag/internal/plugin"
@@ -191,7 +194,7 @@ func (h *BatchAutoTagHandler) tagOne(
 		}).
 		FirstOrCreate(&db.Task{})
 
-	return h.DB.Model(&db.TaskRecord{}).
+	err = h.DB.Model(&db.TaskRecord{}).
 		Where("id = ?", r.ID).
 		Updates(map[string]interface{}{
 			"state":       "success",
@@ -200,6 +203,17 @@ func (h *BatchAutoTagHandler) tagOne(
 			"tag_source":  asString(selected["source"]),
 			"updated_at":  time.Now(),
 		}).Error
+
+	if err == nil {
+		audit.Log(context.Background(), audit.ActionAutoScrape, r.FullPath, "worker", audit.StatusSuccess, 1, map[string]interface{}{
+			"batch":       r.Batch,
+			"song_name":   asString(selected["name"]),
+			"artist_name": asString(selected["artist"]),
+			"album_name":  asString(selected["album"]),
+			"source":      asString(selected["source"]),
+		}, nil)
+	}
+	return err
 }
 
 // songToMap 把 plugin.Song 序列化成 map 供后续 select/write。

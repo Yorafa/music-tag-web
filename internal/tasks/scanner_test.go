@@ -18,14 +18,14 @@ import (
 // (linkout/), which the existing IsDir() check would already filter;
 // that didn't pin the regression. The actual H5 exploit chain is:
 //
-//   1. attacker places `<music>/evil.mp3` as a regular-named SYMLINK
-//      to an arbitrary target (e.g. /etc/passwd).
-//   2. fullScan iterates `os.ReadDir(music)`; e.IsDir() returns false
-//      for the symlink (Lstat → ModeSymlink, not ModeDir), so the
-//      `else` branch checks ext="mp3" → audioExt match → row recorded.
-//   3. db.Track/Path now points INSIDE music, so SafeAbs(MediaRoot, ...)
-//      at Stream time passes. http.ServeFile then follows the symlink
-//      and leaks the target file content.
+//  1. attacker places `<music>/evil.mp3` as a regular-named SYMLINK
+//     to an arbitrary target (e.g. /etc/passwd).
+//  2. fullScan iterates `os.ReadDir(music)`; e.IsDir() returns false
+//     for the symlink (Lstat → ModeSymlink, not ModeDir), so the
+//     `else` branch checks ext="mp3" → audioExt match → row recorded.
+//  3. db.Track/Path now points INSIDE music, so SafeAbs(MediaRoot, ...)
+//     at Stream time passes. http.ServeFile then follows the symlink
+//     and leaks the target file content.
 //
 // The post-H5 fix is to bail at scanner time before any record is
 // written. We assert here that the symlink-named `.mp3` does NOT

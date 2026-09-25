@@ -1,11 +1,13 @@
-// Package tasks — yt-dlp 参数净化。
+// Package ytdlp — yt-dlp 参数净化，供 gateway / worker / youtube 插件共享。
 //
-// 攻击面：DownloadHandler (youtube branch) 把 ExtraJSON 字段直接拼到
-// exec.CommandContext 的 arg slice 里。若前端恶意传入
+// 攻击面：DownloadPayload.ExtraJSON 的字段最终会拼进 yt-dlp 的 argv
+// （worker 委托 youtube 插件执行 exec.CommandContext）。若前端恶意传入
 // {"format":"--exec=rm -rf /"}，yt-dlp 会执行任意命令。
 //
-// 修复：handler 构造 ExtraJSON 之前先校验；worker 解析完 ExtraJSON
-// 之后再校验一次 (defence-in-depth，让重放 task 时也安全)。
+// 防线（纵深防御，三层各自独立）：
+//   - gateway handler 构造 ExtraJSON 之前先校验；
+//   - worker 解析完 ExtraJSON 后再校验一次（重放 task 时也安全）；
+//   - youtube 插件在拼 argv 前再校验一次（本包）。
 //
 // 规则：
 //   - Format    : 正则 ^[a-zA-Z0-9_./+<>:=]{1,64}$，且不能以 "-" 开头
@@ -13,7 +15,7 @@
 //   - Quality   : ^[0-9]{1,4}$ (1-4 位数字)
 //
 // 任何违规返回 error，handler 反馈 4xx，worker 任务标记失败。
-package tasks
+package ytdlp
 
 import (
 	"fmt"

@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"time"
+
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
 
+	"go-music-tag/internal/audit"
+	"go-music-tag/internal/db"
 	"go-music-tag/internal/taskclient"
 	"go-music-tag/internal/tasks"
 )
@@ -141,12 +145,49 @@ func UpdateScanFolder(c *gin.Context) {
 func ListTaskRecords(c *gin.Context) {
 	page := atoiOr(c.Query("page"), 1)
 	pageSize := atoiOr(c.Query("page_size"), 50)
+	batch := c.Query("batch")
+	state := c.Query("state")
+
+	d := audit.GetDB()
+	if d == nil {
+		SuccessData(c, gin.H{
+			"results":   []interface{}{},
+			"page":      page,
+			"page_size": pageSize,
+			"count":     0,
+		})
+		return
+	}
+
+	tx := d.WithContext(c.Request.Context()).Model(&db.TaskRecord{})
+	if batch != "" {
+		tx = tx.Where("batch = ?", batch)
+	}
+	if state != "" {
+		tx = tx.Where("state = ? OR status = ?", state, state)
+	}
+
+	var count int64
+	if err := tx.Count(&count).Error; err != nil {
+		Failure(c, "query records count failed: "+err.Error())
+		return
+	}
+
+	var records []db.TaskRecord
+	offset := (page - 1) * pageSize
+	if err := tx.Order("id DESC").Offset(offset).Limit(pageSize).Find(&records).Error; err != nil {
+		Failure(c, "query records failed: "+err.Error())
+		return
+	}
+	if records == nil {
+		records = []db.TaskRecord{}
+	}
+
 	SuccessData(c, gin.H{
-		"results":   []interface{}{},
+		"results":   records,
 		"page":      page,
 		"page_size": pageSize,
-		"count":     0,
-		"note":      "P1: record query wired in P1.5",
+		"count":     count,
 	})
 }
 
@@ -171,7 +212,7 @@ func atoiOr(s string, fallback int) int {
 func enqueueTypedTask(c *gin.Context, typeName string, payload interface{}) {
 	taskclient.Init()
 	t, err := tasks.NewTypedTask(typeName, payload,
-		asynq.Queue("default"), asynq.MaxRetry(5), asynq.Timeout(6*60*60*1e9 /* 6h */),
+		asynq.Queue("default"), asynq.MaxRetry(5), asynq.Timeout(6*time.Hour),
 	)
 	if err != nil {
 		Failure(c, err.Error())
@@ -183,9 +224,9 @@ func enqueueTypedTask(c *gin.Context, typeName string, payload interface{}) {
 		return
 	}
 	SuccessData(c, gin.H{
-		"task_id":  info.ID,
-		"type":     info.Type,
-		"queue":    info.Queue,
-		"state":    info.State,
+		"task_id": info.ID,
+		"type":    info.Type,
+		"queue":   info.Queue,
+		"state":   info.State,
 	})
 }

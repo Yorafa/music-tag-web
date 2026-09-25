@@ -46,6 +46,66 @@ func withEnv(t *testing.T, kv map[string]string) {
 	})
 }
 
+// ─── M0: invalid input → 400 ───────────────────────────────────────────────
+
+// These three tests lock the JSON-bind error path on each auth endpoint at
+// HTTP 400 (Bad Request). Without them the 400 branch in FailureStatus is
+// untested and could silently regress to 200 if a future refactor swaps
+// FailureStatus ↔ Failure or drops the status arg.
+
+func TestLogin_InvalidJSONReturns400(t *testing.T) {
+	// Stable JWT_SECRET + no ADMIN_USERS so the request would otherwise
+	// fail-closed with 401 once it got past the bind — proving the bind
+	// check runs first and short-circuits to 400.
+	withEnv(t, map[string]string{
+		"JWT_SECRET":              "unit-test-secret-do-not-use",
+		"ALLOW_INSECURE_DEFAULTS": "",
+		"ADMIN_USERS":             "",
+	})
+	r := newAuthRouter(t)
+	// Send a body that fails JSON unmarshal: number where object expected.
+	body := []byte(`{`)
+	req := httptest.NewRequest(http.MethodPost, "/api/token/", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("malformed-JSON login should 400; status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestRefreshToken_InvalidJSONReturns400(t *testing.T) {
+	withEnv(t, map[string]string{
+		"JWT_SECRET":              "unit-test-secret-do-not-use",
+		"ALLOW_INSECURE_DEFAULTS": "",
+	})
+	r := newAuthRouter(t)
+	body := []byte(`not-json-at-all`)
+	req := httptest.NewRequest(http.MethodPost, "/api/token/refresh/", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("malformed-JSON refresh should 400; status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestVerifyToken_InvalidJSONReturns400(t *testing.T) {
+	withEnv(t, map[string]string{
+		"JWT_SECRET":              "unit-test-secret-do-not-use",
+		"ALLOW_INSECURE_DEFAULTS": "",
+	})
+	r := newAuthRouter(t)
+	body := []byte(`{"token":`)
+	req := httptest.NewRequest(http.MethodPost, "/api/token/verify/", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("malformed-JSON verify should 400; status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 // ─── M1: JWT alg gate ──────────────────────────────────────────────────────
 
 // craftAlgNoneToken hand-rolls a {"alg":"none"} JWT with no signature.

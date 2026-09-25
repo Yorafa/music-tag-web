@@ -15,6 +15,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"go-music-tag/internal/audioext"
+	"go-music-tag/internal/audit"
 	"go-music-tag/internal/dedup"
 	"go-music-tag/internal/netguard"
 	"go-music-tag/internal/tag"
@@ -69,12 +71,15 @@ func UpdateID3(c *gin.Context) {
 			if dupErr, ok := err.(ErrDuplicateSkipped); ok {
 				// 记录跳过信息但 handler 整体仍返回成功，避免前端给一行「重复」扔 4xx。
 				report.addSkipped(rawPath, dupErr.Dup)
+				audit.Log(c.Request.Context(), audit.ActionUpdateID3, rawPath, "admin", audit.StatusSkipped, 1, dupErr.Dup, nil)
 				continue
 			}
+			audit.Log(c.Request.Context(), audit.ActionUpdateID3, rawPath, "admin", audit.StatusFailed, 1, info, err)
 			Failure(c, fmt.Sprintf("update %s: %v", filepath.Base(filePath), err))
 			return
 		}
 		report.addDone(rawPath)
+		audit.Log(c.Request.Context(), audit.ActionUpdateID3, rawPath, "admin", audit.StatusSuccess, 1, info, nil)
 	}
 	SuccessData(c, report.toJSON())
 }
@@ -94,12 +99,12 @@ func (r *updateBatchReport) addDone(path string) {
 }
 func (r *updateBatchReport) addSkipped(path string, dup dedup.Result) {
 	r.skipped = append(r.skipped, map[string]interface{}{
-		"file_full_path":  path,
-		"status":          "duplicate",
-		"verdict":         dup.Verdict,
-		"match_field":     dup.MatchField,
-		"duplicate_path":  dup.DuplicatePath,
-		"reason":          dup.Reason,
+		"file_full_path": path,
+		"status":         "duplicate",
+		"verdict":        dup.Verdict,
+		"match_field":    dup.MatchField,
+		"duplicate_path": dup.DuplicatePath,
+		"reason":         dup.Reason,
 	})
 }
 
@@ -138,12 +143,6 @@ func BatchUpdateID3(c *gin.Context) {
 		return
 	}
 
-	allowedExt := map[string]bool{
-		"flac": true, "mp3": true, "ape": true, "wav": true, "aiff": true,
-		"wv": true, "tta": true, "m4a": true, "ogg": true, "mpc": true,
-		"opus": true, "wma": true, "dsf": true, "dff": true,
-	}
-
 	root := utils.MusicRoot()
 	baseDir, err := utils.SafeJoin(root, req.FileFullPath)
 	if err != nil {
@@ -171,8 +170,7 @@ func BatchUpdateID3(c *gin.Context) {
 				continue
 			}
 			for _, e := range entries {
-				ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(e.Name()), "."))
-				if !allowedExt[ext] {
+				if !audioext.IsLibraryPath(e.Name()) {
 					continue
 				}
 				leaf, err := utils.SafeJoin(dirPath, e.Name())
@@ -213,13 +211,26 @@ func BatchUpdateID3(c *gin.Context) {
 		}
 		report.addDone(leaf)
 	}
+	status := audit.StatusSuccess
+	if len(report.skipped) > 0 && len(report.done) > 0 {
+		status = audit.StatusPartial
+	} else if len(report.done) == 0 && len(report.skipped) > 0 {
+		status = audit.StatusSkipped
+	}
+	audit.Log(c.Request.Context(), audit.ActionBatchUpdateID3, req.FileFullPath, "admin", status, len(report.done)+len(report.skipped), map[string]interface{}{
+		"file_full_path": req.FileFullPath,
+		"music_info":     req.MusicInfo,
+		"select_count":   len(req.SelectData),
+		"done_count":     len(report.done),
+		"skipped_count":  len(report.skipped),
+	}, nil)
 	SuccessData(c, report.toJSON())
 }
 
 // 注: BatchAutoUpdateID3 / TidyFolder 在 task.go 里已经接入 asynq，这里保持空。
 // UploadImage handles POST /api/upload_image/ — base64 returns (无 data URI 前缀)。
 func UploadImage(c *gin.Context) {
-	file, _, err := c.Request.FormFile("upload_file")
+	file, header, err := c.Request.FormFile("upload_file")
 	if err != nil {
 		Failure(c, "no file uploaded")
 		return
@@ -230,7 +241,15 @@ func UploadImage(c *gin.Context) {
 		Failure(c, "read error")
 		return
 	}
+	filename := "cover.jpg"
+	if header != nil && header.Filename != "" {
+		filename = header.Filename
+	}
 	b64 := base64.StdEncoding.EncodeToString(data)
+	audit.Log(c.Request.Context(), audit.ActionUploadCover, filename, "admin", audit.StatusSuccess, 1, map[string]interface{}{
+		"filename": filename,
+		"size":     len(data),
+	}, nil)
 	SuccessData(c, b64)
 }
 
@@ -453,14 +472,11 @@ func stringValue(v interface{}) string {
 	}
 }
 
+// isAudioFile reports whether path is a library audio container we can
+// tag-write. Delegates to audioext so this predicate can never drift from
+// the file browser's listing filter again (REVIEW.md P2-1).
 func isAudioFile(path string) bool {
-	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
-	switch ext {
-	case "flac", "mp3", "ape", "wav", "aiff", "wv", "tta", "m4a", "ogg", "mpc",
-		"opus", "wma", "dsf", "dff":
-		return true
-	}
-	return false
+	return audioext.IsLibraryPath(path)
 }
 
 func truthy(v interface{}) bool {
@@ -480,10 +496,11 @@ func truthy(v interface{}) bool {
 // 校验完整性，避免写入半截 JPG 让前端 data URI 渲染失败。
 //
 // Security (P1.5 issue F): delegates to netguard.SafeHTTPGet which
-//   (a) validates the URL up front (scheme + resolved IPs),
-//   (b) re-validates every redirect hop (so a public → private pivot
-//       via 302 is refused),
-//   (c) caps the body at 20MB.
+//
+//	(a) validates the URL up front (scheme + resolved IPs),
+//	(b) re-validates every redirect hop (so a public → private pivot
+//	    via 302 is refused),
+//	(c) caps the body at 20MB.
 //
 // Content-shape validation is the handler's responsibility: we run
 // image.DecodeConfig here so a non-image body cannot poison a tag.

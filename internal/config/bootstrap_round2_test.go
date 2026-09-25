@@ -13,19 +13,19 @@ import (
 // the dev-mode affordance that contributors rely on.
 func TestIsInsecureDevMode(t *testing.T) {
 	cases := []struct {
-		env string
-		set bool
+		env  string
+		set  bool
 		want bool
 	}{
-		{"", false, false},            // unset
-		{"0", true, false},             // explicit zero
-		{"1", true, true},              // single-digit truthy
-		{"true", true, true},           // long-form truthy
-		{"TRUE", true, true},           // case-insensitive
-		{"yes", true, true},            // word truthy
-		{"on", true, true},             // word truthy
-		{"false", true, false},         // truthy-looking "false" is false
-		{"off", true, false},           // truthy-looking "off" is false
+		{"", false, false},     // unset
+		{"0", true, false},     // explicit zero
+		{"1", true, true},      // single-digit truthy
+		{"true", true, true},   // long-form truthy
+		{"TRUE", true, true},   // case-insensitive
+		{"yes", true, true},    // word truthy
+		{"on", true, true},     // word truthy
+		{"false", true, false}, // truthy-looking "false" is false
+		{"off", true, false},   // truthy-looking "off" is false
 	}
 	for _, c := range cases {
 		t.Run(strings.ReplaceAll(c.env, " ", "_"), func(t *testing.T) {
@@ -94,7 +94,7 @@ func TestEnsureBootstrap_FileModeIs0600_AfterWrite(t *testing.T) {
 	t.Cleanup(func() { bootstrapPath = orig })
 
 	c := &bootstrapCreds{
-		Version: bootstrapVersion,
+		Version:   bootstrapVersion,
 		JWTSecret: "fake", AdminUser: "admin", WebhookToken: "fake",
 	}
 	if err := writeBootstrap(c); err != nil {

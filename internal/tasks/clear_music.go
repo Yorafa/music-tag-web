@@ -10,17 +10,17 @@ import (
 
 // ClearMusicHandler hard-deletes scanned data, mirroring Django `applications/task/tasks.py::clear_music`:
 //
-//   1) Delete all TaskRecord rows
-//   2) Delete all Track rows
-//   3) Delete all Folder rows (cascading to Album/Artist via FK in Django — GORM
-//      deletes in whichever order matches the FK constraints)
-//   4) Vacuum for sqlite; OPTIMIZE TABLE for mysql (best-effort, ignored on failure)
+//  1. Delete all TaskRecord rows
+//  2. Delete all Track rows
+//  3. Delete all Folder rows (cascading to Album/Artist via FK in Django — GORM
+//     deletes in whichever order matches the FK constraints)
+//  4. Vacuum for sqlite; OPTIMIZE TABLE for mysql (best-effort, ignored on failure)
 //
 // We never touch user accounts / settings / music_folder (the root config) —
 // Django's `music_folder` table holds the configured library paths and is preserved.
 type ClearMusicHandler struct {
-	DB        *gorm.DB
-	DBDriver  string // "sqlite" | "mysql" — used for VACUUM/OPTIMIZE post-cleanup
+	DB       *gorm.DB
+	DBDriver string // "sqlite" | "mysql" — used for VACUUM/OPTIMIZE post-cleanup
 }
 
 func NewClearMusicHandler(gormDB *gorm.DB, driver string) *ClearMusicHandler {

@@ -14,15 +14,15 @@ import (
 //
 // We use a tempfile (not ":memory:") because:
 //
-//   1. WAL mode is a database-level property; ":memory:" connections
-//      don't share file state across pool entries, so a verification
-//      that happens to land on a different connection would falsely
-//      report "memory" instead of "wal".
+//  1. WAL mode is a database-level property; ":memory:" connections
+//     don't share file state across pool entries, so a verification
+//     that happens to land on a different connection would falsely
+//     report "memory" instead of "wal".
 //
-//   2. busy_timeout is per-connection; once set on a conn, it persists
-//      for the connection's lifetime. With gorm's pool re-use, the
-//      query we use to verify (PRAGMA busy_timeout) reads back the
-//      value the Open-time Exec set.
+//  2. busy_timeout is per-connection; once set on a conn, it persists
+//     for the connection's lifetime. With gorm's pool re-use, the
+//     query we use to verify (PRAGMA busy_timeout) reads back the
+//     value the Open-time Exec set.
 func TestOpen_SQLiteAppliesWalAndBusyTimeout(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "test.sqlite3")
 	gdb, err := Open(Config{

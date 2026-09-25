@@ -50,12 +50,13 @@ const defaultAdminPasswordLen = 16
 //
 // The path is intentionally a `var` (not `const`) so tests can swap it via
 // OverrideBootstrapPathForTest. Production stays at /app/data.
-//   var bootstrapPath = "/app/data/.bootstrap-creds"
+//
+//	var bootstrapPath = "/app/data/.bootstrap-creds"
 var bootstrapPath = "/app/data/.bootstrap-creds"
 
 // OverrideBootstrapPathForTest redirects the bootstrap creds file so
 // package tests outside the container (where /app/data is unwritable)
-// can exercise config.Load() without log.Fatalf on first-boot write.
+// can exercise config.LoadAtBoot() without log.Fatalf on first-boot write.
 // Production code must never call this.
 func OverrideBootstrapPathForTest(path string) {
 	if path != "" {
@@ -194,7 +195,7 @@ func loadOrGenerate() *bootstrapCreds {
 		AdminUser:          defaultAdminUser,
 		AdminPasswordPlain: randAlnum(defaultAdminPasswordLen),
 		WebhookToken:       randHex(32),
-		wasNewlyGenerated:   true,
+		wasNewlyGenerated:  true,
 	}
 	if err := writeBootstrap(c); err != nil {
 		log.Fatalf("[config] FATAL: cannot persist bootstrap creds to %s: %v\n"+
@@ -289,7 +290,8 @@ func randHex(nBytes int) string {
 
 // randAlnum rejects the base64 '+', '/', '=' characters so the result
 // is typeable / paste-able for an admin to log in.
-//   length-16 ceil(16*4/3)=22 raw bytes after stripping pads.
+//
+//	length-16 ceil(16*4/3)=22 raw bytes after stripping pads.
 func randAlnum(n int) string {
 	alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 	src := randBase64(n + 4) // over-fetch then trim

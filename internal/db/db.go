@@ -45,8 +45,8 @@ func Open(c Config) (*gorm.DB, error) {
 	gormCfg := &gorm.Config{
 		// 关闭自动外键约束 / 自动复数表名 — 与 Django 已建表兼容。
 		DisableForeignKeyConstraintWhenMigrating: true,
-		Logger: logger.Default.LogMode(c.LogLevel),
-		NowFunc: func() time.Time { return time.Now() },
+		Logger:                                   logger.Default.LogMode(c.LogLevel),
+		NowFunc:                                  func() time.Time { return time.Now() },
 	}
 
 	var (
@@ -109,10 +109,10 @@ func Open(c Config) (*gorm.DB, error) {
 //
 // 注册表覆盖：
 //
-//   音乐核心: Folder / Task / TaskRecord / Track / Album / Artist /
-//             Genre / Attachment
-//   认证 / 音乐应用镜像: User / UserProfile / Playlist / TrackFavorite /
-//                       PlaylistTrack
+//	音乐核心: Folder / Task / TaskRecord / Track / Album / Artist /
+//	          Genre / Attachment
+//	认证 / 音乐应用镜像: User / UserProfile / Playlist / TrackFavorite /
+//	                    PlaylistTrack
 //
 // 表顺序按父→子便利排列（User → UserProfile / Playlist → TrackFavorite）。
 // PlaylistTrack 是 Playlist 与 Track 之间的多对多连接表——Track 已在上文
@@ -141,5 +141,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&TrackFavorite{},
 		// P1.5 issue D: multi-pair 列表中间表
 		&PlaylistTrack{},
+		// 操作历史审计日志表
+		&OperationLog{},
 	)
 }

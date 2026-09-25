@@ -52,40 +52,40 @@ type TaskRecord struct {
 	CreatedAt  time.Time `gorm:"column:created_at;autoCreateTime"`
 	// 以下 5 字段 P1 yt_dl handler 需要，Django models.TaskRecord 实际表里没有，
 	// GORM AutoMigrate 会自动加列；旧库可让 GORM 加默认值填充。
-	TaskID     string    `gorm:"column:task_id"`
-	FileName   string    `gorm:"column:file_name"`
-	Source     string    `gorm:"column:source"`
-	UID        string    `gorm:"column:uid"`
-	FileType   string    `gorm:"column:file_type"`
-	Status     string    `gorm:"column:status"`
-	UpdatedAt  time.Time `gorm:"column:updated_at;autoUpdateTime"`
+	TaskID    string    `gorm:"column:task_id"`
+	FileName  string    `gorm:"column:file_name"`
+	Source    string    `gorm:"column:source"`
+	UID       string    `gorm:"column:uid"`
+	FileType  string    `gorm:"column:file_type"`
+	Status    string    `gorm:"column:status"`
+	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`
 }
 
 func (TaskRecord) TableName() string { return "task_taskrecord" }
 
 // Track / Album / Artist / Genre / Attachment 对齐 music/models。
 type Track struct {
-	ID        int64     `gorm:"column:id;primaryKey;autoIncrement"`
-	Name      string    `gorm:"column:name"`
-	Path      string    `gorm:"column:path;uniqueIndex"`
-	AlbumID   *int64    `gorm:"column:album_id"`
-	ArtistID  *int64    `gorm:"column:artist_id"`
-	HasCover  bool      `gorm:"column:has_cover_art"`
-	TrackNum  int       `gorm:"column:track_number"`
-	DiscNum   int       `gorm:"column:disc_number"`
-	Plays     int       `gorm:"column:plays_count"`
-	Year      int       `gorm:"column:year"`
-	Size      int64     `gorm:"column:size"`
-	Suffix    string    `gorm:"column:suffix"`
-	Mime      string    `gorm:"column:mimetype"`
-	Duration  float64   `gorm:"column:duration"`
-	BitRate   int       `gorm:"column:bit_rate"`
-	GenreID   *int64    `gorm:"column:genre_id"`
-	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`
-	FullText  string    `gorm:"column:full_text"`
-	Comment   string    `gorm:"column:comment"`
-	Lyrics    string    `gorm:"column:lyrics"`
+	ID           int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	Name         string    `gorm:"column:name"`
+	Path         string    `gorm:"column:path;uniqueIndex"`
+	AlbumID      *int64    `gorm:"column:album_id"`
+	ArtistID     *int64    `gorm:"column:artist_id"`
+	HasCover     bool      `gorm:"column:has_cover_art"`
+	TrackNum     int       `gorm:"column:track_number"`
+	DiscNum      int       `gorm:"column:disc_number"`
+	Plays        int       `gorm:"column:plays_count"`
+	Year         int       `gorm:"column:year"`
+	Size         int64     `gorm:"column:size"`
+	Suffix       string    `gorm:"column:suffix"`
+	Mime         string    `gorm:"column:mimetype"`
+	Duration     float64   `gorm:"column:duration"`
+	BitRate      int       `gorm:"column:bit_rate"`
+	GenreID      *int64    `gorm:"column:genre_id"`
+	CreatedAt    time.Time `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt    time.Time `gorm:"column:updated_at;autoUpdateTime"`
+	FullText     string    `gorm:"column:full_text"`
+	Comment      string    `gorm:"column:comment"`
+	Lyrics       string    `gorm:"column:lyrics"`
 	AccessedDate time.Time `gorm:"column:accessed_date"` // last-played timestamp; reserved for future playback tracking
 }
 
@@ -115,14 +115,14 @@ type Album struct {
 func (Album) TableName() string { return "music_album" }
 
 type Artist struct {
-	ID         int64     `gorm:"column:id;primaryKey;autoIncrement"`
-	Name       string    `gorm:"column:name;uniqueIndex"`
-	AlbumCount int       `gorm:"column:album_count"`
-	FullText   string    `gorm:"column:full_text"`
-	SongCount  int       `gorm:"column:song_count"`
-	Size       int64     `gorm:"column:size"`
-	MBzID      string    `gorm:"column:mbz_artist_id"`
-	CoverID    *int64    `gorm:"column:attachment_cover_id"`
+	ID         int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	Name       string `gorm:"column:name;uniqueIndex"`
+	AlbumCount int    `gorm:"column:album_count"`
+	FullText   string `gorm:"column:full_text"`
+	SongCount  int    `gorm:"column:song_count"`
+	Size       int64  `gorm:"column:size"`
+	MBzID      string `gorm:"column:mbz_artist_id"`
+	CoverID    *int64 `gorm:"column:attachment_cover_id"`
 }
 
 func (Artist) TableName() string { return "music_artist" }
@@ -161,14 +161,14 @@ type TrackAttachment = Attachment
 // Production should swap to a hashed-password column + bcrypt — out of scope.
 
 type User struct {
-	ID           int64     `gorm:"column:id;primaryKey;autoIncrement"`
-	Username     string    `gorm:"column:username;size:150;uniqueIndex"`
-	Password     string    `gorm:"column:password;size:128"` // P1: plain (matches handler loadUsers)
-	IsSuperuser  bool      `gorm:"column:is_superuser"`
-	IsStaff      bool      `gorm:"column:is_staff"`
-	IsActive     bool      `gorm:"column:is_active"`
-	DateJoined   time.Time `gorm:"column:date_joined;autoCreateTime"`
-	LastLogin    time.Time `gorm:"column:last_login"`
+	ID          int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	Username    string    `gorm:"column:username;size:150;uniqueIndex"`
+	Password    string    `gorm:"column:password;size:128"` // P1: plain (matches handler loadUsers)
+	IsSuperuser bool      `gorm:"column:is_superuser"`
+	IsStaff     bool      `gorm:"column:is_staff"`
+	IsActive    bool      `gorm:"column:is_active"`
+	DateJoined  time.Time `gorm:"column:date_joined;autoCreateTime"`
+	LastLogin   time.Time `gorm:"column:last_login"`
 }
 
 func (User) TableName() string { return "auth_user" }
@@ -181,21 +181,21 @@ type UserProfile struct {
 func (UserProfile) TableName() string { return "user_userprofile" }
 
 type Playlist struct {
-	ID              int64     `gorm:"column:id;primaryKey;autoIncrement"`
-	Name            string    `gorm:"column:name;size:50"`
-	UserID          int64     `gorm:"column:user_id;index"`
-	CreationDate    time.Time `gorm:"column:creation_date;autoCreateTime"`
+	ID               int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	Name             string    `gorm:"column:name;size:50"`
+	UserID           int64     `gorm:"column:user_id;index"`
+	CreationDate     time.Time `gorm:"column:creation_date;autoCreateTime"`
 	ModificationDate time.Time `gorm:"column:modification_date;autoUpdateTime"`
-	PrivacyLevel    string    `gorm:"column:privacy_level;size:30;default:'instance'"`
+	PrivacyLevel     string    `gorm:"column:privacy_level;size:30;default:'instance'"`
 }
 
 func (Playlist) TableName() string { return "music_playlist" }
 
 type TrackFavorite struct {
-	ID            int64     `gorm:"column:id;primaryKey;autoIncrement"`
-	CreationDate  time.Time `gorm:"column:creation_date;autoCreateTime"`
-	UserID        int64     `gorm:"column:user_id;index;uniqueIndex:idx_user_track"`
-	TrackID       int64     `gorm:"column:track_id;index;uniqueIndex:idx_user_track"`
+	ID           int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	CreationDate time.Time `gorm:"column:creation_date;autoCreateTime"`
+	UserID       int64     `gorm:"column:user_id;index;uniqueIndex:idx_user_track"`
+	TrackID      int64     `gorm:"column:track_id;index;uniqueIndex:idx_user_track"`
 }
 
 func (TrackFavorite) TableName() string { return "music_trackfavorite" }
@@ -209,9 +209,9 @@ func (TrackFavorite) TableName() string { return "music_trackfavorite" }
 // duration 计算。
 //
 // 索引:
-//   * unique (playlist_id, track_id)        防同一 playlist 重复加同一 track
-//   * (playlist_id, position)               ORDER BY position
-//   * (track_id)                            反向查询某 track 所在 playlist
+//   - unique (playlist_id, track_id)        防同一 playlist 重复加同一 track
+//   - (playlist_id, position)               ORDER BY position
+//   - (track_id)                            反向查询某 track 所在 playlist
 type PlaylistTrack struct {
 	ID         int64     `gorm:"column:id;primaryKey;autoIncrement"`
 	PlaylistID int64     `gorm:"column:playlist_id;index;uniqueIndex:idx_pl_playlist_track"`
@@ -221,3 +221,18 @@ type PlaylistTrack struct {
 }
 
 func (PlaylistTrack) TableName() string { return "music_playlisttrack" }
+
+// OperationLog 记录对音频标签、文件管理、下载等操作的审计历史。
+type OperationLog struct {
+	ID        int64     `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	Action    string    `gorm:"column:action;size:50;index" json:"action"`  // update_id3 | batch_update_id3 | auto_scrape | filename_parse | tidy_folder | download | upload_cover
+	Target    string    `gorm:"column:target;size:500;index" json:"target"` // 文件路径或目录或批次摘要
+	Operator  string    `gorm:"column:operator;size:100;index;default:'admin'" json:"operator"`
+	Status    string    `gorm:"column:status;size:30;index;default:'success'" json:"status"` // success | failed | partial | duplicate_skipped
+	ItemCount int       `gorm:"column:item_count;default:1" json:"item_count"`
+	Details   string    `gorm:"column:details;type:text" json:"details"` // 详细变动 JSON
+	ErrorMsg  string    `gorm:"column:error_msg;type:text" json:"error_msg,omitempty"`
+	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime;index" json:"created_at"`
+}
+
+func (OperationLog) TableName() string { return "operation_log" }

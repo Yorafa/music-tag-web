@@ -4,8 +4,10 @@
 //
 //  1. 文件名校验 ── 与库内已收录（Task 表 success 行 + 磁盘真实存在）的同名
 //     音频做精确比较；命中即返回 Duplicate，跳过昂贵的 hash/fingerprint。
+//
 //  2. 数字指纹 ── 计算 SHA-256(audio-body) 与库内所有 fileSize 命中阈值的
 //     文件交叉比对；同一密文 → 不同文件名但内容完全一致 → 重复。
+//
 //  3. 声纹校验 ── 仅在前两阶无果且库内已有同曲（同 title+同 duration±2s 名）
 //     时启用 fpcalc，把两份音频都打 fingerprint 再做相同字符串比较；既昂贵
 //     又是兜底（与 smart_tag 也用 acoustid 的 codepath 一致）。
@@ -57,11 +59,11 @@ type Result struct {
 }
 
 const (
-	VerdictUnique           = "unique"
-	VerdictDuplicate        = "duplicate"
-	VerdictLikelyDuplicate  = "likely_duplicate"
-	VerdictSkipped          = "skipped"
-	VerdictError            = "error"
+	VerdictUnique          = "unique"
+	VerdictDuplicate       = "duplicate"
+	VerdictLikelyDuplicate = "likely_duplicate"
+	VerdictSkipped         = "skipped"
+	VerdictError           = "error"
 
 	stageFilename    = "filename"
 	stageHash        = "hash"

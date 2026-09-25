@@ -10,16 +10,19 @@ import (
 	"fmt"
 
 	"github.com/hibiken/asynq"
+
+	"go-music-tag/internal/cache"
 )
 
 // Task type constants. Names mirror Python Celery task names where possible.
 const (
-	TypeFullScanFolder   = "scan:full"
-	TypeUpdateScanFolder = "scan:update"
-	TypeBatchAutoTag     = "tag:batch_auto"
-	TypeTidyFolder      = "folder:tidy"
-	TypeDownloadGeneric = "download:generic" // unified download type — payload.Source dispatches to the matching DownloadSource
-	TypeClearMusic      = "db:clear"
+	TypeFullScanFolder       = "scan:full"
+	TypeUpdateScanFolder     = "scan:update"
+	TypeBatchAutoTag         = "tag:batch_auto"
+	TypeTidyFolder           = "folder:tidy"
+	TypeDownloadGeneric      = "download:generic" // unified download type — payload.Source dispatches to the matching DownloadSource
+	TypeClearMusic           = "db:clear"
+	TypeApplyParsedFilenames = "tag:apply_parsed_filenames" // C.2 bulk-apply worker; payload = ApplyParsedFilenamesPayload
 )
 
 // --- Payloads ---
@@ -29,10 +32,10 @@ type FullScanPayload struct {
 }
 
 type BatchAutoTagPayload struct {
-	Batch         string   `json:"batch"`
-	SourceList    []string `json:"source_list"`
-	SelectMode    string   `json:"select_mode"`
-	CheckDuplicate bool    `json:"check_duplicate,omitempty"` // TODO: dedup hook stubbed (h.Dedup); not yet wired end-to-end
+	Batch          string   `json:"batch"`
+	SourceList     []string `json:"source_list"`
+	SelectMode     string   `json:"select_mode"`
+	CheckDuplicate bool     `json:"check_duplicate,omitempty"` // TODO: dedup hook stubbed (h.Dedup); not yet wired end-to-end
 }
 
 type TidyFolderPayload struct {
@@ -50,15 +53,24 @@ type TidyFolderPayload struct {
 // relative to MUSIC_DIR) for "加入库"; empty means the global default
 // (e.g. /app/media/<downloadPath>), resolved by the worker.
 type DownloadPayload struct {
-	Source        string `json:"source"`                  // registered DownloadSource name
-	VideoID       string `json:"video_id"`
-	DestDir       string `json:"dest_dir,omitempty"`     // optional server-side destination (relative to MUSIC_DIR)
-	ExtraJSON     string `json:"extra,omitempty"`        // format/output_format/quality
-	Batch         string `json:"batch,omitempty"`
-	RequestedBy   string `json:"requested_by,omitempty"`
+	Source      string `json:"source"` // registered DownloadSource name
+	VideoID     string `json:"video_id"`
+	DestDir     string `json:"dest_dir,omitempty"` // optional server-side destination (relative to MUSIC_DIR)
+	ExtraJSON   string `json:"extra,omitempty"`    // format/output_format/quality
+	Batch       string `json:"batch,omitempty"`
+	RequestedBy string `json:"requested_by,omitempty"`
 }
 
 type ClearMusicPayload struct{}
+
+// ApplyParsedFilenamesPayload is the carrier for TypeApplyParsedFilenames.
+// Shape mirrors cache.ParsedResult 1:1 so JSON wire-format round-trips
+// byte-identically from handler.Save → cache.Load → worker tag.Write.
+// We import cache here because (a) the message bus needs a stable wire
+// shape and (b) cache is a leaf package — no import cycle risk.
+type ApplyParsedFilenamesPayload struct {
+	Results []cache.ParsedResult `json:"results"`
+}
 
 // --- Encode/Decode helpers ---
 
@@ -184,6 +196,19 @@ func NewClearMusicMux(mux *asynq.ServeMux, h Handler) {
 	mux.HandleFunc(TypeClearMusic, (&asynqAdapter{
 		decode: func(data []byte) (interface{}, error) {
 			return &ClearMusicPayload{}, nil
+		},
+		h: h,
+	}).ProcessTask)
+}
+
+// NewApplyParsedFilenamesMux registers the bulk-apply worker. The handler
+// (in parsedfilenames.go) is a HandlerFunc over ApplyParsedFilenamesPayload.
+func NewApplyParsedFilenamesMux(mux *asynq.ServeMux, h Handler) {
+	mux.HandleFunc(TypeApplyParsedFilenames, (&asynqAdapter{
+		decode: func(data []byte) (interface{}, error) {
+			var p ApplyParsedFilenamesPayload
+			err := Decode(data, &p)
+			return &p, err
 		},
 		h: h,
 	}).ProcessTask)

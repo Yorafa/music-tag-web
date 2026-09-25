@@ -4,7 +4,7 @@
 // Events are JSON-encoded and broadcast over a Bus (Redis in production,
 // NullBus in tests). The file-rename lifecycle currently emits one event:
 //
-//   • TopicFileMoved — emitted by tasks.TidyFolderHandler after a successful
+//   - TopicFileMoved — emitted by tasks.TidyFolderHandler after a successful
 //     os.Rename + db.Folder / db.Track path update. The webhook handler
 //     subscribes and uses this to invalidate its in-memory PathCache.
 package events

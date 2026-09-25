@@ -122,7 +122,7 @@ func (f *fakeListDownload) DisplayName() string { return f.displayName }
 func (f *fakeListDownload) Search(_ context.Context, _ string, _ int) ([]plugin.DownloadItem, error) {
 	return nil, nil
 }
-func (f *fakeListDownload) Download(_ context.Context, _, _ string) (*plugin.DownloadResult, error) {
+func (f *fakeListDownload) Download(_ context.Context, _, _ string, _ plugin.DownloadOptions) (*plugin.DownloadResult, error) {
 	return nil, nil
 }
 

@@ -2,7 +2,6 @@ package tag
 
 import (
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/bogem/id3v2"
+	"go.senan.xyz/taglib"
 
 	"go-music-tag/internal/utils"
 )
@@ -32,23 +32,89 @@ type WriteResult struct {
 	CoverDownsized bool   `json:"cover_downsized,omitempty"`
 }
 
-// ErrFormatUnsupportedWrite 当前仅实现 MP3 写入；FLAC/OGG/MP4 暂未完整接入。
-var ErrFormatUnsupportedWrite = errors.New("tag: write not implemented for this audio format (P0 supports mp3 only)")
-
-// Write 按文件格式分派。
+// Write 按文件格式写入音频标签。
+// 支持主流格式：MP3, FLAC, OGG, Opus, M4A/MP4, WAV, WMA, AIFF 等。
 func Write(path string, upd *TagUpdate) error {
 	if upd == nil {
 		return nil
 	}
-	format := ProbeFile(path)
-	switch format {
-	case FormatMP3:
-		return writeMP3(path, upd)
-	case FormatFLAC, FormatOGG, FormatMP4, FormatUnknown:
-		fallthrough
-	default:
-		return ErrFormatUnsupportedWrite
+
+	// 优先使用 taglib 统一写入各种主流格式（OGG, FLAC, M4A, MP3, WAV 等）
+	err := writeWithTagLib(path, upd)
+	if err == nil {
+		return nil
 	}
+
+	// 如果是 MP3 且 taglib 失败，回退尝试 bogem/id3v2 原生写入
+	format := ProbeFile(path)
+	if format == FormatMP3 {
+		if mp3Err := writeMP3(path, upd); mp3Err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("write audio tags for %s: %w", filepath.Base(path), err)
+}
+
+func writeWithTagLib(path string, upd *TagUpdate) error {
+	tags := make(map[string][]string)
+
+	if upd.Title != nil {
+		tags[taglib.Title] = []string{strings.TrimSpace(*upd.Title)}
+	}
+	if len(upd.Artist) > 0 {
+		var validArtists []string
+		for _, a := range upd.Artist {
+			if trimmed := strings.TrimSpace(a); trimmed != "" {
+				validArtists = append(validArtists, trimmed)
+			}
+		}
+		if len(validArtists) > 0 {
+			tags[taglib.Artist] = validArtists
+		}
+	}
+	if upd.Album != nil {
+		tags[taglib.Album] = []string{strings.TrimSpace(*upd.Album)}
+	}
+	if upd.AlbumArtist != nil {
+		tags[taglib.AlbumArtist] = []string{strings.TrimSpace(*upd.AlbumArtist)}
+	}
+	if upd.Genre != nil {
+		tags[taglib.Genre] = []string{strings.TrimSpace(*upd.Genre)}
+	}
+	if upd.Year != nil && strings.TrimSpace(*upd.Year) != "" {
+		tags[taglib.Date] = []string{strings.TrimSpace(*upd.Year)}
+	}
+	if upd.TrackNumber != nil && strings.TrimSpace(*upd.TrackNumber) != "" {
+		tags[taglib.TrackNumber] = []string{strings.TrimSpace(*upd.TrackNumber)}
+	}
+	if upd.DiscNumber != nil && strings.TrimSpace(*upd.DiscNumber) != "" {
+		tags[taglib.DiscNumber] = []string{strings.TrimSpace(*upd.DiscNumber)}
+	}
+	if upd.Comment != nil {
+		tags[taglib.Comment] = []string{strings.TrimSpace(*upd.Comment)}
+	}
+	if upd.ClearLyrics {
+		tags[taglib.Lyrics] = []string{""}
+	} else if upd.Lyrics != nil {
+		tags[taglib.Lyrics] = []string{*upd.Lyrics}
+	}
+
+	if len(tags) > 0 {
+		if err := taglib.WriteTags(path, tags, 0); err != nil {
+			return fmt.Errorf("taglib write tags: %w", err)
+		}
+	}
+
+	// 嵌入式封面写入
+	if len(upd.AlbumImg) > 0 {
+		if err := taglib.WriteImage(path, upd.AlbumImg); err != nil {
+			// 图片写入若失败，不阻断文本标签保存
+			_ = err
+		}
+	}
+
+	return nil
 }
 
 func writeMP3(path string, upd *TagUpdate) error {
@@ -75,10 +141,10 @@ func writeMP3(path string, upd *TagUpdate) error {
 	}
 	if upd.Comment != nil {
 		tag.AddCommentFrame(id3v2.CommentFrame{
-			Encoding:   id3v2.EncodingUTF8,
-			Language:   "chi",
+			Encoding:    id3v2.EncodingUTF8,
+			Language:    "chi",
 			Description: "",
-			Text:       strings.TrimSpace(*upd.Comment),
+			Text:        strings.TrimSpace(*upd.Comment),
 		})
 	}
 	if upd.Year != nil {

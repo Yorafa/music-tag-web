@@ -2,7 +2,8 @@
 //
 // 读：以 dhowden/tag 为底层，支持 ID3v1/v2、FLAC（含 Vorbis comment）、Ogg Vorbis、MP4。
 // 写：同样基于 dhowden/tag 的 SetFileTag，覆盖 title/artist/album 等基础字段；P0
-//     阶段不支持 RELEASETYPE / TXXX:LANGUAGE 等私有 frame，需要时再补底层。
+//
+//	阶段不支持 RELEASETYPE / TXXX:LANGUAGE 等私有 frame，需要时再补底层。
 package tag
 
 import (
@@ -31,46 +32,46 @@ const (
 // TagInfo 是读取标签后返回给调用方的统一结构，字段命名贴近 Django 端 MusicIDS，
 // 让前端 TagEditor / ScrapeResults 可以无缝消费。
 type TagInfo struct {
-	Year         int    `json:"year"`
-	Comment      string `json:"comment"`
-	Lyrics       string `json:"lyrics"`
-	Duration     int    `json:"duration"`     // 秒，向下取整
-	Size         int    `json:"size"`         // 字节
-	BitRate      int    `json:"bit_rate"`     // kbps
-	TrackNumber  string `json:"tracknumber"`
-	DiscNumber   string `json:"discnumber"`
-	Artwork      string `json:"artwork"`      // data URI (jpeg/png) — 兼容 Django 前端约定
-	ArtworkW     int    `json:"artwork_w"`    // 封面宽高，便于前端表格展示
-	ArtworkH     int    `json:"artwork_h"`
-	ArtworkSize  int    `json:"artwork_size"` // MB
-	Title        string `json:"title"`
-	Artist       string `json:"artist"`
-	Album        string `json:"album"`
-	AlbumType    string `json:"album_type"`
-	Genre        string `json:"genre"`
-	Filename     string `json:"filename"`
-	AlbumArtist  string `json:"albumartist"`
-	Language     string `json:"language"`
-	Codec        string `json:"codec"`
+	Year        int    `json:"year"`
+	Comment     string `json:"comment"`
+	Lyrics      string `json:"lyrics"`
+	Duration    int    `json:"duration"` // 秒，向下取整
+	Size        int    `json:"size"`     // 字节
+	BitRate     int    `json:"bit_rate"` // kbps
+	TrackNumber string `json:"tracknumber"`
+	DiscNumber  string `json:"discnumber"`
+	Artwork     string `json:"artwork"`   // data URI (jpeg/png) — 兼容 Django 前端约定
+	ArtworkW    int    `json:"artwork_w"` // 封面宽高，便于前端表格展示
+	ArtworkH    int    `json:"artwork_h"`
+	ArtworkSize int    `json:"artwork_size"` // MB
+	Title       string `json:"title"`
+	Artist      string `json:"artist"`
+	Album       string `json:"album"`
+	AlbumType   string `json:"album_type"`
+	Genre       string `json:"genre"`
+	Filename    string `json:"filename"`
+	AlbumArtist string `json:"albumartist"`
+	Language    string `json:"language"`
+	Codec       string `json:"codec"`
 }
 
 // TagUpdate 是写入时的可空字段集合。字段为空表示「保持原值不写」。
 // Artist/DiscNumber/TrackNumber 这种需要「半空」处理的字段另取出来，使用单独的 bool。
 type TagUpdate struct {
-	Title        *string  `json:"title,omitempty"`
-	Artist       []string `json:"artist,omitempty"` // 多个艺术家用逗号分隔
-	Album        *string  `json:"album,omitempty"`
-	AlbumArtist  *string  `json:"albumartist,omitempty"`
-	TrackNumber  *string  `json:"tracknumber,omitempty"` // "1/12"
-	DiscNumber   *string  `json:"discnumber,omitempty"`  // "1/2"
-	Genre        *string  `json:"genre,omitempty"`
-	Year         *string  `json:"year,omitempty"`
-	Lyrics       *string  `json:"lyrics,omitempty"`
-	Comment      *string  `json:"comment,omitempty"`
-	AlbumType    *string  `json:"album_type,omitempty"`
-	Language     *string  `json:"language,omitempty"`
-	ClearLyrics  bool     `json:"clear_lyrics,omitempty"`
-	AlbumImg     []byte   `json:"-"` // 二进制封面图，URL/base64 由调用方预处理
+	Title       *string  `json:"title,omitempty"`
+	Artist      []string `json:"artist,omitempty"` // 多个艺术家用逗号分隔
+	Album       *string  `json:"album,omitempty"`
+	AlbumArtist *string  `json:"albumartist,omitempty"`
+	TrackNumber *string  `json:"tracknumber,omitempty"` // "1/12"
+	DiscNumber  *string  `json:"discnumber,omitempty"`  // "1/2"
+	Genre       *string  `json:"genre,omitempty"`
+	Year        *string  `json:"year,omitempty"`
+	Lyrics      *string  `json:"lyrics,omitempty"`
+	Comment     *string  `json:"comment,omitempty"`
+	AlbumType   *string  `json:"album_type,omitempty"`
+	Language    *string  `json:"language,omitempty"`
+	ClearLyrics bool     `json:"clear_lyrics,omitempty"`
+	AlbumImg    []byte   `json:"-"` // 二进制封面图，URL/base64 由调用方预处理
 }
 
 // ProbeFile 用文件头嗅探音频格式（mp3/flac/ogg/mp4）。

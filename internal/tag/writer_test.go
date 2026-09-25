@@ -72,3 +72,33 @@ func TestHandleSidecars_LegitAlbumStillWorks(t *testing.T) {
 		t.Fatalf("cover path %q should sit under tmp %q", res.SidecarCover, tmp)
 	}
 }
+
+func TestWriteNilUpdate(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "test.ogg")
+	if err := os.WriteFile(path, []byte("dummy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(path, nil); err != nil {
+		t.Fatalf("nil update should return nil, got %v", err)
+	}
+}
+
+func TestSanitizeFileName(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"   ", ""},
+		{"Hello/World", "Hello_World"},
+		{"Artist: Album? *Special*", "Artist_ Album_ _Special_"},
+		{"Normal Name", "Normal Name"},
+	}
+	for _, c := range cases {
+		got := sanitizeFileName(c.in)
+		if got != c.want {
+			t.Errorf("sanitizeFileName(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

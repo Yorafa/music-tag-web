@@ -1,4 +1,4 @@
-// file_test.go — FileList 端到端测试。
+// file_test.go — FileList + MusicID3 端到端测试。
 //
 // 关键回归点：Round-7 时 P1.5 hardening 把 SafeJoin(root, "") 拒绝为空串，
 // 与 handler/file.go::FileList 文档里承诺的 "empty FilePath = 列出 MUSIC_DIR"
@@ -9,6 +9,7 @@
 //  2. 返回 data[0].Children 必须等于 MUSIC_DIR 根目录的条目
 //  3. 把每次与 utils.SafeJoin 的契约改动耦合起来，未来谁再收紧
 //     SafeJoin 的空字符串分支，CI 就会立刻在这里红掉。
+//  4. POST /api/music_id3/ 恢复后端读 tag（前端 hydrate / openEditor 依赖）。
 package handler
 
 import (
@@ -137,10 +138,10 @@ func TestFileList_EmptyFilePathListsRoot(t *testing.T) {
 
 	// ─── Must NOT be the literal "path is empty" error from Round-7 ───
 	if strings.Contains(resp.Message, "path is empty") {
-		t.Errorf("regressed to Round-7 error: %q", resp.Message)
+		t.Fatalf("regressed to Round-7 error: %q", resp.Message)
 	}
 	if strings.Contains(resp.Message, "SafeJoin") {
-		t.Errorf("regressed to SafeJoin-leak error: %q", resp.Message)
+		t.Fatalf("regressed to SafeJoin-leak error: %q", resp.Message)
 	}
 
 	// ─── Sanity: nested-file (non-empty file_path) still works ───
@@ -150,6 +151,94 @@ func TestFileList_EmptyFilePathListsRoot(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusOK {
-		t.Errorf("nested album/ listing: status=%d (want 200); body=%s", w2.Code, w2.Body.String())
+		t.Fatalf("nested album/ listing: status=%d (want 200); body=%s", w2.Code, w2.Body.String())
+	}
+}
+
+// TestMusicID3_ReadsTagsFromMusicDir pins the restored backend-owned
+// tag-read path used by frontend hydrateTags / openEditor:
+//
+//	POST /api/music_id3/ {file_path, file_name}
+//	  → SafeJoin(MUSIC_DIR, file_path, file_name)
+//	  → tag.Read → SuccessData envelope with title/filename/…
+//
+// Without this route the frontend falls back to browser Range-parse
+// (/media + music-metadata), which is less efficient for batch hydrate.
+func TestMusicID3_ReadsTagsFromMusicDir(t *testing.T) {
+	dir := t.TempDir()
+	// Minimal parseable ID3v2 header — dhowden/tag sniffs "ID3" and
+	// returns empty tags rather than error; handler still fills
+	// filename/size and SuccessData's envelope.
+	stub := []byte("ID3\x03\x00\x00\x00\x00\x00\x00")
+	if err := os.WriteFile(filepath.Join(dir, "song.mp3"), stub, 0o644); err != nil {
+		t.Fatalf("seed mp3: %v", err)
+	}
+	t.Setenv("MUSIC_DIR", dir)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/music_id3/", MusicID3)
+
+	body := strings.NewReader(`{"file_path":"","file_name":"song.mp3"}`)
+	req, _ := http.NewRequest("POST", "/api/music_id3/", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d (want 200); body=%s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Result  bool                   `json:"result"`
+		Code    string                 `json:"code"`
+		Data    map[string]interface{} `json:"data"`
+		Message string                 `json:"message"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v body=%s", err, w.Body.String())
+	}
+	if !resp.Result {
+		t.Fatalf("result=false message=%q", resp.Message)
+	}
+	if resp.Data == nil {
+		t.Fatalf("data is nil")
+	}
+	if got, _ := resp.Data["filename"].(string); got != "song.mp3" {
+		t.Fatalf("filename=%v (want song.mp3); data=%v", resp.Data["filename"], resp.Data)
+	}
+}
+
+// TestMusicID3_RejectsPathEscape keeps the SafeJoin defence for
+// file_name / file_path traversal attempts.
+func TestMusicID3_RejectsPathEscape(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MUSIC_DIR", dir)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/music_id3/", MusicID3)
+
+	body := strings.NewReader(`{"file_path":"..","file_name":"etc/passwd"}`)
+	req, _ := http.NewRequest("POST", "/api/music_id3/", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d (want 200 envelope); body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Result  bool   `json:"result"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Result {
+		t.Fatalf("expected result=false on path escape; message=%q", resp.Message)
+	}
+	if !strings.Contains(resp.Message, "路径不安全") {
+		t.Fatalf("message=%q (want 路径不安全)", resp.Message)
 	}
 }

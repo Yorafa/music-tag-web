@@ -41,6 +41,7 @@ import (
 	"go-music-tag/internal/plugin"
 	"go-music-tag/internal/tag"
 	"go-music-tag/internal/tasks"
+	"go-music-tag/internal/utils"
 )
 
 // ─── TagSource mock for BatchAutoTag ────────────────────────────────────────
@@ -76,6 +77,37 @@ func (m *mockTagSource) FetchLyric(_ context.Context, _ string) (string, error) 
 }
 func (m *mockTagSource) GetAudioURL(_ context.Context, _ string) (string, error) {
 	return "", nil // mock is metadata-only; integration test doesn't probe the stream path
+}
+
+// mockDownloadSource is the DownloadSource double for the download:generic
+// integration test. Since the 2026 refactor the worker's youtube branch
+// delegates the actual exec to the plugin over the DownloadSource interface
+// (the plugin runs yt-dlp); this mock mimics that contract: it records the
+// DownloadOptions the worker forwarded, then lands a fake <id>.mp3 into
+// AUDIO_CACHE_DIR/youtube (the shared cache dir the gateway globs) and
+// reports Success with the written path — exactly what the youtube plugin's
+// gRPC Download returns.
+type mockDownloadSource struct {
+	name    string
+	gotOpts plugin.DownloadOptions
+}
+
+func (m *mockDownloadSource) Name() string        { return m.name }
+func (m *mockDownloadSource) DisplayName() string { return "Mock " + m.name }
+func (m *mockDownloadSource) Search(_ context.Context, _ string, _ int) ([]plugin.DownloadItem, error) {
+	return nil, nil
+}
+func (m *mockDownloadSource) Download(_ context.Context, videoID, _ string, opts plugin.DownloadOptions) (*plugin.DownloadResult, error) {
+	m.gotOpts = opts
+	dir := filepath.Join(os.Getenv("AUDIO_CACHE_DIR"), m.name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return &plugin.DownloadResult{Success: false, Error: err.Error()}, nil
+	}
+	path := filepath.Join(dir, videoID+".mp3")
+	if err := os.WriteFile(path, []byte("ID3\x04\x00\x00\x00\x00\x00\x00FAKE-AUDIO"), 0o644); err != nil {
+		return &plugin.DownloadResult{Success: false, Error: err.Error()}, nil
+	}
+	return &plugin.DownloadResult{Success: true, FilePath: path}, nil
 }
 
 // mockSourceName returns the per-test mock-source key. The name embeds
@@ -385,72 +417,50 @@ func TestIntegration_BatchAutoTag_StateTransitions(t *testing.T) {
 	// TaskRecord.tag_source (proves plugin → candidate → write path).
 }
 
-// ─── Test 3: DownloadGeneric (youtube branch) ──────────────────────────────
+// ─── Test 3: DownloadGeneric (youtube branch, plugin delegation) ────────────
 
-func TestIntegration_DownloadGeneric_YouTube_FakeYtdlp(t *testing.T) {
+func TestIntegration_DownloadGeneric_YouTube_MockPlugin(t *testing.T) {
 	rig := newTestRig(t)
 
 	root := rig.MusicRoot
-	// DownloadHandler writes into audioCacheDir("youtube") =
-	// $AUDIO_CACHE_DIR/youtube. Point the root at our fixture so the
-	// fake yt-dlp output lands where the test asserts it.
+	// The worker delegates the exec to the registered DownloadSource, which
+	// lands files in audioCacheDir("youtube") = $AUDIO_CACHE_DIR/youtube —
+	// the same shared cache dir the gateway /api/stream globs.
 	cacheRoot := filepath.Join(root, "audio_cache")
 	t.Setenv("AUDIO_CACHE_DIR", cacheRoot)
-	downloadsDir := filepath.Join(cacheRoot, "youtube")
-	if err := os.MkdirAll(downloadsDir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(cacheRoot, "youtube"), 0o755); err != nil {
 		t.Fatalf("mkdir cache: %v", err)
 	}
 
-	// Fake yt-dlp: emit a small mp3 file when invoked, derived from the URL.
-	// Honours the standard yt-dlp arg layout used by yt_dl.go:
-	//   args := [..., "-f", format, "-o", outTpl, "--no-part", ...]
-	// The URL is the last positional arg.
-	fakeBin := filepath.Join(root, "fake-yt-dlp.sh")
-	script := `#!/bin/bash
-set -e
-prev=""
-out=""
-url="https://www.youtube.com/watch?v=fallback"
-for arg in "$@"; do
-    if [ "$prev" = "-o" ]; then
-        out="$arg"
-    fi
-    case "$arg" in
-        http*|https*) url="$arg" ;;
-    esac
-    prev="$arg"
-done
-vid="$(echo "$url" | sed -E 's/.*v=([A-Za-z0-9_\-]+).*/\1/')"
-dir="$(dirname "$out")"
-mkdir -p "$dir"
-# Replace %(id)s and %(ext)s placeholders.
-out_path="$(echo "$out" | sed -E "s/%\\(id\\)s/${vid}/g; s/%\\(ext\\)s/mp3/g")"
-printf 'ID3\x04\x00\x00\x00\x00\x00\x00FAKE-AUDIO' > "$out_path"
-echo "[fake-yt-dlp] wrote $out_path"
-exit 0
-`
-	if err := os.WriteFile(fakeBin, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake yt-dlp: %v", err)
-	}
+	// Install the DownloadSource mock under the production registry key so
+	// DownloadHandler's plugin.GetDownloadSource("youtube") dispatch hits it.
+	mock := &mockDownloadSource{name: "youtube"}
+	plugin.InstallMockDownloadSource("youtube", mock)
+	t.Cleanup(func() { plugin.UninstallMockDownloadSource("youtube") })
 
 	const videoID = "ytFake001"
 
-	// Consumer registers DownloadHandler pointed at fake binary.
+	// Consumer registers the unified DownloadHandler (no yt-dlp anywhere —
+	// the exec lives in the plugin, which this mock stands in for).
 	rig.Start(t, func(mux *asynq.ServeMux) {
-		tasks.NewDownloadGenericMux(mux, &tasks.DownloadHandler{
-			DB:        rig.DB,
-			MusicRoot: root,
-			YTDLPPath: fakeBin,
-		})
+		tasks.NewDownloadGenericMux(mux, tasks.NewDownloadHandler(rig.DB, root))
 	})
 
-	// Producer enqueues the unified download:generic task.
+	// Producer enqueues the unified download:generic task with explicit
+	// tuning knobs so we can assert they survive the worker → plugin hop.
 	rig.Enqueue(t, tasks.TypeDownloadGeneric, &tasks.DownloadPayload{
-		Source:  "youtube",
-		VideoID: videoID,
+		Source:    "youtube",
+		VideoID:   videoID,
+		ExtraJSON: `{"format":"bestaudio[height<=480]","output_format":"mp3","quality":"320"}`,
 	})
 
 	rig.WaitForCompletion(t, 8*time.Second)
+
+	// The worker sanitized ExtraJSON and forwarded the knobs to the plugin.
+	wantOpts := plugin.DownloadOptions{Format: "bestaudio[height<=480]", OutputFormat: "mp3", Quality: "320"}
+	if mock.gotOpts != wantOpts {
+		t.Errorf("DownloadOptions forwarded to plugin = %+v, want %+v", mock.gotOpts, wantOpts)
+	}
 
 	// Assert db.Folder row written
 	var folder db.Folder
@@ -477,6 +487,69 @@ exit 0
 	}
 	if rec.FullPath == "" {
 		t.Error("TaskRecord.full_path should be populated")
+	}
+}
+
+// ─── Test 4: ApplyParsedFilenames (C.2 bulk-apply worker) ───────────────────
+
+func TestIntegration_ApplyParsedFilenames_WritesTags(t *testing.T) {
+	rig := newTestRig(t)
+
+	// The handler re-roots every row.Path under utils.MusicRoot()
+	// (= $MUSIC_DIR), so the fixture must live under the rig root and the
+	// env var must point at it.
+	t.Setenv("MUSIC_DIR", rig.MusicRoot)
+
+	// Real ID3v2 fixture (same builder as the TidyFolder test) so
+	// tag.Write has a parseable file to update.
+	srcPath := filepath.Join(rig.MusicRoot, "Song - Original.mp3")
+	if err := os.WriteFile(srcPath, []byte("ID3\x04\x00\x00\x00\x00\x00\x00"), 0o644); err != nil {
+		t.Fatalf("init mp3: %v", err)
+	}
+	tag0, openErr := id3v2.Open(srcPath, id3v2.Options{Parse: true})
+	if openErr != nil {
+		t.Fatalf("id3v2.Open: %v", openErr)
+	}
+	tag0.AddTextFrame("TIT2", id3v2.EncodingUTF8, "Original")
+	tag0.AddTextFrame("TPE1", id3v2.EncodingUTF8, "Old Artist")
+	if err := tag0.Save(); err != nil {
+		t.Fatalf("id3v2.Save: %v", err)
+	}
+	if err := tag0.Close(); err != nil {
+		t.Logf("id3v2.Close warning: %v", err)
+	}
+
+	// Consumer registers the C.2 bulk-apply worker — the exact wiring that
+	// was missing before round-11 (TypeApplyParsedFilenames had no
+	// consumer, so the gateway's apply flow was dead).
+	rig.Start(t, func(mux *asynq.ServeMux) {
+		tasks.NewApplyParsedFilenamesMux(mux, tasks.HandlerFunc(tasks.HandleApplyParsedFilenames))
+	})
+
+	// Producer enqueues one parsed row: new artist + title for the file
+	// (mirrors handler.ApplyParsedFilenames's enqueue shape).
+	rig.Enqueue(t, tasks.TypeApplyParsedFilenames, &tasks.ApplyParsedFilenamesPayload{
+		Results: []cache.ParsedResult{{
+			Path:   srcPath,
+			Artist: "New Artist",
+			Title:  "New Title",
+			Status: utils.StatusOK,
+		}},
+	})
+
+	rig.WaitForCompletion(t, 8*time.Second)
+
+	// The tag must have been overwritten — this is the real proof the task
+	// was consumed (queue-empty alone would also pass on retry/archive).
+	parsed, err := tag.Read(srcPath)
+	if err != nil {
+		t.Fatalf("tag.Read after apply: %v", err)
+	}
+	if parsed.Title != "New Title" {
+		t.Errorf("title after apply = %q, want %q", parsed.Title, "New Title")
+	}
+	if parsed.Artist != "New Artist" {
+		t.Errorf("artist after apply = %q, want %q", parsed.Artist, "New Artist")
 	}
 }
 

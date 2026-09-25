@@ -1,4 +1,4 @@
-package tasks
+package ytdlp
 
 import "testing"
 
@@ -19,10 +19,10 @@ func TestSanitizeYTDLPFormat(t *testing.T) {
 		{"-f", "", false},
 		// rejected: bad characters
 		{"bestaudio;rm", "", false},
-		{"bestaudio audio", "", false},   // space → not single argv token
-		{"a${X}b", "", false},            // template-bypass
-		{"a\nb", "", false},              // newline
-		{"a`b`", "", false},              // backticks
+		{"bestaudio audio", "", false}, // space → not single argv token
+		{"a${X}b", "", false},          // template-bypass
+		{"a\nb", "", false},            // newline
+		{"a`b`", "", false},            // backticks
 	}
 	for _, c := range cases {
 		got, err := SanitizeYTDLPFormat(c.in)

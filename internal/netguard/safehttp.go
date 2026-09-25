@@ -1,9 +1,9 @@
 // SafeHTTPGet — fetch helper for callers that need bytes from a
 // remote URL protected by netguard.Guard. Wraps http.Client with:
 //
-//   (1) initial URL validation (scheme + resolved IPs)
-//   (2) per-redirect URL validation (re-validates Location at every hop)
-//   (3) a hard response-body cap (maxBytes)
+//	(1) initial URL validation (scheme + resolved IPs)
+//	(2) per-redirect URL validation (re-validates Location at every hop)
+//	(3) a hard response-body cap (maxBytes)
 //
 // Content validation (image.DecodeConfig, JSON safety, etc.) stays with
 // the caller — netguard intentionally only knows about shapes a remote

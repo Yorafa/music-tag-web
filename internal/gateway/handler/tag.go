@@ -139,9 +139,17 @@ func SearchMusic(c *gin.Context) {
 			if end > len(items) {
 				end = len(items)
 			}
+			// ID is mandatory: PlayButton / resolveStreamUrl build
+			// `/api/stream/?src=youtube&id=<video_id>` from song.id.
+			// Omitting it produced id= empty → StreamAudio 400
+			// "missing src or id" on every YouTube preview click.
 			for _, it := range items[start:end] {
 				allSongs = append(allSongs, plugin.Song{
-					Name: it.Title, Artist: it.Channel, Cover: it.Thumbnail, Source: "youtube",
+					ID:     it.ID,
+					Name:   it.Title,
+					Artist: it.Channel,
+					Cover:  it.Thumbnail,
+					Source: source,
 				})
 			}
 			newPages[source] = curPage
@@ -338,7 +346,8 @@ var (
 )
 
 // matchScoreSimple 与 Python match_score 核心等价：
-//   完全相同 → 2；子串包含 → 1；token 重叠 ≥ 一半 → 1；不沾 → 0。
+//
+//	完全相同 → 2；子串包含 → 1；token 重叠 ≥ 一半 → 1；不沾 → 0。
 func matchScoreSimple(a, b string) float64 {
 	if a == "" || b == "" {
 		return 0
