@@ -26,12 +26,8 @@ import { DirPickerDrawer } from '@/components/scraper/DirPickerDrawer';
 import { CloudSearchDialog } from '@/components/search/CloudSearchDialog';
 import { useLibraryStore, type LibraryRow } from '@/store/useLibraryStore';
 import { usePlayerStore, type PlayerTrack } from '@/store/usePlayerStore';
-import { editorActions, useEditorStore } from '@/store/useEditorStore';
-import { useNoticeStore } from '@/store/useNoticeStore';
 import { buildMediaUrl } from '@/lib/mediaUrl';
-import { readTagsFromPath } from '@/lib/id3Reader';
 import { COVER_PLACEHOLDER_GRADIENTS, resolveCoverSrc } from '@/utils/cover';
-import { needsMusicInfoRefetch } from '@/utils/persistMusicInfo';
 import { cn } from '@/lib/utils';
 
 // Gradient placeholder index — deterministic per-row stable hash based on
@@ -85,42 +81,12 @@ function RowCover({ row }: { row: LibraryRow }) {
 // pure read-only-ish copy of the row's id3; tag editing is scrape-
 // mode's job (Plan A) but the Dialog is shared.
 async function openEditorFor(row: LibraryRow) {
-  editorActions.setSelectedFile(row.fileName);
-  editorActions.setFullPath(row.fullPath);
-  editorActions.setFadeShowDetail(false);
-  editorActions.setSongList([]);
-  // Optimistic hydration so the editor mounts without a blank-field
-  // flash; the inline fetch below overrides it once it resolves.
-  editorActions.setMusicInfo(row.musicInfo ?? {});
-  editorActions.setEditorOpen(true);
-
-  // `needsMusicInfoRefetch` rather than "any non-null field" — lightweight
-  // caches from localStorage keep title/artist but strip data-URI covers,
-  // so we still re-fetch to restore album art on open.
-  if (needsMusicInfoRefetch(row.musicInfo)) {
-    try {
-      const info = await readTagsFromPath(row.fullPath);
-      // Race guard: a newer click may have already switched the
-      // editor's fullPath/selectedFile to a different row. Skip the
-      // apply so an in-flight slow response for Row A can't
-      // overwrite Row B.
-      const stillCurrent =
-        useEditorStore.getState().fullPath === row.fullPath &&
-        useEditorStore.getState().selectedFile === row.fileName;
-      if (!stillCurrent) return;
-      if (Object.values(info).some(v => v != null)) {
-        editorActions.setMusicInfo(info);
-        // Seed the row's lazy cache so subsequent clicks skip the
-        // round-trip (mirrors useWorklistStore.setMusicInfo).
-        useLibraryStore.getState().setMusicInfo(row.id, info);
-      }
-    } catch (err) {
-      // Network/parse error: surface so the user can tell apart
-      // "fetch failed" from "tags actually empty".
-      const msg = err instanceof Error ? err.message : String(err);
-      useNoticeStore.getState().push(`读取标签失败: ${msg}`, 'warn');
-    }
-  }
+  await openEditorForRow({
+    fileName: row.fileName,
+    fullPath: row.fullPath,
+    musicInfo: row.musicInfo ?? null,
+    cache: (info) => useLibraryStore.getState().setMusicInfo(row.id, info),
+  });
 }
 
 function buildLocalTrack(row: LibraryRow): PlayerTrack {

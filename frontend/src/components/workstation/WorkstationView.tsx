@@ -5,13 +5,20 @@ import { WorkstationTable } from './WorkstationTable';
 import { TrackInspector } from './TrackInspector';
 import { DirPickerDrawer } from '@/components/scraper/DirPickerDrawer';
 import { useWorklistStore } from '@/store/useWorklistStore';
+import { selectWorklistRow } from '@/components/workstation/rowSelection';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { ResizeHandle } from '@/components/layout/ResizeHandle';
 import { readNumber, writeNumber } from '@/utils/persist';
+import type { WorklistRow } from '@/types';
 
 const LEFT_WIDTH_KEY = 'workstation.leftWidth';
 const RIGHT_WIDTH_KEY = 'workstation.rightWidth';
 const DEFAULT_LEFT_WIDTH = 240;
 const DEFAULT_RIGHT_WIDTH = 340;
+
+/** The TrackInspector column is `hidden lg:flex`, so at and below this
+ *  width nothing on screen shows the selected row's detail. */
+const INSPECTOR_QUERY = '(min-width: 1024px)';
 
 export function WorkstationView() {
   const rows = useWorklistStore((s) => s.rows);
@@ -51,6 +58,15 @@ export function WorkstationView() {
     });
   };
 
+  // The inspector column is `hidden lg:flex`, so below 1024px a row tap
+  // has no on-screen detail panel to reveal. selectWorklistRow handles
+  // that by opening the song-detail Dialog instead.
+  const inspectorVisible = useMediaQuery(INSPECTOR_QUERY);
+
+  const handleSelectRow = (row: WorklistRow) => {
+    selectWorklistRow(row, { inspectorVisible, setSelectedPath });
+  };
+
   return (
     <div className="flex-1 flex h-full w-full min-h-0 overflow-hidden relative bg-background">
       {/* Left Column: File Tree & Collections */}
@@ -75,7 +91,7 @@ export function WorkstationView() {
         <WorkstationToolbar onOpenDirPicker={() => setDirPickerOpen(true)} />
         <WorkstationTable
           activeRow={activeRow}
-          onSelectRow={(row) => setSelectedPath(row.fullPath)}
+          onSelectRow={handleSelectRow}
         />
       </div>
 

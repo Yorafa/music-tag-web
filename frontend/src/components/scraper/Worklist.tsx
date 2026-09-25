@@ -52,16 +52,12 @@ import {
   DropdownMenuItem,
 } from '@/components/ui/dropdown-menu';
 import { useWorklistStore, type WorklistGrouping } from '@/store/useWorklistStore';
-import { editorActions, useEditorStore } from '@/store/useEditorStore';
-import { useNoticeStore } from '@/store/useNoticeStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
-import { readTagsFromPath } from '@/lib/id3Reader';
 import {
   COVER_PLACEHOLDER_GRADIENTS,
   inspectCoverSrc,
   resolveCoverSrc,
 } from '@/utils/cover';
-import { needsMusicInfoRefetch } from '@/utils/persistMusicInfo';
 import { toInitialChar, toTrimmedString } from '@/utils/string';
 import { cn } from '@/lib/utils';
 import { buildMediaUrl as sharedBuildMediaUrl } from '@/lib/mediaUrl';
@@ -225,50 +221,16 @@ function WorklistRowView({
   const coverId = stableIdFromRow(fullPath);
   const artist = musicInfo?.artist ? toTrimmedString(musicInfo.artist) : '';
 
-  /** Open the detail Dialog with this row's id3 hydrated.
-   *  - If the row has a cached `musicInfo` snapshot, hydrate from it.
-   *  - Otherwise fire an inline /api/music_id3/ to load whatever the
-   *    file currently has on disk, then seed the row's cache so the
-   *    next click on the same row is instant. Mirrors the pre-refactor
-   *    FileBrowser cell-click path. */
+  /** Open the detail Dialog with this row's id3 hydrated. Delegates to
+   *  the shared openEditorForRow so the hydration order and the
+   *  stale-response race guard stay identical across every row list. */
   const openEditor = async () => {
-    editorActions.setSelectedFile(fileName);
-    editorActions.setFullPath(fullPath);
-    editorActions.setFadeShowDetail(false);
-    editorActions.setSongList([]);
-    // Optimistic hydration so the editor mounts without a blank-field
-    // flash; the inline fetch below overrides it once it resolves.
-    editorActions.setMusicInfo(musicInfo ?? {});
-    editorActions.setEditorOpen(true);
-
-    // `needsMusicInfoRefetch` rather than "any non-null field" — lightweight
-    // caches from localStorage keep title/artist but strip data-URI covers,
-    // so we still re-fetch to restore album art (and any other dropped
-    // heavy fields) on open.
-    if (needsMusicInfoRefetch(musicInfo)) {
-      try {
-        const info = await readTagsFromPath(fullPath);
-        // Race guard: a newer click may have already switched the
-        // editor's fullPath/selectedFile to a different row. Skip
-        // the apply in that case so an in-flight slow response for
-        // Row A can't overwrite the freshly-mounted Row B.
-        const stillCurrent =
-          useEditorStore.getState().fullPath === fullPath &&
-          useEditorStore.getState().selectedFile === fileName;
-        if (!stillCurrent) return;
-        if (Object.values(info).some(v => v != null)) {
-          editorActions.setMusicInfo(info);
-          // Seed the row's lazy cache so subsequent clicks skip the
-          // network round-trip.
-          useWorklistStore.getState().setMusicInfo(fullPath, info);
-        }
-      } catch (err) {
-        // Network/transport/parse error: surface so the user can
-        // tell apart "fetch failed" from "tags actually empty".
-        const msg = err instanceof Error ? err.message : String(err);
-        useNoticeStore.getState().push(`读取标签失败: ${msg}`, 'warn');
-      }
-    }
+    await openEditorForRow({
+      fileName,
+      fullPath,
+      musicInfo: musicInfo ?? null,
+      cache: (info) => useWorklistStore.getState().setMusicInfo(fullPath, info),
+    });
   };
 
   const play = (e: React.MouseEvent) => {

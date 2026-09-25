@@ -8,6 +8,7 @@ import {
   ChevronRight,
   LogOut,
   Radio,
+  X,
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { NoticeCenterButton } from '@/components/notice/NoticeCenterButton';
@@ -23,6 +24,13 @@ interface Props {
   onSelectSection: (section: NavSection) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  /** Drawer variant. When provided, renders a close control in the
+   *  brand header and hides the collapse toggle — "collapse" has no
+   *  meaning for an overlay that is either open or closed, and the
+   *  toggle used to be wired to dismiss the drawer behind a label that
+   *  said "collapse". */
+  onClose?: () => void;
+  closeLabel?: string;
 }
 
 const NAV_ITEMS: { id: NavSection; label: string; icon: React.ElementType; description: string }[] = [
@@ -63,6 +71,8 @@ export function Sidebar({
   onSelectSection,
   collapsed,
   onToggleCollapse,
+  onClose,
+  closeLabel = '关闭导航',
 }: Props) {
   const logout = useAuthStore((s) => s.logout);
   const worklistCount = useWorklistStore((s) => s.rows.length);
@@ -101,6 +111,24 @@ export function Sidebar({
             </div>
           )}
         </div>
+
+        {/* Drawer close control. It lives in the header row rather than
+            being absolutely positioned by the parent: an absolutely
+            placed button had to be anchored to a hardcoded wrapper
+            width that did not match this component's own responsive
+            width, so it drifted into the gap beside the sidebar and read
+            as a stray floating control. */}
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={closeLabel}
+            title={closeLabel}
+            className="ml-auto shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Navigation Menu */}
@@ -177,23 +205,27 @@ export function Sidebar({
           </button>
         </div>
 
-        {/* Collapse Toggle Button */}
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          className={cn(
-            'w-full flex items-center gap-2 py-1.5 px-2 rounded-lg text-[11px] text-muted-foreground/70 hover:text-foreground hover:bg-muted/40 transition-colors',
-            collapsed ? 'justify-center' : 'justify-between',
-          )}
-          title={collapsed ? '展开侧边栏' : '折叠侧边栏'}
-        >
-          {!collapsed && <span>收起侧边栏</span>}
-          {collapsed ? (
-            <ChevronRight className="w-3.5 h-3.5" />
-          ) : (
-            <ChevronLeft className="w-3.5 h-3.5" />
-          )}
-        </button>
+        {/* Collapse Toggle Button — desktop only. In the drawer variant
+            the panel is dismissed via onClose, and a control labelled
+            "collapse" that actually closes the overlay is a lie. */}
+        {!onClose && (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className={cn(
+              'w-full flex items-center gap-2 py-1.5 px-2 rounded-lg text-[11px] text-muted-foreground/70 hover:text-foreground hover:bg-muted/40 transition-colors',
+              collapsed ? 'justify-center' : 'justify-between',
+            )}
+            title={collapsed ? '展开侧边栏' : '折叠侧边栏'}
+          >
+            {!collapsed && <span>收起侧边栏</span>}
+            {collapsed ? (
+              <ChevronRight className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronLeft className="w-3.5 h-3.5" />
+            )}
+          </button>
+        )}
       </div>
     </aside>
   );

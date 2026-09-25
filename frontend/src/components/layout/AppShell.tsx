@@ -31,7 +31,6 @@ import {
   sanitizeStoredWidth,
 } from '@/components/layout/splitLayout';
 import { cn } from '@/lib/utils';
-import { X } from 'lucide-react';
 
 export type AppSection = NavSection;
 export type AppMode = 'play' | 'scrape'; // Backward compat
@@ -135,25 +134,26 @@ export function AppShell({ initialSection }: Props) {
 
       {/* Mobile Navigation Drawer Overlay */}
       {mobileNavOpen && (
-        <div className="fixed inset-0 z-50 md:hidden flex">
+        <div className="fixed inset-0 z-50 md:hidden">
+          {/* Scrim. Dismissal target for taps outside the panel. */}
           <div
-            className="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity"
+            className="absolute inset-0 bg-black/60 backdrop-blur-xs transition-opacity"
             onClick={() => setMobileNavOpen(false)}
           />
-          <div className="relative w-64 h-full z-50 flex flex-col shadow-2xl animate-in slide-in-from-left duration-200">
-            <button
-              type="button"
-              onClick={() => setMobileNavOpen(false)}
-              className="absolute right-2.5 top-3 z-50 w-7 h-7 rounded-full bg-muted/80 text-muted-foreground hover:text-foreground flex items-center justify-center"
-              aria-label="关闭导航"
-            >
-              <X className="w-4 h-4" />
-            </button>
+          {/* The panel shrink-wraps the Sidebar instead of declaring a
+              width of its own. It used to hardcode w-64 (256px) around a
+              Sidebar that is w-56 (224px) on phones and sm:w-60 (240px)
+              above that: 32px and 16px of scrim showed through as a dark
+              strip down the right edge, and the absolutely-positioned
+              close button was anchored to the 256px box, so it floated in
+              that strip, detached from the sidebar it belonged to. */}
+          <div className="relative h-full z-10 flex flex-col shadow-2xl animate-in slide-in-from-left duration-200 max-w-[85vw]">
             <Sidebar
               activeSection={section}
               onSelectSection={setSection}
               collapsed={false}
               onToggleCollapse={() => setMobileNavOpen(false)}
+              onClose={() => setMobileNavOpen(false)}
             />
           </div>
         </div>
