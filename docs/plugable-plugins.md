@@ -215,3 +215,73 @@ Web UI 来启 / 停 / 改 / 测 plugin，无需重启。约 ½ 天工作量。
 - [ ] 前端 `useSourceStore.ts` + `SourcePickerModal` + `SearchPanel` + Settings 页面合并 → `tsc` clean
 - [ ] Manual e2e：放一个 `sources/netease.js` 占位（Stage C 脚手架）后，前端**无需 rebuild**就在 UI 上显现为 disabled chip
 - [ ] `sourcesDefault` 常量已删除
+
+---
+
+## 11. Authentication contract
+
+未来的 plugin 作者在写一个新的 auth-protected endpoint、或扩展 `/api/token/*` 的时候，必须先把这一节的契约吃透——避免重复踩我们自己已经踩过的坑。本节对应的是 `internal/gateway/handler/auth.go` + `response.go` 当前实际锁定的实现，不要凭空想象。
+
+### 11.1 `/api/token/*` 三件套
+
+| Endpoint | 用途 | 成功响应 | 失败状态码 |
+|---|---|---|---|
+| `POST /api/token/` | 登录拿 access + refresh JWT | `200` + `{access, refresh}` (success envelope) | bad creds / placeholder secret → **401**；malformed JSON → **400** |
+| `POST /api/token/refresh/` | refresh 换新 access | `200` + `{access}` | invalid refresh / placeholder secret → **401**；malformed JSON → **400** |
+| `POST /api/token/verify/` | 校验现有 access | `200` + `{}` | invalid token / placeholder secret → **401**；malformed JSON → **400** |
+
+credential 内部走两条 path：bcrypt（带 `$2a/$2b/$2y` 前缀）和 plain（dev-only，subtle.ConstantTimeCompare）。详见 `handler/auth.go::loadUsers + verifyCred`。
+
+### 11.2 HTTP 状态码 helper 约定
+
+| HTTP status | 语义 | helper |
+|---|---|---|
+| `200 OK` | 业务成功 + 标准 envelope `{result:true, code:"200", data:..., message:"success"}` | `Success(c, msg, data)` / `SuccessData(c, data)` |
+| `200 OK` + envelope `result:false, code:"400"` | 业务失败，但客户端按 envelope 现存约定读 `data.result`（legacy 兼容） | `Failure(c, msg)` |
+| `400 Bad Request` | JSON body 解析失败（`c.ShouldBindJSON` 返 err） | `FailureStatus(c, http.StatusBadRequest, msg)` |
+| `401 Unauthorized` | credential / token 拒绝（wrong creds / invalid JWT / alg=none） | `FailureStatus(c, http.StatusUnauthorized, msg)` |
+| `502 Bad Gateway` | upstream network / source 失败（`<audio>` 消费端必须） | `FailureStatus(c, http.StatusBadGateway, msg)` |
+| `503 Service Unavailable` | asynq enqueue 失败 / source tmp down | `FailureStatus(c, http.StatusServiceUnavailable, msg)` |
+| `500 Internal Server Error` | handler 内部 panic / 不可恢复 | `FailureStatus(c, http.StatusInternalServerError, msg)` |### 11.3 三条最容易踩的坑
+
+🚫 **(a) 新 endpoint 不要走 `Failure(c, msg)`。** 它返 `200 + JSON envelope`，浏览器感知不到错误。具体地：`<audio>`（消费 `/api/stream/`）在 HTTP 200 + 非音频 JSON 时，**silently drop 不触发 `error` 事件**，导致 toast 推不出。任何浏览器 / HTTP-consumer endpoint 必须用 `FailureStatus`，让 HTTP status 表示错误语义。
+
+🚫 **(b) Envelope `code` 字段保持 `"400"` 不变。** `FailureStatus` 故意不解耦 HTTP status 与 envelope `code: string`。原因：前端 axios interceptor 历史上有 `data.code === "400"` 检测「任何 failure」的 idiom。让 `code` 跟随 HTTP status（`strconv.Itoa(status)`）会 **silently miss** 502/503 这一类流错误。HTTP 是 browser consumer 的 signal；envelope `code` 是 axios-style consumer 的 signal。两者不同的语义层，**不要 mirror**。
+
+🚫 **(c) 不要发明 alternative Keyfunc。** `jwtKeyFunc(secret)` 用 type assertion `t.Method.(*jwt.SigningMethodHMAC)` 强制 HMAC-only，已经把 alg=none (空签名)、alg=RS256 (asymmetric 误导)、wrong-key HS256 三条攻击路径都堵了。新 endpoint 直接复用 `jwtKeyFunc(cfg.JWTSecret)`。
+
+### 11.4 错误消息：通用，不泄露
+
+写 plugin 时面对 user-supplied input 的错误，文案**不允许** 解锁是哪一条 failed：
+
+- Login 用 `用户名或密码错误` 覆盖 unknown-user 和 wrong-password 两条 path（避免 user enumeration）
+- Refresh / Verify 用 `Invalid refresh token` / `Invalid token` / `Invalid token claims`
+- placeholder-secret refusal 在 HTTP response 上同样回 `用户名或密码错误` / `Invalid refresh token` / `Invalid token`，但在 **log** 里 emit `[auth] REFUSED /api/token/{,/refresh/,/verify/}: JWT_SECRET is the placeholder value` 供 ops grep 告警。不要把 log 信息直接漏到 user response。
+
+### 11.5 与前端的契约 hooks
+
+新加 endpoint 时 keep in mind：
+
+- `frontend/src/api/client.ts` 的 axios interceptor 在 **401 时自动** 调 `useAuthStore.logout()`(清 token + 跳 LoginPage)（**只** 401，不对 502/503 触发）。这是预期的：token 过期 → 重新登录。
+  - 反过来：新加 endpoint 如果想表达 "transient auth failure please retry"，**用 503 而不是 401**，否则用户被踢下线。即 "401 = 必须重新登录" 的语义已硬挂钩。
+- `frontend/src/pages/LoginPage.tsx` 用 **native `fetch`** 而非 axios。所以 `/api/token/` 上的 401 **不会** 触发上面那条 interceptor logout。这是故意的：登录失败不能让 token 反而被清。
+  - 反过来：新加 login-like endpoint（用 JS native fetch）约定保持。
+
+### 11.6 测试覆盖 (snapshot pattern)
+
+新 endpoint 提交前**建议**至少覆盖：
+
+- 200 happy path（返回 envelope shape）
+- 401（credential / token 拒绝）—— 至少用 alg=none、wrong-key、invalid-claims 三种 token 各覆盖一次，测试 alg gate / signature verify / claims dispatch
+- 400（malformed JSON）—— 发 `{` / `not-json-at-all` 等
+- 502 / 503（upstream / enqueue 失败）—— 如果 endpoint 走 upstream / queue，建议有 fake-source 或 stub queue 复现失败
+
+参考实现：现有 `internal/gateway/handler/auth_test.go::TestLogin_InvalidJSONReturns400` + `TestRefreshToken_RejectsAlgNone` + `TestVerifyToken_RejectsAlgNone` + `TestRefreshToken_RejectsForeignAlg` + `TestRefreshToken_RejectsHS256WithWrongSecret` + `TestLogin_RejectsWrongBcryptCredential` + `TestLogin_ConstantTimeRejectsWrongPlain` + `TestLogin_LoadUsersBcryptPrefixDetection` 各自锁定了一个分支。
+
+### 11.7 Cross-ref
+
+- Handlers：`internal/gateway/handler/auth.go`（Login、RefreshToken、VerifyToken、loadUsers、verifyCred、jwtKeyFunc、generateJWT）
+- Envelope helpers：`internal/gateway/handler/response.go`（`Success` / `SuccessData` / `Failure` / `FailureStatus`）
+- JWT 校验中间件：`internal/gateway/middleware/auth.go::JWTAuth`（受保护路由用 Authorization header 提取后 `jwt.Parse` 校验；与 `/api/token/*` 入口是两条独立 path）
+- Tests：`internal/gateway/handler/auth_test.go`（auth）+ `internal/gateway/handler/stream_test.go::TestStreamAudio_*`（stream 是另一个 status-code contract 锁定模板）
+- Frontend：`frontend/src/api/client.ts`（axios 401→logout interceptor）+ `frontend/src/pages/LoginPage.tsx`（native fetch 绕开 interceptor）

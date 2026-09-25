@@ -6,7 +6,7 @@
 <div class="column" align="middle">
     <a href="https://go.dev/dl/"><img src="https://img.shields.io/badge/Go-1.23-00ADD8.svg" alt="Go"></a>
     <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-19-149eca.svg" alt="React"></a>
-    <a href="https://grpc.io/"><img src="https://img.shields.io/badge/gRPC-7%20plugins-blueviolet?style=plastic" alt="gRPC plugins"></a>
+    <a href="https://grpc.io/"><img src="https://img.shields.io/badge/gRPC-8%20plugins-blueviolet?style=plastic" alt="gRPC plugins"></a>
     <img src="https://img.shields.io/badge/self--hosted-Docker-orange?style=plastic" alt="self-hosted">
     <img src="https://img.shields.io/badge/platform-amd64/arm64-pink?style=plastic" alt="docker-platform">
 </div>
@@ -31,13 +31,13 @@
 |---|---|
 | HTTP 服务 | Go 1.23 + gin (gateway：API + React SPA 静态 + `/media/*` Range 流) |
 | 异步任务 | asynq + Redis (worker) |
-| 音乐源 | **gRPC 微服务**：netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid — 各自独立进程 |
+| 音乐源 | **gRPC 微服务**：7 个元数据源（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）+ 1 个下载源（youtube）— 各自独立进程 |
 | Tag I/O | `bogem/id3v2` + `dhowden/tag`（纯 Go 库，无 Python FFI） |
 | 前端 | React 19 + Vite 7 + TypeScript + Tailwind 4 + shadcn/ui + Zustand |
 | 鉴权 | JWT in-memory + bcrypt；fail-closed 默认值检测 |
 | 加密 | gRPC TLS 可选（env `GRPC_USE_TLS=1` + 可选 `GRPC_TLS_CA_FILE`） |
-| 部署 | 单条 `docker compose up -d --build` 拉起 gateway + worker + 7 gRPC plugin + redis（nginx 已合并进 gateway，不再有独立服务） |
-| Docker image | ~80 MB（Alpine + Go binary + yt-dlp） |
+| 部署 | 单条 `docker compose up -d --build` 拉起 gateway + worker + 8 gRPC plugin + redis（nginx 已合并进 gateway，不再有独立服务；React SPA 已烘进 gateway 镜像，不需要 host 侧先 build） |
+| Docker image | gateway ~17 MB、worker ~16 MB（纯 Go）、7 个音乐源插件各 ~13 MB、youtube 插件 ~190 MB（唯一带 yt-dlp + ffmpeg 的镜像） |
 
 完整 operator 视角的安全默认值见 [`SECURITY.md`](SECURITY.md)；plugable plugin 设计草图见 [`docs/plugable-plugins.md`](docs/plugable-plugins.md)。
 
@@ -58,6 +58,7 @@
 - 搜索结果去重 + 按匹配度排序 ✅
 - AcoustID：没有元数据 / 文件名混乱的歌曲自动指纹识别匹配 ✅
 - 搜索源动态启用 / 关闭（`localStorage` per-user 持久化，SettingsModal 中切换） ✅
+- per-source YAML config override (C.4 Stage B) ✅ — 编辑 `data/sources/<name>.yaml` 改 `api_base` + `secrets.<plugin>Secret`，gateway 启动期加载 + `POST /api/sources/refresh/` 热重载（不需重启）；SettingsModal “Sources” tab 查看当前生效 + 重载按钮，secret 不暴露明文（仅 `hasSecret` 布尔）。Plugin server.go 各自 `SetSecret` / `SetAPIBase` method（const→var demote）。
 
 ### 歌词 ✅
 - 多源歌词拉取（网易云 / 酷我 / 咪咕 / QQ） ✅
@@ -71,11 +72,10 @@
 
 ### 曲库 / 文件管理 ✅
 - 目录递归扫描（symlink-aware） ✅
-- 多维度排序：文件名 / 大小 / 修改时间 ✅
-- 按艺术家 / 专辑分组 UI 🚧 — sort 已完成，grouping UI 仅部分草稿
-- 文件名解析自动补全 tag 🚧 — 前端 `parseFromFilename` 已实现，后端批量回写未串
-- 整轨 APE / FLAC + CUE 自动切割分轨 ❌ — worker 镜像未装 `shntool` / `cuebreakpoints`
-- ffmpeg 任意格式批量转换 ❌ — worker 镜像未装 ffmpeg binary
+- 多维度排序：文件名 / 大小 / 修改时间 ✅- 按艺术家 / 专辑 分组 UI ✅ — `useWorklistStore.grouping` (持久化 `worklist.grouping.v1` localStorage) + chip row `[无] [专辑] [歌手]` + `GroupHeaderRow.tsx` (`var(--surface-2)` 背景 + chevron toggle + count badge) + 跨 group 多选 + collapse state session-only
+- 文件名解析前后端 round-trip ✅ — Server preview `POST /api/tag/preview_parse_filenames/` 返回 token + 每行 `{artist,title,status}` (10 分钟 TTL cache)；modal 可覆盖；apply `POST /api/tag/apply_parsed_filenames/` 走 asynq `TypeApplyParsedFilenames` worker 批量写 tag。双向 contract test: Go + TS 双引擎在 200+ shared NFC fixture 上 deep-equal (SHA-256 fixture 一致校验)
+- 整轨 APE / FLAC + CUE 自动切割分轨 ❌ — 仓库内没有 CUE 解析 / 切轨代码（镜像也未装 `shntool` / `cuebreakpoints`）
+- ffmpeg 任意格式批量转换 ❌ — youtube 插件镜像**已装** ffmpeg（yt-dlp `--extract-audio` 转码需要，worker 委托该插件执行下载），缺的是转换 task 与 UI，不是 binary
 
 ### 文本清洗 / 编码 🚧
 - 批量 tag 文本替换（脏标签、乱码清理） 🚧 — 前端 Replace 模态框已实现，无后端 bulk endpoint
@@ -93,8 +93,8 @@
 - 播放数据柱形图 / 折线图 ❌ — DB `AccessedDate` 列已 reserved 但未消费；前端无 chart 组件
 - 外部播放端统计上报（Subsonic-compatible `/rest/` endpoints） ❌
 
-### 操作日志 ❌
-- 完整 changelog（每次编辑可追溯） ❌ — DB 没有 `OperationLog` 模型，前端无对应 UI surface
+### 操作日志 ✅
+- 完整 changelog（每次编辑可追溯） ✅ — GORM `OperationLog` 模型与持久化 + 自动记录单曲/批量标签编辑、自动刮削、文件名解析应用、目录整理、音频下载与封面上传 + SettingsModal「操作日志」管理面板（支持操作类型/状态多维过滤、模糊检索、查看变动详情与一键清空日志）
 
 ➡️ 完整 status 表 + 每个 feature 的 `path` 引用见 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md)。
 
@@ -172,12 +172,16 @@ cp .env.example .env           # 与 docker-compose.yml 同目录，Compose 才�
 
 ### 2. Volume pre-flight + 构建 + 启动全栈
 
-`docker-compose.yml` 的默认值 `./music`、`./data`、`./static` 都是**相对 compose 文件路径**，首次运行必须存在；否则 `docker compose up` 会报 `volume source not found`。`./static` 默认是个**空仓库目录**（git 不跟踪），需要先构建一次前端才有 React SPA 产物：`cd frontend && npm install && npm run build`，产物落盘到仓库根 `./static/dist/`。NAS 用户使用 SMB / NFS 挂载，先在宿主机准备好路径。
+`docker-compose.yml` 的默认值 `./music`、`./data` 都是**相对 compose 文件路径**，首次运行必须存在；否则 `docker compose up` 会报 `volume source not found`。NAS 用户使用 SMB / NFS 挂载，先在宿主机准备好路径。
+
+**React SPA 不需要手动构建。** 镜像内已包含前端：`Dockerfile.gateway` 的 `frontend` stage 会跑 `npm run build` 并把产物 `COPY` 进 `/app/static/dist`。因此 compose 里**没有** `./static` 挂载 —— 手动加一个反而会用空目录遮蔽镜像内的 bundle，让 `/` 返回 "SPA not built"。仓库根的 `./static/` 只是本地 `go run` gateway 时的开发目录（git 不跟踪）。
 
 ```bash
-mkdir -p ./music ./data         # 首次需要（相对仓库根路径），./static 由 npm run build 生成
+mkdir -p ./music ./data         # 首次需要（相对仓库根路径）
 docker compose up -d --build    # 后续只要不加 plugin / 不改 .env，重启即可跳过 --build
 ```
+
+不用 Docker 时才需要手动构建前端：`cd frontend && npm install && npm run build`，产物落盘到仓库根 `./static/dist/`，再把 `STATIC_DIR` 指向仓库根 `./static`。
 
 首次启动会自动构建：gateway（含 API + 静态 SPA + `/media/*` 音乐流）+ worker + 7 个 gRPC 音乐源插件（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）+ redis。**原 nginx 反向代理已合并进 gateway；不再需要独立的 `nginx` 服务或 `nginx.conf`。**
 
@@ -196,11 +200,11 @@ docker compose up -d --build    # 后续只要不加 plugin / 不改 .env，重�
 - **CORS 白名单（无反射）**：`internal/gateway/middleware/cors.go` 读 `CORS_ALLOWED_ORIGINS`，空列表 = 拒绝全部跨域。
 - **SSRF 拒 169.254 / RFC1918**：远端封面拉取走 `internal/netguard/ssrf.go`，解析后拒绝 loopback / 私有网段 / link-local / multicast。
 - **路径遍历 `SafeJoin`**：所有用户传入路径强制 containment 在 `MUSIC_DIR` 下。
-- **yt-dlp 参数 sanitize**：`internal/tasks/yt_dlp_validate.go` 阻止 `--exec=` 注入，format / quality / output 走 enum。
+- **yt-dlp 参数 sanitize**：`internal/ytdlp` 阻止 `--exec=` 注入，format / quality / output 走 enum；三层防线（gateway 预校验 → worker 重放校验 → youtube 插件拼 argv 前再校验）。
 - **admin / JWT 默认值 Fail-closed**：`config.Load()` 看到占位 `JWT_SECRET` 会 `log.Fatalf`；`ADMIN_USERS` 未设且无 dev flag → `loadUsers()` 返回空。
 - **gRPC TLS 可选**：插件间互联走 plaintext 或 TLS，env 控制 `GRPC_USE_TLS=1` + 可选 `GRPC_TLS_CA_FILE`。
 
-这些项的测试分别落在 `internal/utils/pathjoin_test.go`、`internal/netguard/ssrf_test.go`、`internal/tasks/yt_dlp_validate_test.go`、`internal/gateway/middleware/cors_test.go`。
+这些项的测试分别落在 `internal/utils/pathjoin_test.go`、`internal/netguard/ssrf_test.go`、`internal/ytdlp/sanitize_test.go`、`internal/gateway/middleware/cors_test.go`。
 
 ---
 
