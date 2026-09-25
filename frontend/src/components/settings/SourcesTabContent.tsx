@@ -1,165 +1,139 @@
-/* eslint-disable react-hooks/set-state-in-effect -- Fetch-on-mount in settings tab */
-import { useEffect, useState } from 'react';
-import { Button } from '@/components/ui/button';
+import { useEffect } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import {
-  RefreshCw,
-  Loader2,
-  Lock,
-  Check,
-  X,
-} from 'lucide-react';
-import {
-  refreshSources,
-  getSourceOverrides,
-} from '@/api/client';
-import { useNoticeStore } from '@/store/useNoticeStore';
+import { Loader2, Music4, Download } from 'lucide-react';
+import { useSourceStore } from '@/store/useSourceStore';
 import { cn } from '@/lib/utils';
+import type { SourceInfo } from '@/types';
 
+/** The capability flags worth surfacing, in the order a user cares about
+ *  when asking "can I search this one, and can I preview it?".
+ *
+ *  These mirror `plugin.TagSource`'s capability methods, so a plugin that
+ *  gains a capability starts showing it here with no frontend change —
+ *  the labels are the only thing this file hard-codes. */
+const CAPABILITIES: ReadonlyArray<{
+  key: keyof SourceInfo;
+  label: string;
+}> = [
+  { key: 'searchable', label: '搜索' },
+  { key: 'lyric', label: '歌词' },
+  { key: 'supports_id3', label: '刮削' },
+  { key: 'supports_audio_url', label: '试听' },
+];
+
+/**
+ * 音源 — a read-only view of the plugin registry.
+ *
+ * This panel used to show runtime `api_base` / secret overrides and a
+ * 「重载配置」 button, both of which call endpoints that have returned 501
+ * since REVIEW.md P0-2 retired them: the plugins run in their own
+ * containers and the gRPC contract has no RPC able to carry an override
+ * across that boundary, so the feature could never have applied one. The
+ * UI kept asking anyway, and every visit to this tab showed a red
+ * "GET /api/sources/override/ 失败: … 501" banner above an empty list.
+ *
+ * What replaces it is the part that does work: which plugins the gateway
+ * has registered and what each one can do. Overrides still belong in
+ * `data/sources/*.yaml` on disk, applied by restarting the plugin
+ * container — the note below says so rather than offering a button that
+ * cannot deliver.
+ */
 export function SourcesTabContent() {
-  type OverrideRow = {
-    name: string;
-    hasOverride: boolean;
-    apiBase?: string;
-    hasSecret: boolean;
-  };
-  const [overrides, setOverrides] = useState<OverrideRow[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await getSourceOverrides();
-      setOverrides(res.overrides);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
+  const sources = useSourceStore((s) => s.sources);
+  const loaded = useSourceStore((s) => s.loaded);
+  const loadSources = useSourceStore((s) => s.loadSources);
 
   useEffect(() => {
-    void refresh();
-  }, []);
+    // loadSources swallows its own errors and flips `loaded` either way,
+    // so an unreachable gateway shows the empty-state below rather than
+    // an error banner — this tab is informational and must never look
+    // broken. Hence no `.catch` here: it could never fire.
+    void loadSources();
+  }, [loadSources]);
 
-  const onReload = async () => {
-    setRefreshing(true);
-    try {
-      const res = await refreshSources();
-      const notice = useNoticeStore.getState();
-      notice.push(
-        `已重载 ${res.loaded} 个 override，触发 ${res.refreshed} 个 setter 调用`,
-        'info',
-      );
-      await refresh();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      useNoticeStore.getState().push(`重载失败: ${msg}`, 'error');
-    } finally {
-      setRefreshing(false);
-    }
-  };
+  const loading = !loaded;
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs text-muted-foreground">
-          当前生效的 plugin override（来自服务器{' '}
-          <code className="px-1 py-0.5 rounded bg-muted/40 text-[10px] font-mono">
-            data/sources/*.yaml
-          </code>
-          ）。secret 栏只显示「已配置」状态，不暴露明文。
-        </p>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onReload}
-          disabled={refreshing || loading}
-          aria-label="重载 source overrides"
-          title="POST /api/sources/refresh/ — 不重启 gateway 即热重载 YAML"
-        >
-          {refreshing ? (
-            <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-          ) : (
-            <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-          )}
-          重载配置
-        </Button>
-      </div>
+      <p className="text-xs text-muted-foreground">
+        网关已注册的音源与其能力。运行时 override 不可用：插件运行在独立容器中，
+        修改{' '}
+        <code className="px-1 py-0.5 rounded bg-muted/40 text-[10px] font-mono">
+          data/sources/&lt;name&gt;.yaml
+        </code>{' '}
+        后需重启对应插件容器才会生效。
+      </p>
 
-      {error && (
-        <div
-          role="alert"
-          className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded px-2 py-1.5"
-        >
-          GET /api/sources/override/ 失败: {error}
-        </div>
-      )}
-
-      {loading && !error ? (
+      {loading ? (
         <div className="text-xs text-muted-foreground flex items-center gap-2 py-4 justify-center">
           <Loader2 className="w-3.5 h-3.5 animate-spin" />
           加载中…
         </div>
-      ) : overrides && overrides.length === 0 ? (
-        <div className="text-xs text-muted-foreground bg-muted/40 rounded px-3 py-4 text-center space-y-1">
-          <p>暂无 override。</p>
-          <p className="opacity-70">
-            编辑服务器{' '}
-            <code className="font-mono text-[10px] bg-muted/60 px-1 py-0.5 rounded">
-              data/sources/&lt;name&gt;.yaml
-            </code>{' '}
-            后点击「重载配置」。
-          </p>
+      ) : sources.length === 0 ? (
+        <div className="text-xs text-muted-foreground bg-muted/40 rounded px-3 py-4 text-center">
+          {/* The store reports an unreachable gateway and a registry with
+           * zero plugins identically (sources: [], loaded: true), so this
+           * one message has to cover both without claiming to know which. */}
+          未获取到音源列表：网关未注册任何音源，或无法连接网关。
         </div>
       ) : (
-        <div className="space-y-1.5 max-h-[40vh] overflow-y-auto">
-          {(overrides ?? []).map((ov) => (
-            <Card key={ov.name} className="bg-muted/30">
+        <div className="space-y-1.5 max-h-[52vh] overflow-y-auto">
+          {sources.map((s) => (
+            <Card key={s.name} className="bg-muted/30">
               <CardContent className="py-2.5 px-3 space-y-1.5">
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-sm font-medium">{ov.name}</span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-mono text-sm font-medium">
+                    {s.display_name || s.name}
+                  </span>
+                  <span className="font-mono text-[10px] text-muted-foreground">
+                    {s.name}
+                  </span>
                   <Badge
                     variant="outline"
-                    className={cn(
-                      'text-[10px] px-1.5 py-0 h-4',
-                      ov.hasOverride
-                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                        : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/30',
-                    )}
+                    className="text-[10px] px-1.5 py-0 h-4 gap-0.5"
+                    title={
+                      s.kind === 'download'
+                        ? '下载源：提供音频下载，不参与标签刮削'
+                        : '标签源：提供搜索 / 歌词 / ID3 刮削'
+                    }
                   >
-                    {ov.hasOverride ? (
-                      <>
-                        <Check className="w-2.5 h-2.5 mr-0.5" /> 已 override
-                      </>
+                    {s.kind === 'download' ? (
+                      <Download className="w-2.5 h-2.5 mr-0.5" />
                     ) : (
-                      <>
-                        <X className="w-2.5 h-2.5 mr-0.5" /> 默认
-                      </>
+                      <Music4 className="w-2.5 h-2.5 mr-0.5" />
                     )}
+                    {s.kind === 'download' ? '下载源' : '标签源'}
                   </Badge>
-                  {ov.hasSecret && (
+                  {s.default_on && (
                     <Badge
                       variant="outline"
-                      className="text-[10px] px-1.5 py-0 h-4 bg-amber-500/10 text-amber-400 border-amber-500/30"
-                      title="secret 已配置 (明文不在 UI 暴露)"
+                      className="text-[10px] px-1.5 py-0 h-4 border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+                      title="默认参与云端检索"
                     >
-                      <Lock className="w-2.5 h-2.5 mr-0.5" /> secret 已设
+                      默认开启
                     </Badge>
                   )}
                 </div>
-                {ov.apiBase && (
-                  <div
-                    className="text-[11px] font-mono text-muted-foreground truncate"
-                    title={ov.apiBase}
-                  >
-                    api_base: {ov.apiBase}
-                  </div>
-                )}
+                <div className="flex flex-wrap items-center gap-1">
+                  {CAPABILITIES.map(({ key, label }) => {
+                    const on = Boolean(s[key]);
+                    return (
+                      <Badge
+                        key={String(key)}
+                        variant="outline"
+                        className={cn(
+                          'text-[10px] px-1.5 py-0 h-4',
+                          on
+                            ? 'bg-zinc-500/10 text-zinc-300 border-zinc-500/30'
+                            : 'bg-transparent text-muted-foreground/50 border-border/50',
+                        )}
+                      >
+                        {label}
+                      </Badge>
+                    );
+                  })}
+                </div>
               </CardContent>
             </Card>
           ))}

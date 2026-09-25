@@ -193,44 +193,15 @@ export async function downloadToLibrary(params: {
   return data;
 }
 
-/** POST /api/sources/refresh/ — Stage B of docs/plugable-plugins.md.
- *  Asks the gateway to re-read `data/sources/*.yaml` and dispatch
- *  `SetSecret` / `SetAPIBase` calls to every registered plugin.
- *
- *  Response shape (matches `handler/source.go::RefreshSourceOverrides`):
- *    { refreshed: number  // successful setter calls
- *    , loaded:    number  // distinct YAML files parsed
- *    }
- *
- *  Caller (SettingsModal "Sources" tab) renders both as a toast
- *  ("已重载 N 个 override,触发 N 个 setter 调用"). Errors propagate
- *  via the existing axios response interceptor; useNoticeStore.push
- *  is the standard channel for surfacing them to the user. */
-export async function refreshSources(): Promise<{
-  refreshed: number;
-  loaded: number;
-}> {
-  const { data } = await api.post('sources/refresh/');
-  return data;
-}
-
-/** GET /api/sources/override/ — read-only view of the last-applied
- *  overrides. Per Plan C.4 Open Details H the value-side secret slot
- *  is REDACTED server-side; the response carries `hasSecret: bool`
- *  only. Cached client-side for the duration of a session — Stage B
- *  doesn't subscribe to override updates, so a refresh-then-render
- *  flow always reads through this function. */
-export async function getSourceOverrides(): Promise<{
-  overrides: Array<{
-    name: string;
-    hasOverride: boolean;
-    apiBase?: string;
-    hasSecret: boolean;
-  }>;
-}> {
-  const { data } = await api.get('sources/override/');
-  return data;
-}
+// NOTE: `sources/refresh/` and `sources/override/` are intentionally
+// absent. Both routes have answered 501 since REVIEW.md P0-2 retired
+// runtime overrides — the plugins live in their own containers and the
+// gRPC contract has no RPC able to carry an override across that
+// boundary, so the old handlers could only ever have applied nothing.
+// The routes stay registered (see handler/source.go) so a cached bundle
+// gets a clear machine-readable answer rather than a 404 that reads like
+// a deploy problem; the client just stops asking. Overrides belong in
+// `data/sources/*.yaml` and take effect on plugin-container restart.
 
 // ─── C.2 Filename Parse: preview → apply round-trip ────────────────
 
