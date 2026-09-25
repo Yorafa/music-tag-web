@@ -14,8 +14,11 @@ import (
 //   - status: string (optional, e.g. success, failed, partial)
 //   - search: string (keyword search on target/details/operator/error_msg)
 func ListOperationLogs(c *gin.Context) {
-	page := atoiOr(c.Query("page"), 1)
-	pageSize := atoiOr(c.Query("page_size"), 20)
+	page, pageSize := clampPaging(
+		atoiOr(c.Query("page"), 1),
+		atoiOr(c.Query("page_size"), 20),
+		20,
+	)
 	action := c.Query("action")
 	status := c.Query("status")
 	search := c.Query("search")

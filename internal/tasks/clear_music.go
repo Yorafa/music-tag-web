@@ -71,9 +71,21 @@ func (h *ClearMusicHandler) ProcessTask(ctx context.Context, _ Task) error {
 			fmt.Printf("[clear] sqlite VACUUM failed (ignored): %v\n", err)
 		}
 	case "mysql":
+		// Table names come from the models' own TableName() rather than
+		// string literals (REVIEW.md P2-10). The old literals were all
+		// wrong — "track" vs music_track, "task_record" vs
+		// task_taskrecord, "track_attachment" vs music_attachment — and
+		// because the error was logged and ignored, every OPTIMIZE had
+		// been failing silently for the life of the feature. Deriving the
+		// names means a future model rename cannot desync this list.
 		for _, table := range []string{
-			"task_record", "track", "album", "artist", "genre",
-			"track_attachment", "music_folder",
+			db.TaskRecord{}.TableName(),
+			db.Track{}.TableName(),
+			db.Album{}.TableName(),
+			db.Artist{}.TableName(),
+			db.Genre{}.TableName(),
+			db.Attachment{}.TableName(),
+			db.Folder{}.TableName(),
 		} {
 			if err := h.DB.WithContext(ctx).Exec("OPTIMIZE TABLE " + table).Error; err != nil {
 				fmt.Printf("[clear] mysql OPTIMIZE %s failed (ignored): %v\n", table, err)

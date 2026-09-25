@@ -15,6 +15,19 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	// Register the image decoders used by the cover-art validation below.
+	//
+	// image.DecodeConfig only understands formats whose package has been
+	// linked in via one of these blank imports; the stdlib `image` package
+	// itself ships no codecs. Without them EVERY image is rejected with
+	// "image: unknown format" — which is exactly what fetchRemoteBytes was
+	// doing in production, silently breaking every remote cover fetch.
+	// Pinned to the formats taglib writes (JPEG is what tag/reader.go
+	// assumes when it has to pick a mime type).
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+
 	"go-music-tag/internal/audioext"
 	"go-music-tag/internal/audit"
 	"go-music-tag/internal/dedup"
@@ -229,6 +242,11 @@ func BatchUpdateID3(c *gin.Context) {
 
 // 注: BatchAutoUpdateID3 / TidyFolder 在 task.go 里已经接入 asynq，这里保持空。
 // UploadImage handles POST /api/upload_image/ — base64 returns (无 data URI 前缀)。
+// maxUploadImageBytes caps an uploaded cover. 20 MiB matches the cap
+// fetchRemoteBytes applies to a downloaded one, so both entry points into
+// the tag pipeline agree on the ceiling.
+const maxUploadImageBytes = 20 << 20
+
 func UploadImage(c *gin.Context) {
 	file, header, err := c.Request.FormFile("upload_file")
 	if err != nil {
@@ -236,11 +254,47 @@ func UploadImage(c *gin.Context) {
 		return
 	}
 	defer file.Close()
-	data, err := io.ReadAll(file)
+
+	// Size first: read at most one byte past the cap so an oversized upload
+	// is rejected without buffering the whole thing. The extra byte is what
+	// distinguishes "exactly at the cap" from "over it".
+	data, err := io.ReadAll(io.LimitReader(file, maxUploadImageBytes+1))
 	if err != nil {
 		Failure(c, "read error")
 		return
 	}
+	if len(data) > maxUploadImageBytes {
+		Failure(c, fmt.Sprintf("image too large (max %d MB)", maxUploadImageBytes>>20))
+		return
+	}
+	if len(data) == 0 {
+		Failure(c, "empty file")
+		return
+	}
+
+	// Content-shape validation (REVIEW.md P2-12). The bytes go straight into
+	// the ID3/APIC frame, so a non-image body would be written to the tag
+	// and every player would then fail on that track. fetchRemoteBytes
+	// already does this for the download path; uploads did not, which made
+	// the two entry points into the same tag inconsistent.
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		Failure(c, "invalid image: not a decodable image")
+		return
+	}
+	// A decompression-bomb guard: DecodeConfig reads only the header, so a
+	// tiny file can declare enormous dimensions and blow up any decoder that
+	// later materialises the pixels (both ours and the players').
+	const maxCoverPixels = 50_000_000 // e.g. 10000x5000
+	if cfg.Width <= 0 || cfg.Height <= 0 {
+		Failure(c, "invalid image: zero dimension")
+		return
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > maxCoverPixels {
+		Failure(c, fmt.Sprintf("image too large (%dx%d)", cfg.Width, cfg.Height))
+		return
+	}
+
 	filename := "cover.jpg"
 	if header != nil && header.Filename != "" {
 		filename = header.Filename
@@ -249,6 +303,9 @@ func UploadImage(c *gin.Context) {
 	audit.Log(c.Request.Context(), audit.ActionUploadCover, filename, "admin", audit.StatusSuccess, 1, map[string]interface{}{
 		"filename": filename,
 		"size":     len(data),
+		"format":   format,
+		"width":    cfg.Width,
+		"height":   cfg.Height,
 	}, nil)
 	SuccessData(c, b64)
 }

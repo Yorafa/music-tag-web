@@ -143,8 +143,11 @@ func UpdateScanFolder(c *gin.Context) {
 // initializing the gateway's DB handle). For now we return an empty list so
 // the endpoint stays callable.
 func ListTaskRecords(c *gin.Context) {
-	page := atoiOr(c.Query("page"), 1)
-	pageSize := atoiOr(c.Query("page_size"), 50)
+	page, pageSize := clampPaging(
+		atoiOr(c.Query("page"), 1),
+		atoiOr(c.Query("page_size"), defaultPageSize),
+		defaultPageSize,
+	)
 	batch := c.Query("batch")
 	state := c.Query("state")
 
@@ -191,8 +194,49 @@ func ListTaskRecords(c *gin.Context) {
 	})
 }
 
+// Pagination bounds shared by every list endpoint (REVIEW.md P2-9).
+//
+// ListTaskRecords previously passed page_size straight into Limit(), so
+// ?page_size=99999999 asked the DB for the whole table; audit.Query had
+// its own ad-hoc clamp that ListTaskRecords knew nothing about. One
+// helper, both endpoints.
+const (
+	defaultPageSize = 50
+	maxPageSize     = 100
+	// maxPage bounds the offset. Without it, page=999999999 overflows
+	// (page-1)*pageSize into a negative offset, which GORM turns into
+	// "no LIMIT" — silently returning everything.
+	maxPage = 1_000_000
+)
+
+// clampPaging normalises caller-supplied page/page_size into safe values.
+// Never returns a non-positive page or size, so callers can use the result
+// directly in Offset()/Limit() without re-checking.
+func clampPaging(page, pageSize, defPageSize int) (int, int) {
+	if pageSize <= 0 {
+		pageSize = defPageSize
+	}
+	if pageSize > maxPageSize {
+		pageSize = maxPageSize
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if page > maxPage {
+		page = maxPage
+	}
+	return page, pageSize
+}
+
 func atoiOr(s string, fallback int) int {
 	if s == "" {
+		return fallback
+	}
+	// Bound the digit count: the old loop multiplied without any ceiling,
+	// so a long enough input overflowed int and could land on a negative
+	// value, which then flowed into Offset().
+	const maxDigits = 9
+	if len(s) > maxDigits {
 		return fallback
 	}
 	n := 0
