@@ -258,10 +258,20 @@ func (c *Checker) checkFilename(_ context.Context, path string, _ Options) (stri
 	return "", false
 }
 
-// findFilesByName 在 root 下递归查找第一组同名文件。命中即返回；不再
-// 继续向下以节省 IO。返回绝对路径。
-func findFilesByName(root, name string) ([]string, error) {
-	out := make([]string, 0, 4)
+// errLimitReached stops a filepath.Walk once a helper has collected enough
+// candidates.
+//
+// The idiom is a sentinel error, NOT filepath.SkipDir: SkipDir only takes
+// effect when returned for a *directory*, so returning it from the
+// per-file callback skipped that one file's remaining siblings at best and
+// did nothing at all in the general case — the documented `limit` on all
+// three scan helpers was simply not enforced.
+var errLimitReached = errors.New("dedup: scan limit reached")
+
+// walkLimit collects from walkFn until limit candidates are found, then
+// stops. A limit below 1 means "no limit".
+func walkLimit(root string, limit int, walkFn func(path string, size int64) bool) ([]string, error) {
+	out := make([]string, 0, 16)
 	err := filepath.Walk(root, func(p string, fi os.FileInfo, werr error) error {
 		if werr != nil {
 			return werr
@@ -269,15 +279,27 @@ func findFilesByName(root, name string) ([]string, error) {
 		if fi.IsDir() {
 			return nil
 		}
-		if fi.Name() == name {
-			out = append(out, p)
-			if len(out) >= 8 {
-				return filepath.SkipDir
-			}
+		if !walkFn(p, fi.Size()) {
+			return nil
+		}
+		out = append(out, p)
+		if limit > 0 && len(out) >= limit {
+			return errLimitReached
 		}
 		return nil
 	})
+	if errors.Is(err, errLimitReached) {
+		return out, nil
+	}
 	return out, err
+}
+
+// findFilesByName 在 root 下递归查找同名文件，最多返回 limit 个（<=0 不限）。
+// 返回绝对路径。
+func findFilesByName(root, name string) ([]string, error) {
+	return walkLimit(root, 8, func(p string, _ int64) bool {
+		return filepath.Base(p) == name
+	})
 }
 
 // ─── Stage 2: SHA-256 hash ──────────────────────────────────────────────────
@@ -353,23 +375,9 @@ func (c *Checker) checkHash(ctx context.Context, path string, _ Options) (string
 
 // findFilesBySize 在 root 下递归查找大小为 size 字节的文件（≤ limit 条）。
 func findFilesBySize(root string, size int64, limit int) ([]string, error) {
-	out := make([]string, 0, 16)
-	err := filepath.Walk(root, func(p string, fi os.FileInfo, werr error) error {
-		if werr != nil {
-			return werr
-		}
-		if fi.IsDir() {
-			return nil
-		}
-		if fi.Size() == size {
-			out = append(out, p)
-			if len(out) >= limit {
-				return filepath.SkipDir
-			}
-		}
-		return nil
+	return walkLimit(root, limit, func(_ string, sz int64) bool {
+		return sz == size
 	})
-	return out, err
 }
 
 // sha256OfFile 计算 path 内容的 SHA-256，返回 hex 编码字符串。
@@ -529,6 +537,9 @@ func extractJSONField(s, key string) string {
 	// 数字类型
 	if s != "" && (s[0] >= '0' && s[0] <= '9' || s[0] == '-') {
 		j := 0
+		if s[0] == '-' {
+			j = 1
+		}
 		for j < len(s) && (s[j] >= '0' && s[j] <= '9' || s[j] == '.') {
 			j++
 		}
@@ -549,23 +560,9 @@ func extractJSONField(s, key string) string {
 // findFilesBySizeBetween 在 root 下递归查找 size 在 [lo, hi] 的文件，
 // 上限 limit。lo/hi 是 int64 字节数。
 func findFilesBySizeBetween(root string, lo, hi int64, limit int) ([]string, error) {
-	out := make([]string, 0, 16)
-	err := filepath.Walk(root, func(p string, fi os.FileInfo, werr error) error {
-		if werr != nil {
-			return werr
-		}
-		if fi.IsDir() {
-			return nil
-		}
-		if fi.Size() >= lo && fi.Size() <= hi {
-			out = append(out, p)
-			if len(out) >= limit {
-				return filepath.SkipDir
-			}
-		}
-		return nil
+	return walkLimit(root, limit, func(_ string, sz int64) bool {
+		return sz >= lo && sz <= hi
 	})
-	return out, err
 }
 
 // ─── Stage 4: metadata weak check ───────────────────────────────────────────
@@ -675,6 +672,17 @@ func metaSimilarity(a, b metaRecord) float64 {
 		return 0
 	}
 	// Duration 相近 +0.05 cap 至 1.0
+	// Duration 相近 +0.05，cap 至 1.0。
+	//
+	// Note this term can only ever be a no-op in practice: the three field
+	// weights already sum to exactly 1.0, so a record matching on title,
+	// artist AND album scores 1.0 whether the durations line up or not.
+	// It still moves the needle for partial matches (title-only is 0.5, and
+	// a duration agreement takes it to 0.55). Making a large duration gap
+	// *subtract* would be a scoring change with no effect on any verdict,
+	// since 0.95 is comfortably over the 0.7 likely-duplicate threshold —
+	// so a live version and its studio cut still pair up, which is the
+	// behaviour a music library wants.
 	if a.Duration > 0 && b.Duration > 0 {
 		d := mathAbs(a.Duration - b.Duration)
 		if d <= 2 {
