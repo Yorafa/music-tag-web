@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -147,4 +148,51 @@ func TestCORS_NoOriginHeaderOmitsHeaders(t *testing.T) {
 	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("no Origin header should not produce Allow-Origin; got %q", got)
 	}
+}
+
+// TestCORS_PreflightAllowsRangeHeader is REVIEW.md P3-6.
+//
+// `Range` is not a CORS-safelisted request header, so a cross-origin
+// ranged request is preflighted and the browser compares the header it
+// wants to send against Access-Control-Allow-Headers. With Range missing
+// there, every seek issued by a fetch()-based player against /media/*
+// died at the preflight — while seeking in an <audio> element kept working,
+// which is why this went unnoticed: the element path does not go through
+// the same preflight.
+func TestCORS_PreflightAllowsRangeHeader(t *testing.T) {
+	cfg := &config.Config{
+		CORSAllowedOrigins: []string{"https://music.example.com"},
+	}
+	r := setupRouter(cfg)
+	req := httptest.NewRequest(http.MethodOptions, "/any", nil)
+	req.Header.Set("Origin", "https://music.example.com")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	req.Header.Set("Access-Control-Request-Headers", "Range")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, want 204", w.Code)
+	}
+	allow := w.Header().Get("Access-Control-Allow-Headers")
+	if !headerListContains(allow, "Range") {
+		t.Errorf("Access-Control-Allow-Headers = %q, does not allow Range", allow)
+	}
+	// A JS player fetching a byte range has to be able to read how much it
+	// got, so the response headers it needs must be exposed too.
+	expose := w.Header().Get("Access-Control-Expose-Headers")
+	for _, h := range []string{"Content-Range", "Accept-Ranges", "Content-Disposition"} {
+		if !headerListContains(expose, h) {
+			t.Errorf("Access-Control-Expose-Headers = %q, missing %s", expose, h)
+		}
+	}
+}
+
+func headerListContains(list, want string) bool {
+	for _, h := range strings.Split(list, ",") {
+		if strings.EqualFold(strings.TrimSpace(h), want) {
+			return true
+		}
+	}
+	return false
 }

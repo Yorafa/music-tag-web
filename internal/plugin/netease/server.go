@@ -440,7 +440,12 @@ func (s *Server) GetAudioURL(ctx context.Context, req *pb.GetAudioRequest) (*pb.
 		"br":         320000,
 		"csrf_token": "",
 	})
-	params, encSecKey := encryptWeapi(string(payload))
+	params, encSecKey, err := encryptWeapi(string(payload))
+	if err != nil {
+		// Best-effort contract above: no audio URL rather than an error.
+		log.Printf("[netease] GetAudioURL weapi encrypt id=%s: %v", req.Id, err)
+		return &pb.GetAudioResponse{}, nil
+	}
 	form := url.Values{
 		"params":    {params},
 		"encSecKey": {encSecKey},

@@ -166,8 +166,26 @@ func Query(ctx context.Context, opts QueryOptions) ([]db.OperationLog, int64, er
 		tx = tx.Where("status = ?", opts.Status)
 	}
 	if opts.Search != "" {
-		s := "%" + strings.TrimSpace(opts.Search) + "%"
-		tx = tx.Where("target LIKE ? OR details LIKE ? OR operator LIKE ? OR error_msg LIKE ?", s, s, s, s)
+		// REVIEW.md P3-5: the search term is user input, so `%` and `_` in
+		// it are LIKE metacharacters — searching for `100%` matched every
+		// row, and `_` matched any character. Not an injection (the value
+		// is still a bound parameter) but a filter the caller cannot
+		// express. Escape the metacharacters and name the escape
+		// character explicitly.
+		//
+		// The escape character is `!` rather than `\` because the two
+		// supported dialects disagree about it: MySQL processes backslash
+		// escapes inside string literals (so ESCAPE '\' is needed there)
+		// while SQLite does not (so the same literal arrives as two
+		// characters and the statement is rejected). `!` means nothing
+		// special in either.
+		s := "%" + escapeLikeWildcards(strings.TrimSpace(opts.Search)) + "%"
+		// Parenthesised: an unparenthesised OR chain silently changes
+		// meaning the moment another filter is added to this query.
+		tx = tx.Where(`(target LIKE ? ESCAPE '!'
+			OR details LIKE ? ESCAPE '!'
+			OR operator LIKE ? ESCAPE '!'
+			OR error_msg LIKE ? ESCAPE '!')`, s, s, s, s)
 	}
 
 	var total int64
@@ -207,4 +225,23 @@ func Clear(ctx context.Context, olderThanDays int) (int64, error) {
 		return 0, res.Error
 	}
 	return res.RowsAffected, nil
+}
+
+// likeEscapeChar is the escape character used by Query's LIKE predicates.
+// It must not be `%` or `_`, and must be one byte in both MySQL and SQLite.
+const likeEscapeChar = '!'
+
+// escapeLikeWildcards doubles every LIKE metacharacter in s, including the
+// escape character itself — otherwise a search for a literal `!` would be
+// read as the start of an escape sequence.
+func escapeLikeWildcards(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r == '%' || r == '_' || r == likeEscapeChar {
+			b.WriteRune(likeEscapeChar)
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }

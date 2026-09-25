@@ -3,6 +3,7 @@ package netease
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -402,7 +403,10 @@ func TestEncryptLinux_DeterministicShape(t *testing.T) {
 // be base64 (AES-128-CBC double layer), encSecKey must be a 256-hex-char RSA
 // ciphertext.
 func TestEncryptWeapi_ParamsAndSecKeyShapes(t *testing.T) {
-	params, encSecKey := encryptWeapi(`{"ids":["347230"],"br":320000}`)
+	params, encSecKey, err := encryptWeapi(`{"ids":["347230"],"br":320000}`)
+	if err != nil {
+		t.Fatalf("encryptWeapi: %v", err)
+	}
 	if params == "" {
 		t.Fatal("empty weapi params")
 	}
@@ -418,7 +422,10 @@ func TestEncryptWeapi_ParamsAndSecKeyShapes(t *testing.T) {
 		}
 	}
 	// Two calls must differ (random secKey).
-	p2, k2 := encryptWeapi(`{"ids":["347230"],"br":320000}`)
+	p2, k2, err := encryptWeapi(`{"ids":["347230"],"br":320000}`)
+	if err != nil {
+		t.Fatalf("second encryptWeapi: %v", err)
+	}
 	if params == p2 && encSecKey == k2 {
 		t.Errorf("weapi should be randomized across calls (got identical output)")
 	}
@@ -444,5 +451,96 @@ func TestStr_NumericIDCoerces(t *testing.T) {
 		if got := str(c.in); got != c.want {
 			t.Errorf("str(%v) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestRandomString_NoModuloBias pins the rejection sampling in
+// randomString. `letters[v%len(letters)]` over 256 raw values is not a
+// uniform draw from 62 symbols — the first 8 come up 5/256 of the time
+// and the rest 4/256 — and this secKey is what the weapi request body is
+// encrypted with.
+//
+// The test is statistical on purpose: a deterministic probe of the
+// generator's internals would be rewritten along with it. 20k draws over
+// 62 symbols puts the expected count at ~322 with a sigma of ~17, so the
+// 8 biased symbols land around 340 — about 1 sigma apart from the rest,
+// and a chi-square over the 62 buckets fails decisively when the bias is
+// present.
+func TestRandomString_NoModuloBias(t *testing.T) {
+	const draws = 20000
+	counts := map[rune]int{}
+	for i := 0; i < draws; i++ {
+		s, err := randomString(16)
+		if err != nil {
+			t.Fatalf("randomString: %v", err)
+		}
+		if len(s) != 16 {
+			t.Fatalf("randomString(16) len = %d", len(s))
+		}
+		for _, c := range s {
+			counts[c]++
+		}
+	}
+	if len(counts) != 62 {
+		t.Fatalf("randomString produced %d distinct symbols, want 62", len(counts))
+	}
+	// Chi-square goodness of fit against a uniform draw.
+	const symbols = 62
+	expected := float64(draws*16) / symbols
+	var chi2 float64
+	for _, n := range counts {
+		d := float64(n) - expected
+		chi2 += d * d / expected
+	}
+	// 61 degrees of freedom: the 0.999 critical value is ~113. A modulo-
+	// biased generator scores well above 200 on 320k samples; a correct one
+	// essentially never exceeds 113 by chance.
+	if chi2 > 113 {
+		t.Errorf("chi-square = %.1f over %d symbols — randomString is not uniform", chi2, symbols)
+	}
+}
+
+// TestEncryptWeapi_PropagatesRandomFailure is REVIEW.md P3-4's actual
+// point: the old code swallowed a crypto/rand failure and produced a
+// secKey from an unseeded math/rand, so a broken entropy source silently
+// downgraded the key instead of refusing the request. crypto/rand cannot
+// be made to fail on demand, so the read is behind a seam and stubbed
+// here.
+func TestEncryptWeapi_PropagatesRandomFailure(t *testing.T) {
+	orig := randRead
+	randRead = func([]byte) (int, error) { return 0, errors.New("no entropy") }
+	t.Cleanup(func() { randRead = orig })
+
+	params, encSecKey, err := encryptWeapi(`{"ids":["347230"]}`)
+	if err == nil {
+		t.Fatal("encryptWeapi succeeded with a failing entropy source")
+	}
+	if params != "" || encSecKey != "" {
+		t.Errorf("encryptWeapi returned output alongside the error: params=%q encSecKey=%q",
+			params, encSecKey)
+	}
+
+	// randomString must surface it too, not substitute a value.
+	if s, err := randomString(16); err == nil {
+		t.Errorf("randomString returned %q with a failing entropy source", s)
+	}
+}
+
+// TestGetAudioURL_BestEffortOnEntropyFailure pins the caller's half of the
+// contract: GetAudioURL is documented best-effort ("", nil) on any failure,
+// so an entropy outage degrades to no audio URL rather than an RPC error
+// the worker would treat as a plugin fault.
+func TestGetAudioURL_BestEffortOnEntropyFailure(t *testing.T) {
+	orig := randRead
+	randRead = func([]byte) (int, error) { return 0, errors.New("no entropy") }
+	t.Cleanup(func() { randRead = orig })
+
+	srv := &Server{}
+	resp, err := srv.GetAudioURL(context.Background(), &pb.GetAudioRequest{Id: "347230"})
+	if err != nil {
+		t.Fatalf("GetAudioURL returned an error instead of degrading: %v", err)
+	}
+	if resp.GetUrl() != "" {
+		t.Errorf("GetAudioURL returned url %q with no entropy", resp.GetUrl())
 	}
 }

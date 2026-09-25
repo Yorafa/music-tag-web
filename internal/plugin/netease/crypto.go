@@ -19,8 +19,8 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"math/big"
-	mrand "math/rand"
 )
 
 // linuxApiKeyHex is the AES-128 key the NetEase linux client uses for the
@@ -89,21 +89,46 @@ func rsaEncryptNoPad(text, pubKey, modulus string) string {
 	return biRet.Text(16)
 }
 
-// randomString generates a 16-char alphanumeric string for the weapi secKey.
-func randomString(size int) string {
+// randRead is crypto/rand.Read behind a seam, so the failure path below can
+// be exercised: an entropy source that cannot fail on demand is an entropy
+// source whose error handling is never tested.
+var randRead = rand.Read
+
+// randomString generates a size-char alphanumeric string for the weapi
+// secKey.
+//
+// The error is returned rather than papered over (REVIEW.md P3-4). The old
+// fallback was an UNSEEDED math/rand — Go 1.20+ auto-seeds the global source,
+// so it looked fine, but the value is then derived from a source the process
+// has no control over, and the secKey is what the weapi body is encrypted
+// with. A predictable key there means a request anybody can forge. A
+// crypto/rand failure is a broken platform or a broken container; refusing
+// the request is the honest response, and the caller already treats a
+// failure here as "no audio URL".
+func randomString(size int) (string, error) {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, size)
-	if _, err := rand.Read(b); err != nil {
-		// crypto/rand failure is practically impossible; fall back to
-		// math/rand so the plugin still boots on exotic platforms.
-		for i := range b {
-			b[i] = byte(mrand.Intn(256))
+	// Rejection sampling rather than letters[v%len(letters)]: 256 is not a
+	// multiple of 62, so the modulo form made the first 8 symbols appear
+	// 5/256 of the time and the rest 4/256 — a small but free bias to drop
+	// while the function is already being rewritten.
+	limit := 256 - (256 % len(letters))
+	out := make([]byte, 0, size)
+	buf := make([]byte, size)
+	for len(out) < size {
+		if _, err := randRead(buf); err != nil {
+			return "", fmt.Errorf("crypto/rand: %w", err)
+		}
+		for _, v := range buf {
+			if int(v) >= limit {
+				continue
+			}
+			out = append(out, letters[int(v)%len(letters)])
+			if len(out) == size {
+				break
+			}
 		}
 	}
-	for i, v := range b {
-		b[i] = letters[int(v)%len(letters)]
-	}
-	return string(b)
+	return string(out), nil
 }
 
 // encryptLinux encodes the search envelope for /api/linux/forward.
@@ -117,8 +142,11 @@ func encryptLinux(data string) string {
 // encryptWeapi produces the (params, encSecKey) form values for the weapi
 // POST body. Two AES-128-CBC layers (nonce key, then random secKey) + RSA
 // of the reversed secKey.
-func encryptWeapi(text string) (params, encSecKey string) {
-	secKey := randomString(16)
+func encryptWeapi(text string) (params, encSecKey string, err error) {
+	secKey, err := randomString(16)
+	if err != nil {
+		return "", "", err
+	}
 	layer1 := aesEncryptCBC([]byte(text), weapiNonce, weapiIV)
 	params = aesEncryptCBC([]byte(layer1), secKey, weapiIV)
 	encSecKey = rsaEncryptNoPad(secKey, weapiPubKey, weapiPubModulus)
@@ -127,7 +155,7 @@ func encryptWeapi(text string) (params, encSecKey string) {
 	for len(encSecKey) < 256 {
 		encSecKey = "0" + encSecKey
 	}
-	return params, encSecKey
+	return params, encSecKey, nil
 }
 
 func hexEncodeUpper(b []byte) string {

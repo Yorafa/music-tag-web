@@ -47,8 +47,18 @@ func CORS(cfg *config.Config) gin.HandlerFunc {
 			c.Header("Vary", "Origin")
 		}
 		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type,Authorization")
-		c.Header("Access-Control-Expose-Headers", "Content-Disposition")
+		// REVIEW.md P3-6: `Range` was missing, so a cross-origin ranged
+		// request — anything a browser only sends after a preflight, i.e.
+		// any fetch() that wants to seek in /media/* — was rejected at the
+		// preflight and never reached the handler. Seeking in an audio
+		// element worked only because the element is not subject to CORS
+		// preflight the same way.
+		//
+		// Content-Range / Accept-Ranges are exposed for the same reason:
+		// a JS player that fetches a byte range has to be able to read how
+		// much it actually got.
+		c.Header("Access-Control-Allow-Headers", "Content-Type,Authorization,Range")
+		c.Header("Access-Control-Expose-Headers", "Content-Disposition,Content-Range,Accept-Ranges")
 
 		if c.Request.Method == http.MethodOptions {
 			// No-store ensures browsers don't cache the preflight. If the
