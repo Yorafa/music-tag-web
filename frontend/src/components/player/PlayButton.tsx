@@ -29,7 +29,7 @@ function useHasPlayableUrl(track: PlayerTrack): boolean {
   });
 }
 
-/** Inline Play/Pause toggle for any row (SearchPanel, SearchResults,
+/** Inline Play/Pause toggle for any row (WorkstationTable, CloudSearchView,
  *  future playlist lists). Reads its own slice from usePlayerStore so
  *  rows outside PlayerBar get isPlaying state without prop drilling.
  *  Stops propagation so clicking "play" on a row doesn't ALSO trigger

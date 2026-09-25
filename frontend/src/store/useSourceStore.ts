@@ -20,7 +20,8 @@ interface SourceState {
   /** Replace the entire enabled-set atomically — used by SourcePickerModal
    *  on its Apply path. Filters out names the backend doesn't know about. */
   setEnabled: (names: string[]) => void;
-  /** O(1) membership check used by SearchPanel when building the request. */
+  /** O(1) membership check. No caller left: CloudSearchView reads
+   *  `enabled` directly, so this is a convenience accessor only. */
   isEnabled: (name: string) => boolean;
   /** Reset enabled-set to "all-on" (matches first-boot default). */
   resetToDefault: () => void;

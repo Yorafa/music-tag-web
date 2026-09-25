@@ -8,9 +8,9 @@ export interface ResizeHandleProps {
 }
 
 /** Vertical column resize handle. Mouse + touch + ARIA-keyboard on the same
- *  element. Used by both ScrapeView (Toolbar ↔ FileBrowser ↔ SearchResults)
- *  and LocalView (FileBrowser ↔ SearchPanel). Duplicates were the AppShell
- *  body inline copy; promote it so layout changes only happen in one place. */
+ *  element. Currently one consumer: WorkstationView's toolbar ↔ table split.
+ *  Duplicates were the AppShell body inline copy; promote it so layout
+ *  changes only happen in one place. */
 export function ResizeHandle({ onResize, valueNow, min, max }: ResizeHandleProps) {
   const dragging = useRef(false);
 

@@ -23,10 +23,6 @@ type ClearMusicHandler struct {
 	DBDriver string // "sqlite" | "mysql" — used for VACUUM/OPTIMIZE post-cleanup
 }
 
-func NewClearMusicHandler(gormDB *gorm.DB, driver string) *ClearMusicHandler {
-	return &ClearMusicHandler{DB: gormDB, DBDriver: driver}
-}
-
 func (h *ClearMusicHandler) ProcessTask(ctx context.Context, _ Task) error {
 	if h.DB == nil {
 		return fmt.Errorf("clear: DB not initialized")

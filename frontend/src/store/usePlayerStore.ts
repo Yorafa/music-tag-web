@@ -1,8 +1,8 @@
 // Cross-mode player state. Lives in its own Zustand store so the audio
 // element, transport bars, and inline row buttons all share one source of
 // truth. Mounted in <PlayerBar> at the bottom of AppShell, but consumed
-// from anywhere a row wants to start a preview (FileBrowser / SearchPanel /
-// SearchResults).
+// from anywhere a row wants to start a preview (WorkstationTable's PlayButton,
+// CloudSearchView's PlayButton).
 
 import { create } from 'zustand';
 import { readNumber, writeNumber } from '@/utils/persist';

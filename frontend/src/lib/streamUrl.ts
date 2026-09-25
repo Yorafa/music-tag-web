@@ -72,7 +72,7 @@ export function resolveStreamUrl(
  *  gateway set `Content-Disposition: attachment` so the browser writes
  *  the file to the user's Downloads folder instead of streaming it into
  *  the in-page <audio> element. Used by the row-level "下载到浏览器"
- *  button in SearchPanel / SearchResults. Returns null when the source
+ *  button in CloudSearchView. Returns null when the source
  *  is metadata-only.
  *
  *  Optional `filename` becomes `?filename=` and drives Content-Disposition

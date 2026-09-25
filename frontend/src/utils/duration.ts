@@ -7,7 +7,7 @@
 // string, or not at all, and all three have to render without the caller
 // pre-checking.
 //
-// This lived inside SearchPanel as a local function until the search
+// This lived inside CloudSearchView as a local function until the search
 // results actually carried a duration, at which point two surfaces
 // needed it and the second copy would have been free to drift.
 
