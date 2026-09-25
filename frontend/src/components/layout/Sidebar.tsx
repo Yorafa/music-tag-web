@@ -6,14 +6,10 @@ import {
   Settings,
   ChevronLeft,
   ChevronRight,
-  LogOut,
   Radio,
   X,
 } from 'lucide-react';
-import { ThemeToggle } from '@/components/ThemeToggle';
-import { NoticeCenterButton } from '@/components/notice/NoticeCenterButton';
 import { useWorklistStore } from '@/store/useWorklistStore';
-import { useAuthStore } from '@/store/useAuthStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { cn } from '@/lib/utils';
 
@@ -74,7 +70,6 @@ export function Sidebar({
   onClose,
   closeLabel = '关闭导航',
 }: Props) {
-  const logout = useAuthStore((s) => s.logout);
   const worklistCount = useWorklistStore((s) => s.rows.length);
   const selectedCount = useWorklistStore((s) => s.selectedIds.length);
   const unreadNotices = useNoticeStore((s) => s.unreadCount());
@@ -183,32 +178,22 @@ export function Sidebar({
         })}
       </nav>
 
-      {/* Bottom Footer Actions */}
-      <div className="p-2 border-t border-border/60 space-y-1">
-        {/* Utilities Row */}
-        <div
-          className={cn(
-            'flex items-center gap-1',
-            collapsed ? 'flex-col' : 'justify-between px-1',
-          )}
-        >
-          <ThemeToggle />
-          <NoticeCenterButton />
-          <button
-            type="button"
-            onClick={logout}
-            title="退出登录"
-            aria-label="退出登录"
-            className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-red-500/10 hover:text-red-400 text-muted-foreground transition-colors"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
-        </div>
+      {/* Footer — collapse toggle only.
+          主题 / 通知 / 登出 used to sit here, below the nav, which is the
+          least reachable corner of the app: a phone had to open the nav
+          drawer first, and a collapsed desktop sidebar stacked all three
+          into a 32px column. They now live in the top header beside the
+          task center, which is mounted at every width and in every
+          section.
 
-        {/* Collapse Toggle Button — desktop only. In the drawer variant
-            the panel is dismissed via onClose, and a control labelled
-            "collapse" that actually closes the overlay is a lie. */}
-        {!onClose && (
+          The footer as a whole is suppressed in the drawer variant, not
+          just the toggle inside it. The toggle is the only child, so
+          gating the button alone left an empty `border-t` box — a stray
+          divider and 16px of padding at the bottom of the mobile drawer.
+          A collapse control is also a lie in the drawer, where the panel
+          is dismissed via onClose and has no collapsed state. */}
+      {!onClose && (
+        <div className="p-2 border-t border-border/60 space-y-1">
           <button
             type="button"
             onClick={onToggleCollapse}
@@ -225,8 +210,8 @@ export function Sidebar({
               <ChevronLeft className="w-3.5 h-3.5" />
             )}
           </button>
-        )}
-      </div>
+        </div>
+      )}
     </aside>
   );
 }

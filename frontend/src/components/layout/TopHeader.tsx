@@ -5,11 +5,15 @@ import {
   History,
   Settings,
   Menu,
+  LogOut,
 } from 'lucide-react';
 import type { NavSection } from './Sidebar';
 import { TaskCenterDropdown } from './TaskCenterDropdown';
+import { ThemeToggle } from '@/components/ThemeToggle';
+import { NoticeCenterButton } from '@/components/notice/NoticeCenterButton';
 import { useWorklistStore } from '@/store/useWorklistStore';
 import { useLibraryStore } from '@/store/useLibraryStore';
+import { useAuthStore } from '@/store/useAuthStore';
 
 interface Props {
   activeSection: NavSection;
@@ -51,6 +55,7 @@ export function TopHeader({ activeSection, onOpenMobileNav }: Props) {
   const current = SECTION_HEADERS[activeSection];
   const Icon = current.icon;
 
+  const logout = useAuthStore((s) => s.logout);
   const libraryRows = useLibraryStore((s) => s.rows.length);
   const worklistRows = useWorklistStore((s) => s.rows.length);
   const selectedRows = useWorklistStore((s) => s.selectedIds.length);
@@ -101,6 +106,34 @@ export function TopHeader({ activeSection, onOpenMobileNav }: Props) {
           </span>
         )}
         <TaskCenterDropdown />
+
+        {/* 主题 / 通知 / 登出. These lived at the bottom of the sidebar,
+            which made them the least reachable controls in the app: a
+            phone had to open the nav drawer first, and a collapsed desktop
+            sidebar stacked all three into a 32px column. Here they sit on
+            the one bar that is mounted at every width and in every
+            section, so 登出 no longer disappears with the sidebar.
+
+            All three are icon-only at every width (they were in the
+            sidebar too), so this adds three 36px slots to the header's
+            right cluster. At 375px that is ~108px next to the task
+            center's icon-only button; the section title is `min-w-0
+            truncate`, so it yields rather than pushing the controls off
+            the edge. The `border-l` marks where the section stats end and
+            the account controls begin. */}
+        <div className="flex items-center gap-0.5 pl-1 ml-0.5 border-l border-border/70">
+          <ThemeToggle />
+          <NoticeCenterButton />
+          <button
+            type="button"
+            onClick={logout}
+            title="退出登录"
+            aria-label="退出登录"
+            className="inline-flex items-center justify-center w-9 h-9 rounded-md hover:bg-red-500/10 hover:text-red-400 text-muted-foreground transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
       </div>
     </header>
   );
