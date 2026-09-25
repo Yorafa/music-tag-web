@@ -114,7 +114,16 @@ func (b *RedisBus) Close() error {
 type NullBus struct {
 	mu        sync.Mutex
 	published []Recorded
-	subs      []chan []byte
+	subs      []nullSub
+}
+
+// nullSub is one NullBus subscription. The topic is kept because a
+// subscriber is registered for a topic and must not receive other topics —
+// RedisBus filters by channel name, so a NullBus that did not would let a
+// test pass on an event the production subscriber would never see.
+type nullSub struct {
+	topic string
+	ch    chan []byte
 }
 
 // Recorded pairs a topic with its JSON-encoded payload.
@@ -128,19 +137,28 @@ func NewNullBus() *NullBus {
 	return &NullBus{}
 }
 
-// Publish records the event and forwards to any subscribers.
+// Publish records the event and forwards it to the subscribers of that
+// topic.
+//
+// The fan-out happens under the lock. Every send is non-blocking, so
+// holding the mutex costs nothing — and it is what makes Reset safe:
+// Reset closes the subscriber channels, so a fan-out that snapshotted the
+// subscriber list and then released the lock could send on a channel
+// another goroutine had just closed, which panics.
 func (b *NullBus) Publish(_ context.Context, topic string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.published = append(b.published, Recorded{Topic: topic, Payload: data})
-	subs := append([]chan []byte{}, b.subs...)
-	b.mu.Unlock()
-	for _, ch := range subs {
+	for _, s := range b.subs {
+		if s.topic != topic {
+			continue
+		}
 		select {
-		case ch <- data:
+		case s.ch <- data:
 		default:
 			// subscriber buffer full — drop to keep producer unblocked
 		}
@@ -148,23 +166,29 @@ func (b *NullBus) Publish(_ context.Context, topic string, payload any) error {
 	return nil
 }
 
-// Subscribe returns a channel + cancel that drains future Publish calls.
-// The cancel is a no-op (no real subscription) but keeps the API identical
-// to RedisBus for swappability.
-func (b *NullBus) Subscribe(_ context.Context, _ string) (<-chan []byte, func(), error) {
+// Subscribe returns a channel + cancel that drains future Publish calls on
+// `topic`. The cancel is a no-op (no real subscription) but keeps the API
+// identical to RedisBus for swappability.
+func (b *NullBus) Subscribe(_ context.Context, topic string) (<-chan []byte, func(), error) {
 	ch := make(chan []byte, 32)
 	b.mu.Lock()
-	b.subs = append(b.subs, ch)
+	b.subs = append(b.subs, nullSub{topic: topic, ch: ch})
 	b.mu.Unlock()
 	return ch, func() {}, nil
 }
 
 // Snapshot returns an immutable copy of every Publish call recorded so far.
+//
+// The payloads are copied too, not just the slice of records: a caller that
+// trims or rewrites what it got back must not be editing the recording
+// itself.
 func (b *NullBus) Snapshot() []Recorded {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	out := make([]Recorded, len(b.published))
-	copy(out, b.published)
+	for i, r := range b.published {
+		out[i] = Recorded{Topic: r.Topic, Payload: append([]byte(nil), r.Payload...)}
+	}
 	return out
 }
 
@@ -172,8 +196,8 @@ func (b *NullBus) Snapshot() []Recorded {
 func (b *NullBus) Reset() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for _, ch := range b.subs {
-		close(ch)
+	for _, s := range b.subs {
+		close(s.ch)
 	}
 	b.published = nil
 	b.subs = nil

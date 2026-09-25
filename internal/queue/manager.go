@@ -29,6 +29,14 @@ func ServerOpts() asynq.RedisClientOpt {
 // Concurrency and queue priorities are tunable via env.
 func ServerConfig() asynq.Config {
 	concurrency := parseInt(getEnv("WORKER_CONCURRENCY", "10"), 10)
+	if concurrency < 1 {
+		// parseInt accepts 0 because REDIS_DB legitimately wants it, but
+		// asynq reads Concurrency 0 as "no workers": the process starts,
+		// reports healthy, and silently dequeues nothing. An operator
+		// setting WORKER_CONCURRENCY=0 meant "use the default", not "stop
+		// processing".
+		concurrency = 10
+	}
 	return asynq.Config{
 		Concurrency: concurrency,
 		Queues: map[string]int{
