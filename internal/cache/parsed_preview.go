@@ -27,6 +27,7 @@
 package cache
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -98,27 +99,46 @@ func (c *previewCache) Save(b ParsedBundle) (string, error) {
 	return token, nil
 }
 
-// Load returns the bundle at `token` IF still within TTL. Stale OR
-// missing → ErrTokenExpired. Read-lock only, so concurrent Save calls
-// are blocked (correctly) but concurrent Load calls do not contend.
+// Load returns the bundle at `token` and CONSUMES it (REVIEW.md P2-7).
+//
+// The package doc already described this gate as "single-shot", but the
+// implementation only read: the entry stayed in the map until some future
+// Sweep, and nothing called Sweep. Two consequences:
+//
+//   - the map only ever grew, holding up to 5000 rows per preview for the
+//     full 10-minute TTL regardless of whether the user ever applied;
+//   - the same token could be replayed repeatedly within its TTL, so
+//     "apply what I previewed" was re-runnable by whoever had the token.
+//
+// Both are fixed by deleting on read. An apply that legitimately needs to
+// retry re-previews, which is cheap and is what the UI already does on an
+// expired-token error.
+//
+// Takes the write lock because it mutates. A replay race is now impossible
+// rather than merely unlikely: two concurrent applies of one token cannot
+// both win.
 func (c *previewCache) Load(token string) (ParsedBundle, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	b, ok := c.bundles[token]
 	if !ok {
 		return ParsedBundle{}, ErrTokenExpired
 	}
+	// Consume unconditionally, including on the stale path — an expired
+	// entry is dead weight either way.
+	delete(c.bundles, token)
 	if c.now().Sub(b.CreatedAt) > c.ttl {
 		return ParsedBundle{}, ErrTokenExpired
 	}
 	return b, nil
 }
 
-// Sweep walks the cache and deletes entries whose CreatedAt exceeds
-// TTL. Intended for a periodic janitor (e.g. add to the same ticker
-// path_cache already uses). Until a janitor is wired the cache grows
-// only when humans are actively previewing — bounded by human session
-// volume, but a future heavy-load day may want the sweep ticker.
+// Sweep walks the cache and deletes entries whose CreatedAt exceeds TTL.
+//
+// Load now consumes on read, so the only entries left are ones the user
+// previewed and never applied. Those still need reaping, or an abandoned
+// preview pins its rows for the full TTL; StartJanitor below calls this
+// periodically so the janitor is no longer merely aspirational.
 func (c *previewCache) Sweep() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -164,4 +184,36 @@ func randomPreviewToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// StartJanitor reaps abandoned previews on a ticker (REVIEW.md P2-7).
+//
+// Load consumes on read, so what remains is the preview-a-then-abandon
+// case: the user opened the modal, previewed, and walked away. Without a
+// janitor those rows sit for the full 10-minute TTL. The old comment here
+// said "until a janitor is wired" — this wires it.
+//
+// Called once from the gateway's main; the goroutine exits with the
+// process, so no shutdown plumbing is needed for a 5-minute sweep of a
+// map guarded by its own mutex.
+func StartJanitor(ctx context.Context, interval time.Duration) {
+	go runJanitor(ctx, interval, DefaultPreviewCache)
+}
+
+// runJanitor is the loop body, split out so tests can drive it against a
+// private cache and a short interval instead of the 5-minute production one.
+func runJanitor(ctx context.Context, interval time.Duration, c *previewCache) {
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.Sweep()
+		}
+	}
 }

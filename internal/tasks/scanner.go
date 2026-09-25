@@ -217,15 +217,22 @@ func (h *UpdateScanHandler) updateScan(ctx context.Context, subPaths [][2]string
 		if dir == ignoreData {
 			continue
 		}
-		entries, readErr := os.ReadDir(dir)
-		if readErr != nil {
+		// Type-check BEFORE ReadDir (REVIEW.md P2-4). ReadDir on a file
+		// always fails with ENOTDIR, and the old ordering did
+		// `entries, err := os.ReadDir(dir); if err != nil { continue }`
+		// first — so a file path never reached the !isDir branch below and
+		// the whole "file entry already popped from its parent" case was
+		// dead code. Incremental scans therefore only ever recorded
+		// directory rows.
+		//
+		// The Stat error is also handled honestly: an unstattable path
+		// skips, rather than falling through to the file branch the way
+		// the old `if fi, _ := os.Stat(dir); fi != nil` did.
+		fi, statErr := os.Stat(dir)
+		if statErr != nil {
 			continue
 		}
-		isDir := false
-		if fi, _ := os.Stat(dir); fi != nil {
-			isDir = fi.IsDir()
-		}
-		if !isDir {
+		if !fi.IsDir() {
 			ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(dir), "."))
 			if !audioext.IsLibraryExt(ext) && !coverExt[ext] {
 				continue
@@ -255,6 +262,12 @@ func (h *UpdateScanHandler) updateScan(ctx context.Context, subPaths [][2]string
 					State: "updated", UpdatedAt: now, LastScanTime: now,
 				})
 			}
+			continue
+		}
+
+		// Reached only when dir really is a directory.
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
 			continue
 		}
 

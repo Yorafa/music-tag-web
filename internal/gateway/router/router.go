@@ -129,6 +129,12 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		authed.POST("/task1/", handler.TaskScan)
 		authed.POST("/task2/", handler.TaskClear)
 		authed.POST("/full_scan_folder/", handler.FullScanFolder)
+		// Incremental scan. The handler and the worker-side registration
+		// (tasks.NewUpdateScanMux → TypeUpdateScanFolder) both existed, but
+		// the route was never mounted, so the feature was unreachable over
+		// HTTP — a complete double failure (REVIEW.md P2-4). POST for the
+		// same reason as the routes above.
+		authed.POST("/update_scan_folder/", handler.UpdateScanFolder)
 		// Task record list
 		authed.GET("/record/", handler.ListTaskRecords)
 		// Operation history audit log endpoints
