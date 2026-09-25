@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { useAuthStore } from '@/store/useAuthStore';
+import { unwrapEnvelope, asArray } from '@/api/envelope';
 import type { SourceInfo } from '@/types';
 
 const api = axios.create({
@@ -275,7 +276,24 @@ export async function previewParseFilenames(
     paths,
     options: options ?? {},
   });
-  return data;
+  // Must unwrap: the handler answers through SuccessData, so the token
+  // and rows live under `data.data`, not at the top level. Returning the
+  // envelope here — as this did — left `results` undefined on EVERY
+  // response, and the caller iterated it during render.
+  const payload = unwrapEnvelope<{ token?: unknown; results?: unknown }>(
+    data,
+    'preview_parse_filenames',
+  );
+  // A missing token is a protocol violation, not an empty preview. Throw
+  // rather than defaulting to '' — the modal's effect guards on `token`
+  // being truthy, so an empty string would re-fire the preview forever.
+  if (typeof payload?.token !== 'string' || payload.token === '') {
+    throw new Error('preview_parse_filenames: 响应缺少 token');
+  }
+  return {
+    token: payload.token,
+    results: asArray<ParsedPreviewRow>(payload.results),
+  };
 }
 
 /** POST /api/tag/apply_parsed_filenames/ — consumes the token, applies
@@ -300,7 +318,10 @@ export async function applyParsedFilenames(
     token,
     overrides,
   });
-  return data;
+  // Same unwrap as preview — this one was never reached, because the
+  // preview call above crashed first, but `res.task_id.slice(0, 8)` in
+  // the modal would have thrown on the next undefined.
+  return unwrapEnvelope(data, 'apply_parsed_filenames');
 }
 
 export interface OperationLogItem {
