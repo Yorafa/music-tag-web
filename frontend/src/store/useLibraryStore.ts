@@ -16,6 +16,12 @@
 // regardless of which mode added it. Mirrors useWorklistStore's dir-
 // granularity dedupe: a re-added directory collapses onto the existing
 // rows rather than producing duplicates.
+//
+// Persistence notes:
+//   - rows + dirs go to library.v1
+//   - setMusicInfo ALSO re-persists (was previously memory-only — reload
+//     lost title/artist previews even though the row list survived)
+//   - data-URI artwork is stripped on write to avoid quota blowups
 
 import { create } from 'zustand';
 import type { MusicTagInfo } from '@/types';
@@ -24,6 +30,10 @@ import {
   type ExpandedFile,
 } from '@/utils/expandDirs';
 import { readJson, writeJson, removeString } from '@/utils/persist';
+import {
+  needsMusicInfoRefetch,
+  stripHeavyFromRows,
+} from '@/utils/persistMusicInfo';
 import { hydrateTagsBatched } from '@/lib/hydrateTags';
 
 export interface LibraryRow {
@@ -60,7 +70,10 @@ function loadPersisted(): PersistedShape {
 
 function persist(state: PersistedShape): void {
   try {
-    writeJson<PersistedShape>(STORAGE_KEY, state);
+    writeJson<PersistedShape>(STORAGE_KEY, {
+      rows: stripHeavyFromRows(state.rows),
+      dirs: state.dirs,
+    });
   } catch {
     // localStorage quota exceeded — trial-listen library is intentionally
     // small. Silently swallow; user can hit 「清空」 to free up. We avoid
@@ -101,9 +114,11 @@ interface LibraryState {
   setMusicInfo(id: string, info: Partial<MusicTagInfo>): void;
 }
 
+const boot = loadPersisted();
+
 export const useLibraryStore = create<LibraryState>((set, get) => ({
-  rows: loadPersisted().rows,
-  dirs: loadPersisted().dirs,
+  rows: boot.rows,
+  dirs: boot.dirs,
   query: '',
 
   enqueueDirs: async (dirs) => {
@@ -210,13 +225,32 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
 
   setMusicInfo: (id, info) => {
-    set((s) => ({
-      rows: s.rows.map((r) =>
-        r.id === id ? { ...r, musicInfo: { ...(r.musicInfo ?? {}), ...info } } : r,
-      ),
-    }));
+    set((s) => {
+      if (!s.rows.some((r) => r.id === id)) return s;
+      const nextRows = s.rows.map((r) =>
+        r.id === id
+          ? { ...r, musicInfo: { ...(r.musicInfo ?? {}), ...info } }
+          : r,
+      );
+      persist({ rows: nextRows, dirs: s.dirs });
+      return { rows: nextRows };
+    });
   },
 }));
+
+// Boot: re-fetch tags for persisted rows that need a musicInfo refresh
+// (empty cache, or lightweight tags without a usable cover after
+// stripHeavy dropped data-URI artwork). Fire-and-forget.
+(() => {
+  const need = useLibraryStore
+    .getState()
+    .rows.filter((r) => needsMusicInfoRefetch(r.musicInfo))
+    .map((r) => ({ id: r.id, fullPath: r.fullPath }));
+  if (need.length === 0) return;
+  void hydrateTagsBatched(need, (id, info) =>
+    useLibraryStore.getState().setMusicInfo(id, info),
+  );
+})();
 
 // Type exports for consumers.
 export type { LibraryState };

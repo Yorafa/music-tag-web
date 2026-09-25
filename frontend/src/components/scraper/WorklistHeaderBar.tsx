@@ -1,4 +1,4 @@
-// Worklist header bar. Three affordances:
+// Worklist header bar. Four affordances:
 //
 //  1. + 添加音乐 — opens the shared DirPickerDrawer with destination
 //     'worklist'. Same component Plan B uses for library mode; only
@@ -8,7 +8,11 @@
 //     Each chip's count badge reflects the current row set so the user
 //     sees at a glance how many candidates fall under each category.
 //
-//  3. 全选 — toggles the in-filter selection. Intent: selectAll()
+//  3. Grouping (无 / 专辑 / 歌手) — Plan C.3 § Step 3 chip row.
+//     Mutually-exclusive three-state toggle (radio-style highlight).
+//     Persists to `worklist.grouping.v1` so the choice survives reload.
+//
+//  4. 全选 — toggles the in-filter selection. Intent: selectAll()
 //     picks rows that match the CURRENT filter, not the unfiltered
 //     universe — when the user lands in the "失败" filter, clicking
 //     全选 picks the failed rows for a targeted retry.
@@ -18,7 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
-import { useWorklistStore } from '@/store/useWorklistStore';
+import { useWorklistStore, type WorklistGrouping } from '@/store/useWorklistStore';
 import type { ScrapeStatus } from '@/types';
 
 interface FilterDef {
@@ -33,6 +37,17 @@ const FILTERS: FilterDef[] = [
   { id: 'failed', label: '失败' },
 ];
 
+interface GroupingDef {
+  id: WorklistGrouping;
+  label: string;
+}
+
+const GROUPINGS: GroupingDef[] = [
+  { id: 'none', label: '无' },
+  { id: 'album', label: '专辑' },
+  { id: 'artist', label: '歌手' },
+];
+
 interface Props {
   onOpenDirPicker: () => void;
 }
@@ -41,6 +56,8 @@ export function WorklistHeaderBar({ onOpenDirPicker }: Props) {
   const rows = useWorklistStore((s) => s.rows);
   const filter = useWorklistStore((s) => s.filter);
   const setFilter = useWorklistStore((s) => s.setFilter);
+  const grouping = useWorklistStore((s) => s.grouping);
+  const setGrouping = useWorklistStore((s) => s.setGrouping);
   const selectedIds = useWorklistStore((s) => s.selectedIds);
   const selectAll = useWorklistStore((s) => s.selectAll);
   const clearSelected = useWorklistStore((s) => s.clearSelected);
@@ -111,6 +128,36 @@ export function WorklistHeaderBar({ onOpenDirPicker }: Props) {
               >
                 {counts[f.id]}
               </Badge>
+            </button>
+          );
+        })}
+      </div>
+
+      <Separator orientation="vertical" className="mx-1 h-5" />
+
+      {/* Plan C.3 grouping chip row. Three mutually-exclusive values
+          (radio-style highlight) persisted via setGrouping. No badge
+          here — group counts move into the GroupHeaderRow in the
+          Worklist body where the user is looking AT those counts. */}
+      <div className="flex items-center gap-1" role="radiogroup" aria-label="分组">
+        {GROUPINGS.map((g) => {
+          const isActive = grouping === g.id;
+          return (
+            <button
+              key={g.id}
+              type="button"
+              role="radio"
+              aria-checked={isActive}
+              onClick={() => setGrouping(g.id)}
+              title={`按${g.label === '无' ? '' : ' '}「${g.label}」分组`}
+              className={cn(
+                'inline-flex items-center h-7 px-2 rounded-md text-xs font-medium transition-colors',
+                isActive
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+              )}
+            >
+              {g.label}
             </button>
           );
         })}

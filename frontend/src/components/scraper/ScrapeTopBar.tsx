@@ -28,6 +28,7 @@ import {
   Search,
   RefreshCw,
   FolderTree,
+  FileText,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,6 +41,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
+import { ParseFilenamesModal } from '@/components/scraper/ParseFilenamesModal';
 import { useWorklistStore } from '@/store/useWorklistStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import {
@@ -67,6 +69,7 @@ export function ScrapeTopBar({ className }: ScrapeTopBarProps) {
     null,
   );
   const [tidyOpen, setTidyOpen] = useState(false);
+  const [parseOpen, setParseOpen] = useState(false);
   const [tidyForm, setTidyForm] = useState<TidyForm>({
     root_path: '',
     first_dir: 'artist',
@@ -127,6 +130,14 @@ export function ScrapeTopBar({ className }: ScrapeTopBarProps) {
       return;
     }
     setTidyOpen(true);
+  };
+
+  const openParse = () => {
+    if (!hasSelection) {
+      useNoticeStore.getState().push('请先选择至少一行', 'info');
+      return;
+    }
+    setParseOpen(true);
   };
 
   const submitTidy = async () => {
@@ -226,6 +237,26 @@ export function ScrapeTopBar({ className }: ScrapeTopBarProps) {
           <TooltipContent>{disabledHint ?? '按选中的目录布局重整文件'}</TooltipContent>
         </Tooltip>
 
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={openParse}
+                disabled={running !== null}
+                aria-label="解析文件名"
+                className={disabledHint ? 'opacity-60' : ''}
+                data-testid="parse-filenames-trigger"
+              >
+                <FileText className="w-3.5 h-3.5 mr-1.5" />
+                解析文件名
+              </Button>
+            }
+          />
+          <TooltipContent>{disabledHint ?? '预览 + 应用文件名解析到选中行'}</TooltipContent>
+        </Tooltip>
+
         {/* Spacer + selected-count badge so the bar reads "you have N
             rows selected" at a glance. Mirrors the original Toolbar's
             affordance level so muscle-memory transfers across the
@@ -285,6 +316,18 @@ export function ScrapeTopBar({ className }: ScrapeTopBarProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* C.2 Filename Parse modal — independent component to keep
+          ScrapeTopBar focused on the toolbar-level affordances. The
+          modal fetches its own preview token on mount, lets the user
+          edit overrides per row, and re-submits a single apply call
+          on confirmation. See `ParseFilenamesModal.tsx` for the
+          preview/apply round-trip contract. */}
+      <ParseFilenamesModal
+        open={parseOpen}
+        onOpenChange={setParseOpen}
+        selectedPaths={selectedIds}
+      />
 
     </>
   );

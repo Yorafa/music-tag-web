@@ -8,7 +8,7 @@
 //
 // Wire shape (mirrors the existing single-row click path in
 // WorklistRowView.openEditor / PlayView.openEditorFor):
-//   1. POST /api/music_id3/ for each item
+//   1. POST /api/music_id3/ for each item (via readTagsFromPath → getMusicId3)
 //   2. On SUCCESS WITH at least one non-null field → call the writer;
 //      `cacheHasAnyValue` in the click paths then turns true and the
 //      next click skips refetching — this is the same guard the click

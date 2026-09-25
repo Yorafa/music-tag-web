@@ -1,12 +1,21 @@
 // Independent store for the scrape Worklist.
 //
 // State shape carries one row per file-to-scrape, plus selection +
-// filter state for the active view. Session-scoped — NO localStorage
-// persistence (DESIGN.md §LLM design pick: "Worklist is session-scoped,
-// cleared on reload is fine for trial-scrape work"). The whole store
-// resets to its default shape on a hard reload, which matches the
-// expected UX of trial-scrape sessions: user adds dirs, works through
-// them, reloads, starts fresh.
+// filter state for the active view.
+//
+// Persistence layers (Plan C.3 Open Details E):
+//   - `worklist.v1`             → rows + lightweight musicInfo
+//   - `worklist.grouping.v1`    → grouping choice (none / album / artist)
+//
+// What is session-only:
+//   - selectedIds
+//   - filter
+//   - collapsedGroups (Plan C.3 Open Details A: collapse state doesn't
+//     survive reload; expanded-by-default per Open Details A so a fresh
+//     page shows everything)
+//
+// Heavy data-URI artwork is stripped on write so a large batch doesn't
+// blow the quota (covers re-fetch via music_id3).
 //
 // All mutations route through zustand's set with explicit shape updates
 // (no `Object.assign` or shallow spreads on `rows`). The selection
@@ -21,8 +30,18 @@ import {
   type ExpandedFile,
 } from '@/utils/expandDirs';
 import { hydrateTagsBatched } from '@/lib/hydrateTags';
+import { readJson, readString, writeJson, writeString, removeString } from '@/utils/persist';
+import {
+  needsMusicInfoRefetch,
+  stripHeavyFromRows,
+} from '@/utils/persistMusicInfo';
 
 export type WorklistFilter = 'all' | 'pending' | 'scraped' | 'failed';
+
+// Plan C.3 grouping dimension. Three mutually-exclusive values per the
+// plan § Step 2 ("group toggle 互斥"). Default 'none' = flat list
+// (i.e. legacy behaviour preserved).
+export type WorklistGrouping = 'none' | 'album' | 'artist';
 
 interface WorklistState {
   rows: WorklistRow[];
@@ -32,6 +51,25 @@ interface WorklistState {
    *  exist on a row. */
   selectedIds: string[];
   filter: WorklistFilter;
+
+  // ───── C.3 grouping plane ──────────────────────────────────────────
+  /** Active grouping axis; persisted to `worklist.grouping.v1` so the
+   *  choice survives reload. Default 'none' = legacy flat list. */
+  grouping: WorklistGrouping;
+  /** Session-only Set of `<groupKey>:hash` strings. Plan C.3 § Step 2
+   *  Open Details A — collapsed state does NOT persist across reloads;
+   *  it's re-initialized to empty (treated as "all groups expanded")
+   *  on every page load so first impressions aren't "where did my
+   *  albums go?". */
+  collapsedGroups: Set<string>;
+  setGrouping: (g: WorklistGrouping) => void;
+  /** Cycle: 'none' → 'album' → 'artist' → 'none'. Symmetric is the
+   *  chip row's "互斥" pattern; cycle is the keyboard-shortcut /
+   *  context-menu path. */
+  toggleGrouping: () => void;
+  /** Toggle one group between expanded (default) and collapsed. No-op
+   *  if grouping === 'none' (caller is responsible for suppress). */
+  toggleGroupCollapsed: (groupKey: string) => void;
 
   /** Add rows from a list of user-selected top-level directories.
    *  Dedupe-at-dir granularity per DESIGN.md §B pick: any subdir whose
@@ -69,6 +107,68 @@ interface WorklistState {
   setMusicInfo: (id: string, info: Partial<MusicTagInfo>) => void;
 }
 
+interface PersistedShape {
+  rows: WorklistRow[];
+}
+
+const STORAGE_KEY = 'worklist.v1';
+const GROUPING_STORAGE_KEY = 'worklist.grouping.v1';
+
+const VALID_STATUS = new Set<ScrapeStatus>(['pending', 'scraped', 'failed']);
+const VALID_GROUPING = new Set<WorklistGrouping>(['none', 'album', 'artist']);
+/** Order matters for `toggleGrouping()` cycle step. */
+const GROUPING_CYCLE: WorklistGrouping[] = ['none', 'album', 'artist'];
+
+function loadPersisted(): WorklistRow[] {
+  const v = readJson<PersistedShape>(STORAGE_KEY);
+  if (!v || !Array.isArray(v.rows)) return [];
+  return v.rows
+    .filter(
+      (r): r is WorklistRow =>
+        !!r &&
+        typeof r.id === 'string' &&
+        typeof r.fullPath === 'string' &&
+        typeof r.fileName === 'string' &&
+        VALID_STATUS.has(r.status as ScrapeStatus),
+    )
+    .map((r) => ({
+      id: r.id,
+      fullPath: r.fullPath,
+      fileName: r.fileName,
+      status: r.status as ScrapeStatus,
+      musicInfo: r.musicInfo,
+    }));
+}
+
+/** Hydrate grouping from the dedicated key. Strings only — Set shape
+ *  is intentionally NOT persisted (Plan C.3 Open Details A). */
+function loadGrouping(): WorklistGrouping {
+  const v = readString(GROUPING_STORAGE_KEY);
+  if (v && VALID_GROUPING.has(v as WorklistGrouping)) {
+    return v as WorklistGrouping;
+  }
+  return 'none';
+}
+
+function persistRows(rows: WorklistRow[]): void {
+  try {
+    writeJson<PersistedShape>(STORAGE_KEY, {
+      rows: stripHeavyFromRows(rows),
+    });
+  } catch {
+    // quota / private mode — swallow; list still lives in memory
+  }
+}
+
+function persistGrouping(g: WorklistGrouping): void {
+  try {
+    writeString(GROUPING_STORAGE_KEY, g);
+  } catch {
+    // swallow per persistRows rationale; grouping choice is recoverable
+    // on next reload via the default 'none'.
+  }
+}
+
 /** Pure-row merge: take existing rows, append new ones, dedupe by id.
  *  Returns the merged array. Used by enqueueDirs. */
 function appendAndDedupe(
@@ -100,9 +200,38 @@ function expandedToRows(expanded: ExpandedFile[]): WorklistRow[] {
 }
 
 export const useWorklistStore = create<WorklistState>((set, get) => ({
-  rows: [],
+  rows: loadPersisted(),
   selectedIds: [],
   filter: 'all',
+  grouping: loadGrouping(),
+  collapsedGroups: new Set(),
+
+  setGrouping: (g) => {
+    // Coerce unknown values to 'none' to mirror loadGrouping's
+    // defensive default (e.g. a stale localStorage with a v2 schema).
+    const safe: WorklistGrouping = VALID_GROUPING.has(g) ? g : 'none';
+    set({ grouping: safe });
+    persistGrouping(safe);
+  },
+
+  toggleGrouping: () => {
+    const current = get().grouping;
+    const idx = GROUPING_CYCLE.indexOf(current);
+    const next = GROUPING_CYCLE[(idx + 1) % GROUPING_CYCLE.length];
+    set({ grouping: next });
+    persistGrouping(next);
+  },
+
+  toggleGroupCollapsed: (groupKey) => {
+    set((s) => {
+      // Always copy before mutation so React/zustand sees a new
+      // reference (Set mutations in-place don't trigger renders).
+      const next = new Set(s.collapsedGroups);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      return { collapsedGroups: next };
+    });
+  },
 
   enqueueDirs: async (dirs) => {
     if (dirs.length === 0) return { added: 0, skipped: 0 };
@@ -124,9 +253,9 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
     );
     const newRows = expandedToRows(fresh);
 
-    set((s) => ({
-      rows: appendAndDedupe(s.rows, newRows),
-    }));
+    const nextRows = appendAndDedupe(get().rows, newRows);
+    set({ rows: nextRows });
+    persistRows(nextRows);
 
     // Mirror of useLibraryStore.enqueueDirs: background-fetch
     // /api/music_id3/ so the Worklist rows render with title/artist
@@ -174,34 +303,62 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
 
   clearSelected: () => set({ selectedIds: [] }),
 
-  clear: () => set({ rows: [], selectedIds: [] }),
+  clear: () => {
+    set({ rows: [], selectedIds: [] });
+    removeString(STORAGE_KEY);
+  },
 
   remove: (ids) => {
     if (ids.length === 0) return;
     const drop = new Set(ids);
-    set((s) => ({
-      rows: s.rows.filter((r) => !drop.has(r.id)),
-      selectedIds: s.selectedIds.filter((x) => !drop.has(x)),
-    }));
+    set((s) => {
+      const nextRows = s.rows.filter((r) => !drop.has(r.id));
+      persistRows(nextRows);
+      return {
+        rows: nextRows,
+        selectedIds: s.selectedIds.filter((x) => !drop.has(x)),
+      };
+    });
   },
 
   setStatus: (id, status) => {
     set((s) => {
       // Cheap path: nothing to update if the id doesn't exist.
       if (!s.rows.some((r) => r.id === id)) return s;
-      return {
-        rows: s.rows.map((r) => (r.id === id ? { ...r, status } : r)),
-      };
+      const nextRows = s.rows.map((r) =>
+        r.id === id ? { ...r, status } : r,
+      );
+      persistRows(nextRows);
+      return { rows: nextRows };
     });
   },
 
   setFilter: (f) => set({ filter: f }),
 
   setMusicInfo: (id, info) => {
-    set((s) => ({
-      rows: s.rows.map((r) =>
-        r.id === id ? { ...r, musicInfo: { ...(r.musicInfo ?? {}), ...info } } : r,
-      ),
-    }));
+    set((s) => {
+      if (!s.rows.some((r) => r.id === id)) return s;
+      const nextRows = s.rows.map((r) =>
+        r.id === id
+          ? { ...r, musicInfo: { ...(r.musicInfo ?? {}), ...info } }
+          : r,
+      );
+      persistRows(nextRows);
+      return { rows: nextRows };
+    });
   },
 }));
+
+// Boot: re-fetch tags for persisted rows that need a musicInfo refresh
+// (empty cache, or lightweight tags without a usable cover after
+// stripHeavy dropped data-URI artwork). Fire-and-forget.
+(() => {
+  const need = useWorklistStore
+    .getState()
+    .rows.filter((r) => needsMusicInfoRefetch(r.musicInfo))
+    .map((r) => ({ id: r.id, fullPath: r.fullPath }));
+  if (need.length === 0) return;
+  void hydrateTagsBatched(need, (id, info) =>
+    useWorklistStore.getState().setMusicInfo(id, info),
+  );
+})();

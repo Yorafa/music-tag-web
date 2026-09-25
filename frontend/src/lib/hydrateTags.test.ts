@@ -7,12 +7,9 @@
 // integration depends on, so it's important to keep it from silently
 // regressing under a future "always write" refactor.
 //
-// Mocking shape changed from the original POST /api/music_id3/
-// envelope (`{result, code, message, data}`) to the direct return
-// value of the in-browser reader (`Partial<MusicTagInfo>`) — same
-// semantics, simpler mock bodies. Tests that previously asserted
-// "Failure envelope absent" now assert "thrown error" since the
-// in-browser reader has no envelope concept.
+// readTagsFromPath is the sole I/O boundary (POST /api/music_id3/);
+// these tests mock it directly so concurrency / write-policy stay
+// independent of axios envelope details.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 

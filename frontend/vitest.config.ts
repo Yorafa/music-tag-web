@@ -17,6 +17,12 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: false,
+    // Installs an in-memory `localStorage` when the environment's own one
+    // is missing or broken (Node >= 22 shadows jsdom's with an
+    // experimental `undefined` stub). See src/test/setup.ts for the
+    // long-form rationale — do not "simplify" it away, the store specs
+    // depend on it.
+    setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
   },
 });

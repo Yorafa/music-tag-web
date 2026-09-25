@@ -9,7 +9,7 @@ import { Search, Settings2, Loader2, Music, Download, ChevronDown, FolderPlus } 
 import type { SearchResult, SearchPagination } from '@/types';
 import { useSourceStore } from '@/store/useSourceStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
-import { resolveDownloadUrl } from '@/lib/streamUrl';
+import { resolveDownloadUrl, audioDownloadBasename } from '@/lib/streamUrl';
 
 // Static color map preserves visual consistency across restarts for the
 // search-eligible sources we ship today (YouTube is intentionally
@@ -79,7 +79,7 @@ export function SearchPanel() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
-  // Per-row "加入库 in-flight" set. The backend short-circuits on a
+  // Per-row "下载到本机 in-flight" set. The backend short-circuits on a
   // per-source cache hit so the actual cp is fast, but we still want to
   // disable the button + show a spinner while waiting on the response
   // envelope so a rapid double-click doesn't fire two POSTs. Keyed by
@@ -170,43 +170,47 @@ export function SearchPanel() {
     }
   }, [loadingMore, anyHasMore, loading, handleLoadMore]);
 
-  // handleAddToLibrary POSTs /api/download/ to land the row's preview file
-  // into the on-disk library at MUSIC_DIR/<sanitized artist - title>.<ext>.
-  // The server short-circuits when the per-source cache dir (from a
-  // previous /api/stream preview-listen long-poll) already holds the
-  // track, so re-clicking after listening is a cp, not a re-fetch. The
-  // download_path naming convention here is intentionally naive — the
-  // user can still rename in the editor post-download. We DON'T prompt
-  // for the path on purpose: the song title is the best signal we have
-  // pre-conversion, and a prompt modal would make the row action slow
-  // enough to defeat the "re-click to land" UX.
-  const handleAddToLibrary = useCallback(
+  // handleDownloadToServer POSTs /api/download/ so the worker writes into the
+  // backend MUSIC_DIR mount (./music → /app/media), under optional
+  // settings.downloadPath + "artist - title.ogg". Cache-hit short-circuit
+  // means a prior preview listen makes this a cp.
+  const handleDownloadToServer = useCallback(
     async (song: SearchResult) => {
       const key = `${song.source}:${song.id}`;
       if (adding.has(key)) return; // dedupe rapid double-clicks
       setAdding((prev) => new Set(prev).add(key));
       try {
-        const baseName = `${song.artist ?? '未知艺术家'} - ${song.title || song.name}`;
-        // strip characters that yt-dlp / filesystems consider unsafe.
-        // intentionally conservative — paranoia > broken cp.
-        const safe = baseName.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim();
+        const fileName = audioDownloadBasename(
+          song.artist,
+          song.title || song.name,
+          'ogg',
+        );
+        // Optional settings subdir (relative to MUSIC_DIR). Empty = root.
+        const dir = (localStorage.getItem('settings.downloadPath') || '')
+          .replace(/^\/+|\/+$/g, '')
+          .replace(/\.\./g, '');
+        const downloadPath = dir ? `${dir}/${fileName}` : fileName;
         const resp = await downloadToLibrary({
           source: song.source,
           video_id: song.id,
-          download_path: `${safe}.mp3`,
+          download_path: downloadPath,
+          extra_audio_format: 'ogg',
         });
         if (resp.result) {
           if (resp.skipped) {
-            pushToast(`已从缓存写入：${resp.dest ?? safe}`, 'info');
+            pushToast(`已写入本机：${resp.dest ?? fileName}`, 'info');
           } else {
-            pushToast(`已加入库：${resp.message || safe}`, 'info');
+            pushToast(`已提交下载到本机：${resp.message || fileName}`, 'info');
           }
         } else {
-          pushToast(`加入库失败：${resp.message || '未知原因'}`, 'warn');
+          pushToast(`下载到本机失败：${resp.message || '未知原因'}`, 'warn');
         }
       } catch (err) {
         const axiosErr = err as { response?: { data?: { message?: string } } };
-        pushToast(`加入库失败：${axiosErr?.response?.data?.message ?? '网络错误'}`, 'warn');
+        pushToast(
+          `下载到本机失败：${axiosErr?.response?.data?.message ?? '网络错误'}`,
+          'warn',
+        );
       } finally {
         setAdding((prev) => {
           const next = new Set(prev);
@@ -274,6 +278,7 @@ export function SearchPanel() {
         ) : (
           <div className="p-3 space-y-2">
             {results.map((song, idx) => {
+              const srcInfo = sourceList.find((s) => s.name === song.source);
               return (
                 <div
                   key={`${song.source}-${song.id}-${idx}`}
@@ -340,40 +345,29 @@ export function SearchPanel() {
                       }}
                     />
 
-                    {/* Download row actions.
-                        Two affordances now that /api/stream is generic:
-                         - "下载到浏览器": the native <a download> against
-                           /api/stream?src=…&id=…&as_attachment=1. The
-                           backend forces `Content-Disposition: attachment`
-                           so the browser writes the file to the user's
-                           Downloads folder, NOT the library. For Download
-                           Source rows this triggers the same enqueue +
-                           long-poll as preview playback. For metadata-only
-                           sources (musicbrainz / acoustid) the helper
-                           returns null and the row shows a quieted
-                           affordance instead of a broken link.
-                         - "加入库": POST /api/download/ with a
-                           download_path under MUSIC_DIR so the file lands
-                           in the on-disk library. Backend short-circuits
-                           when the per-source cache already holds the
-                           track (so listening first makes this a cp). */}
-
-                    {/* 下载到浏览器 — pure <a>, server pushes
-                        Content-Disposition: attachment so the browser
-                        doesn't try to play inline. */}
+                    {/* Download row actions:
+                         - "下载到浏览器": <a download> → browser Downloads
+                         - "下载到本机": POST /api/download → MUSIC_DIR mount
+                           (./music). Only for DownloadSources (youtube). */}
                     {(() => {
+                      const fileName = audioDownloadBasename(
+                        song.artist,
+                        song.title || song.name,
+                        'ogg',
+                      );
                       const dl = resolveDownloadUrl(
                         { kind: 'plugin', source: song.source, songId: song.id },
                         song.url || undefined,
                         sourceList,
+                        fileName,
                       );
                       if (dl) {
                         return (
                           <a
                             href={dl}
-                            download={`${(song.title || song.name).replace(/[\\/:*?"<>|]/g, '_')}.mp3`}
-                            title={`下载到浏览器：${song.title || song.name}`}
-                            aria-label={`下载到浏览器：${song.title || song.name}`}
+                            download={fileName}
+                            title={`下载到浏览器：${fileName}`}
+                            aria-label={`下载到浏览器：${fileName}`}
                             className="inline-flex items-center justify-center w-7 h-7 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
                           >
                             <Download className="w-3.5 h-3.5" />
@@ -391,24 +385,20 @@ export function SearchPanel() {
                       );
                     })()}
 
-                    {/* 加入库 — POSTs /api/download/ with download_path
-                        so the gateway land to MUSIC_DIR. Only sensible
-                        for DownloadSources (today: youtube). For others
-                        (TagSource-only) the backend rejects the POST, so
-                        we render the same placeholder guard shape — the
-                        user gets a visible squelch instead of a click
-                        that fails silently. */}
-                    {sourceList.find((s) => s.name === song.source)?.kind === 'download' ? (
+                    {/* 下载到本机 — POST /api/download/ → MUSIC_DIR mount.
+                        Enabled for both DownloadSources (YouTube) and any
+                        TagSource that advertises audio URL support. */}
+                    {srcInfo?.kind === 'download' || srcInfo?.supports_audio_url ? (
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          void handleAddToLibrary(song);
+                          void handleDownloadToServer(song);
                         }}
                         disabled={adding.has(`${song.source}:${song.id}`)}
                         aria-busy={adding.has(`${song.source}:${song.id}`)}
-                        title={`加入库（保存到服务器 MUSIC_DIR）：${song.title || song.name}`}
-                        aria-label={`加入库：${song.title || song.name}`}
+                        title={`下载到本机（服务器挂载目录 MUSIC_DIR）：${song.title || song.name}`}
+                        aria-label={`下载到本机：${song.title || song.name}`}
                         className={
                           'inline-flex items-center justify-center w-7 h-7 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed'
                         }
@@ -422,8 +412,8 @@ export function SearchPanel() {
                     ) : (
                       <div
                         className="w-7 h-7 shrink-0 flex items-center justify-center text-muted-foreground/40"
-                        title="该来源仅提供试听，加入库需走下载源"
-                        aria-label="该来源不支持加入库"
+                        title="该来源仅提供试听，下载到本机需走下载源（如 YouTube）"
+                        aria-label="该来源不支持下载到本机"
                       >
                         <FolderPlus className="w-3.5 h-3.5 opacity-40" />
                       </div>

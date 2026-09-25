@@ -16,8 +16,25 @@
 // emits re-renders per row ONLY when THAT row's relevant field
 // changes — flipping a row's status re-renders just that row's status
 // badge.
+//
+// ───── Plan C.3 grouping integration ──────────────────────────────────
+//
+// When `grouping !== 'none'`, we derive `GroupedRow[]` from the visible
+// (post-filter) rows:
+//   - each group key is `<axis>:<label>` so a label that exists in
+//     both `album` and `artist` planes can't collide (a real CJK case:
+//     a row with `album: "Compilation"` AND `artist: "Compilation"` no
+//     longer merges under one header when switching axes).
+//   - rows with no musicInfo for the active axis fall into a single
+//     "unknown album" / "unknown artist" group. NOT silently dropped
+//     (Plan C.3 § step 2 invariant: 未 scrape 行 → 'unknown *' group).
+//   - empty groups (filter excludes every row in the group) are NOT
+//     rendered at all (Plan C.3 § step 3: 空 group 不渲染).
+//   - selection state is keyed by row.id (== fullPath), so a row's
+//     checkbox stays in sync across group collapses / grouping-axis
+//     switches.
 
-import { useState, type CSSProperties } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import {
   MoreHorizontal,
   Play,
@@ -34,7 +51,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from '@/components/ui/dropdown-menu';
-import { useWorklistStore } from '@/store/useWorklistStore';
+import { useWorklistStore, type WorklistGrouping } from '@/store/useWorklistStore';
 import { editorActions, useEditorStore } from '@/store/useEditorStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
@@ -44,10 +61,12 @@ import {
   inspectCoverSrc,
   resolveCoverSrc,
 } from '@/utils/cover';
+import { needsMusicInfoRefetch } from '@/utils/persistMusicInfo';
 import { toInitialChar, toTrimmedString } from '@/utils/string';
 import { cn } from '@/lib/utils';
 import { buildMediaUrl as sharedBuildMediaUrl } from '@/lib/mediaUrl';
-import type { MusicTagInfo } from '@/types';
+import { GroupHeaderRow } from './GroupHeaderRow';
+import type { MusicTagInfo, WorklistRow } from '@/types';
 
 const STATUS_BADGE: Record<'pending' | 'scraped' | 'failed', string> = {
   pending: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/30',
@@ -65,6 +84,70 @@ const STATUS_LABEL: Record<'pending' | 'scraped' | 'failed', string> = {
  *  file header for the URL shape rationale. */
 function buildMediaUrl(fullPath: string): string {
   return sharedBuildMediaUrl(fullPath);
+}
+
+/** Resolve a row to its human-readable label on the active grouping axis.
+ *  Rows with no musicInfo fall into a single "unknown *" group per Plan
+ *  C.3 § step 2: NOT silently dropped. */
+function rowToGroupLabel(
+  row: WorklistRow,
+  axis: 'album' | 'artist',
+): string {
+  const cell = row.musicInfo?.[axis];
+  const trimmed = typeof cell === 'string' ? cell.trim() : '';
+  return trimmed.length > 0 ? trimmed : `unknown ${axis}`;
+}
+
+/** Discriminated union of items in the flattened (group-aware) Worklist
+ *  render. `kind: 'header'` precedes all data rows of its group; the
+ *  `groupKey` matches what `useWorklistStore.collapsedGroups` carries. */
+type GroupedRow =
+  | { kind: 'header'; groupKey: string; label: string; count: number; expanded: boolean }
+  | { kind: 'data'; row: WorklistRow };
+
+/** Pure derivation: visible-after-filter rows → GroupedRow[] for the
+ *  current grouping axis (or flat-equivalent when grouping === 'none').
+ *
+ *  Side note on choice of useMemo: with `rows.length` typically in the
+ *  10²–10⁴ range and a single O(n) walk per change, memoizing on
+ *  (rows, filter, grouping) is plenty. We re-run on group-collapse
+ *  toggles too because `expanded` lives on the derived item — the
+ *  collapse state is used inside the render to filter out collapsed
+ *  rows downstream. */
+function deriveGrouped(
+  rows: WorklistRow[],
+  filter: 'all' | 'pending' | 'scraped' | 'failed',
+  grouping: WorklistGrouping,
+  collapsedGroups: Set<string>,
+): GroupedRow[] {
+  const visible = rows.filter((r) =>
+    filter === 'all' ? true : r.status === filter,
+  );
+  if (visible.length === 0) return [];
+  if (grouping === 'none') {
+    return visible.map((row) => ({ kind: 'data', row }));
+  }
+  const axis: 'album' | 'artist' = grouping;
+  // Build a stable Map<groupKey, {label, rows[]}> insertion order =
+  // first-row-seen order. Matters for "albums A, B, C" where adding a
+  // row matching album B later should not yeet A-C order around.
+  const map = new Map<string, { label: string; rows: WorklistRow[] }>();
+  for (const row of visible) {
+    const label = rowToGroupLabel(row, axis);
+    const groupKey = `${axis}:${label}`;
+    const bucket = map.get(groupKey);
+    if (bucket) bucket.rows.push(row);
+    else map.set(groupKey, { label, rows: [row] });
+  }
+  const out: GroupedRow[] = [];
+  for (const [groupKey, { label, rows: groupRows }] of map) {
+    const expanded = !collapsedGroups.has(groupKey);
+    out.push({ kind: 'header', groupKey, label, count: groupRows.length, expanded });
+    if (expanded) {
+      for (const row of groupRows) out.push({ kind: 'data', row });
+    }
+  }
+  return out;
 }
 
 /** Cover thumbnail matching SearchResults' CoverThumb semantics:
@@ -158,12 +241,11 @@ function WorklistRowView({
     editorActions.setMusicInfo(musicInfo ?? {});
     editorActions.setEditorOpen(true);
 
-    // `Object.values(musicInfo).some(v => v != null)` rather than
-    // `Object.keys(musicInfo).length === 0` — preserves partial
-    // caches the user has already applied through ScrapeResults
-    // (e.g. `{artist: 'X'}`), otherwise we'd refetch and stomp them.
-    const cacheHasAnyValue = Object.values(musicInfo ?? {}).some(v => v != null);
-    if (!musicInfo || !cacheHasAnyValue) {
+    // `needsMusicInfoRefetch` rather than "any non-null field" — lightweight
+    // caches from localStorage keep title/artist but strip data-URI covers,
+    // so we still re-fetch to restore album art (and any other dropped
+    // heavy fields) on open.
+    if (needsMusicInfoRefetch(musicInfo)) {
       try {
         const info = await readTagsFromPath(fullPath);
         // Race guard: a newer click may have already switched the
@@ -295,18 +377,24 @@ function WorklistRowView({
 }
 
 /** Outer container. Selects from the store with a stable identity-sort
- *  (rows are appended in enqueueDirs() order), then renders a row
- *  per item. Empty placeholder if no rows. */
+ *  (rows are appended in enqueueDirs() order), then renders either a
+ *  flat per-row list (legacy behaviour when `grouping === 'none'`) OR
+ *  a flat per-group+per-row list (Plan C.3 grouping). Empty
+ *  placeholder if no rows. */
 export function Worklist() {
   const rows = useWorklistStore((s) => s.rows);
   const selectedIds = useWorklistStore((s) => s.selectedIds);
   const filter = useWorklistStore((s) => s.filter);
+  const grouping = useWorklistStore((s) => s.grouping);
+  const collapsedGroups = useWorklistStore((s) => s.collapsedGroups);
+  const toggleGroupCollapsed = useWorklistStore((s) => s.toggleGroupCollapsed);
 
-  const visible = rows.filter((r) =>
-    filter === 'all' ? true : r.status === filter,
+  const grouped = useMemo(
+    () => deriveGrouped(rows, filter, grouping, collapsedGroups),
+    [rows, filter, grouping, collapsedGroups],
   );
 
-  if (visible.length === 0) {
+  if (grouped.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center p-4 text-muted-foreground">
         {rows.length === 0 ? (
@@ -326,16 +414,27 @@ export function Worklist() {
 
   return (
     <ScrollArea className="flex-1 min-h-0">
-      {visible.map((row) => (
-        <WorklistRowView
-          key={row.id}
-          fullPath={row.fullPath}
-          fileName={row.fileName}
-          status={row.status}
-          musicInfo={row.musicInfo}
-          selected={selectedIds.includes(row.id)}
-        />
-      ))}
+      {grouped.map((item) =>
+        item.kind === 'header' ? (
+          <GroupHeaderRow
+            key={`h:${item.groupKey}`}
+            groupKey={item.groupKey}
+            label={item.label}
+            count={item.count}
+            collapsed={!item.expanded}
+            onToggle={() => toggleGroupCollapsed(item.groupKey)}
+          />
+        ) : (
+          <WorklistRowView
+            key={item.row.id}
+            fullPath={item.row.fullPath}
+            fileName={item.row.fileName}
+            status={item.row.status}
+            musicInfo={item.row.musicInfo}
+            selected={selectedIds.includes(item.row.id)}
+          />
+        ),
+      )}
     </ScrollArea>
   );
 }

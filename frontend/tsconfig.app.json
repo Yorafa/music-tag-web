@@ -28,5 +28,11 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  // Tests are excluded here and checked by tsconfig.test.json instead:
+  // this project sets `types: ["vite/client"]`, so a spec importing
+  // node:fs / node:path (parseFilename.test.ts loads the shared Go/TS
+  // fixture from disk) fails `tsc -b` with TS2591 and takes the whole
+  // `npm run build` down with it.
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

@@ -46,6 +46,14 @@ export async function getFileList(filePath: string, sortedFields: string[] = [])
   return data;
 }
 
+/** POST /api/music_id3/ — server-side embedded-tag read (dhowden/tag).
+ *  filePath is the parent dir relative to MUSIC_DIR ('' = root);
+ *  fileName is the audio basenamed under that dir. */
+export async function getMusicId3(filePath: string, fileName: string) {
+  const { data } = await api.post('music_id3/', { file_path: filePath, file_name: fileName });
+  return data;
+}
+
 export async function updateId3(musicId3Info: Array<Record<string, unknown>>) {
   const { data } = await api.post('update_id3/', { music_id3_info: musicId3Info });
   return data;
@@ -90,13 +98,40 @@ export async function uploadImage(file: File) {
 }
 
 // Library-level operations surfaced in the toolbar.
+//
+// These are POST (not GET) as of REVIEW.md P1-1: they enqueue asynq tasks,
+// and the gateway accepts a JWT from the `AUTHORIZATION` cookie as a
+// fallback to the Authorization header (middleware/auth.go). A state-changing
+// GET reachable with cookie auth is CSRF-able via a plain link / <img>, since
+// SameSite=Lax still sends the cookie on top-level GET navigations. POST with
+// SameSite=Lax is not sent cross-site, which closes that path.
 export async function scanFolder() {
-  const { data } = await api.get('task1/');
+  const { data } = await api.post('task1/');
   return data;
 }
 
 export async function fullScanFolder() {
-  const { data } = await api.get('full_scan_folder/');
+  const { data } = await api.post('full_scan_folder/');
+  return data;
+}
+
+/** GET /api/active_queue/ — read-only asynq queue snapshot (servers,
+ *  queues, pending rows). Read-only, so it stays a GET.
+ *
+ *  Routed through `api` (not bare axios) so the request interceptor
+ *  attaches `Authorization: JWT <token>`. TaskCenterDropdown previously
+ *  called `axios.get('/api/active_queue/')` directly, which sent no
+ *  Authorization header and authenticated purely on the cookie mirror. */
+export async function getActiveQueue() {
+  const { data } = await api.get('active_queue/');
+  return data;
+}
+
+/** POST /api/clear_celery/ — deletes every pending asynq task.
+ *  Destructive, hence POST (REVIEW.md P1-1). Same interceptor rationale
+ *  as getActiveQueue above. */
+export async function clearAsyncTasks() {
+  const { data } = await api.post('clear_celery/');
   return data;
 }
 
@@ -140,8 +175,8 @@ export async function getSources(): Promise<{
  *     the user via the toast returned from the caller; no follow-up poll
  *     because the library dir scan refreshes via a separate toolbar button.
  *
- *  `extra_audio_format` defaults to 'mp3' (matches the stream proxy's
- *  ServeFile extension when yt-dlp lands). */
+ *  `extra_audio_format` defaults to 'ogg' (matches the stream proxy's
+ *  ServeFile extension when yt-dlp lands as vorbis/ogg). */
 export async function downloadToLibrary(params: {
   source: string;
   video_id: string;
@@ -152,7 +187,164 @@ export async function downloadToLibrary(params: {
     source: params.source,
     video_id: params.video_id,
     download_path: params.download_path ?? '',
-    extra_audio_format: params.extra_audio_format ?? 'mp3',
+    extra_audio_format: params.extra_audio_format ?? 'ogg',
   });
   return data;
 }
+
+/** POST /api/sources/refresh/ — Stage B of docs/plugable-plugins.md.
+ *  Asks the gateway to re-read `data/sources/*.yaml` and dispatch
+ *  `SetSecret` / `SetAPIBase` calls to every registered plugin.
+ *
+ *  Response shape (matches `handler/source.go::RefreshSourceOverrides`):
+ *    { refreshed: number  // successful setter calls
+ *    , loaded:    number  // distinct YAML files parsed
+ *    }
+ *
+ *  Caller (SettingsModal "Sources" tab) renders both as a toast
+ *  ("已重载 N 个 override,触发 N 个 setter 调用"). Errors propagate
+ *  via the existing axios response interceptor; useNoticeStore.push
+ *  is the standard channel for surfacing them to the user. */
+export async function refreshSources(): Promise<{
+  refreshed: number;
+  loaded: number;
+}> {
+  const { data } = await api.post('sources/refresh/');
+  return data;
+}
+
+/** GET /api/sources/override/ — read-only view of the last-applied
+ *  overrides. Per Plan C.4 Open Details H the value-side secret slot
+ *  is REDACTED server-side; the response carries `hasSecret: bool`
+ *  only. Cached client-side for the duration of a session — Stage B
+ *  doesn't subscribe to override updates, so a refresh-then-render
+ *  flow always reads through this function. */
+export async function getSourceOverrides(): Promise<{
+  overrides: Array<{
+    name: string;
+    hasOverride: boolean;
+    apiBase?: string;
+    hasSecret: boolean;
+  }>;
+}> {
+  const { data } = await api.get('sources/override/');
+  return data;
+}
+
+// ─── C.2 Filename Parse: preview → apply round-trip ────────────────
+
+/** Mirrors `internal/utils.ParseOptions` + `status: 'ok'|'ambiguous'|'unparsable'`.
+ *  `paths` are RELATIVE to MUSIC_DIR on the server (server-side rejects
+ *  `'..'` escapes via SafeJoin). */
+export interface ParseOptions {
+  separator?: string;
+  fallbackRegex?: string;
+}
+
+/** Mirrors `internal/cache.ParsedResult`. `path` is the ABSOLUTE
+ *  server-side path returned by preview (used as the key for overrides
+ *  in apply). The frontend never constructs paths itself. */
+export interface ParsedPreviewRow {
+  path: string;
+  artist?: string;
+  title?: string;
+  status: 'ok' | 'ambiguous' | 'unparsable';
+}
+
+/** One override entry keyed by path (returned by preview). Empty
+ *  artist/title fields fall back to the parsed values; a non-empty
+ *  override REPLACES (not merges) the parsed value. */
+export interface ParseApplyOverride {
+  path: string;
+  artist?: string;
+  title?: string;
+}
+
+/** POST /api/tag/preview_parse_filenames/ — runs the filename parser
+ *  server-side and returns a one-shot preview token. Frontend stores
+ *  the token + results in modal state and submits the apply call with
+ *  any per-row overrides the user typed in the modal table.
+ *  Token TTL is 10 min server-side; expired / unknown tokens surface
+ *  as 401 "preview_expired" — the modal catches this and re-prompts
+ *  via a fresh preview call. */
+export async function previewParseFilenames(
+  paths: string[],
+  options?: ParseOptions,
+): Promise<{ token: string; results: ParsedPreviewRow[] }> {
+  const { data } = await api.post('tag/preview_parse_filenames/', {
+    paths,
+    options: options ?? {},
+  });
+  return data;
+}
+
+/** POST /api/tag/apply_parsed_filenames/ — consumes the token, applies
+ *  per-row overrides, enqueues `TypeApplyParsedFilenames` worker, and
+ *  returns the asynq task_id. The worker writes Artist + Title to
+ *  each row's tag (no rename, no cover, no sidecar — C.2 stays scoped.
+ *  Override an "unparsable" row's artist OR title; the backend will
+ *  flip status to "ok" (the user's manual override is treated as
+ *  authoritative even when the filename couldn't be parsed). */
+export async function applyParsedFilenames(
+  token: string,
+  overrides: ParseApplyOverride[] = [],
+): Promise<{
+  task_id: string;
+  type: string;
+  queue: string;
+  state: string;
+  row_count: number;
+  apply_target: string;
+}> {
+  const { data } = await api.post('tag/apply_parsed_filenames/', {
+    token,
+    overrides,
+  });
+  return data;
+}
+
+export interface OperationLogItem {
+  id: number;
+  action: string;
+  target: string;
+  operator: string;
+  status: string;
+  item_count: number;
+  details: string;
+  error_msg?: string;
+  created_at: string;
+}
+
+export interface OperationLogsResponse {
+  results: OperationLogItem[];
+  count: number;
+  page: number;
+  page_size: number;
+}
+
+export async function getOperationLogs(params?: {
+  page?: number;
+  page_size?: number;
+  action?: string;
+  status?: string;
+  search?: string;
+}): Promise<{
+  result: boolean;
+  code: string;
+  data: OperationLogsResponse;
+  message: string;
+}> {
+  const { data } = await api.get('operation_logs/', { params });
+  return data;
+}
+
+export async function clearOperationLogs(days?: number): Promise<{
+  result: boolean;
+  code: string;
+  data: { cleared: number };
+  message: string;
+}> {
+  const { data } = await api.post('operation_logs/clear/', { days });
+  return data;
+}
+

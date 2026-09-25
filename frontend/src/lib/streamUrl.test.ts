@@ -1,5 +1,11 @@
-import { describe, it, expect } from 'vitest';
-import { resolveStreamUrl, metadataOnlyMessage, sourceErrorMessage } from '@/lib/streamUrl';
+import { describe, it, expect, vi } from 'vitest';
+import {
+  resolveStreamUrl,
+  resolveDownloadUrl,
+  audioDownloadBasename,
+  metadataOnlyMessage,
+  sourceErrorMessage,
+} from '@/lib/streamUrl';
 import type { SourceInfo } from '@/types';
 import type { PlayerSource } from '@/store/usePlayerStore';
 
@@ -58,7 +64,11 @@ describe('resolveStreamUrl', () => {
     if (result.kind !== 'proxy') {
       throw new Error('expected proxy, got ' + JSON.stringify(result));
     }
-    expect(result.url).toBe('/api/stream?src=kuwo&id=kuwoSongId');
+    // Trailing slash before `?` mirrors the route registration
+    // (`authed.GET("/stream/", handler.StreamAudio)` in router.go) so
+    // gin's RedirectTrailingSlash default doesn't fire a 301 that the
+    // native <audio> element would have to chase with a second GET.
+    expect(result.url).toBe('/api/stream/?src=kuwo&id=kuwoSongId');
   });
 
   it('returns proxy URL for YouTube source when trackUrl is empty', () => {
@@ -71,7 +81,8 @@ describe('resolveStreamUrl', () => {
     if (result.kind !== 'proxy') {
       throw new Error('expected proxy, got ' + JSON.stringify(result));
     }
-    expect(result.url).toBe('/api/stream?src=youtube&id=ytVideoId');
+    // Same trailing-slash rationale as the kuwo test above.
+    expect(result.url).toBe('/api/stream/?src=youtube&id=ytVideoId');
   });
 
   it('returns none when source.kind is local and trackUrl is empty', () => {
@@ -104,7 +115,40 @@ describe('resolveStreamUrl', () => {
     if (result.kind !== 'proxy') throw new Error('not proxy');
     // encodeURIComponent escapes spaces too; the slash and space in
     // `a/b c` should round-trip cleanly.
-    expect(result.url).toBe('/api/stream?src=ku%20wo&id=a%2Fb%20c');
+    expect(result.url).toBe('/api/stream/?src=ku%20wo&id=a%2Fb%20c');
+  });
+});
+
+describe('resolveDownloadUrl', () => {
+  it('returns the as_attachment URL with trailing slash', () => {
+    const result = resolveDownloadUrl(
+      { kind: 'plugin', source: 'kuwo', songId: 'kuwoSongId' } as PlayerSource,
+      '',
+      ALL_SOURCES,
+    );
+    expect(result).toBe('/api/stream/?src=kuwo&id=kuwoSongId&as_attachment=1');
+  });
+
+  it('appends filename query when provided', () => {
+    const result = resolveDownloadUrl(
+      { kind: 'plugin', source: 'youtube', songId: 'abc' } as PlayerSource,
+      '',
+      ALL_SOURCES,
+      'Artist - Title.ogg',
+    );
+    expect(result).toBe(
+      '/api/stream/?src=youtube&id=abc&as_attachment=1&filename=Artist%20-%20Title.ogg',
+    );
+  });
+});
+
+describe('audioDownloadBasename', () => {
+  it('builds artist - title.ogg', () => {
+    expect(audioDownloadBasename('Ado', 'ウタ', 'ogg')).toBe('Ado - ウタ.ogg');
+  });
+
+  it('sanitizes unsafe path chars', () => {
+    expect(audioDownloadBasename('A/B', 'C:D', 'ogg')).toBe('A_B - C_D.ogg');
   });
 });
 
@@ -129,5 +173,72 @@ describe('sourceErrorMessage', () => {
 describe('metadataOnlyMessage', () => {
   it('returns a stable non-empty string', () => {
     expect(metadataOnlyMessage().length).toBeGreaterThan(0);
+  });
+});
+
+describe('waitForStreamReady', () => {
+  it('resolves on 200/206 after a 202 pending round', async () => {
+    const { waitForStreamReady } = await import('@/lib/streamUrl');
+    const fetchMock = vi
+      .fn()
+      // first: still downloading (HEAD)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ result: false, code: 'download_pending', message: '下载中' }), {
+          status: 202,
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Retry-After': '0',
+            'X-Download-Retry-Budget': '3',
+          },
+        }),
+      )
+      // second: warm cache (HEAD → 200 is enough; 206 only for Range)
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 200,
+          headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': '12' },
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(waitForStreamReady('/api/stream/?src=youtube&id=abc')).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('HEAD');
+    vi.unstubAllGlobals();
+  });
+
+  it('treats 416 as pending then resolves', async () => {
+    const { waitForStreamReady } = await import('@/lib/streamUrl');
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 416 }))
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 200,
+          headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': '12' },
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(waitForStreamReady('/api/stream/?src=youtube&id=abc')).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
+  });
+
+  it('throws UTF-8 decoded message on hard failure', async () => {
+    const { waitForStreamReady } = await import('@/lib/streamUrl');
+    const msg = 'download 异步入队失败';
+    const body = new TextEncoder().encode(
+      JSON.stringify({ result: false, code: '400', message: msg }),
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(body, {
+          status: 503,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        }),
+      ),
+    );
+    await expect(waitForStreamReady('/api/stream/?src=youtube&id=abc')).rejects.toThrow(msg);
+    vi.unstubAllGlobals();
   });
 });

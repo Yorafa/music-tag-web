@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Music } from 'lucide-react';
+import { Radio, Lock, User, Loader2 } from 'lucide-react';
 import { useAuthStore } from '@/store/useAuthStore';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
@@ -25,10 +25,6 @@ export function LoginPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
-      // handler/auth.go::Login now returns the standard APIResponse envelope
-      // (SuccessData/Failure helpers). Failure() emits HTTP 200 with
-      // {result:false, message:"..."} by project convention (response.go),
-      // so `!res.ok` will NOT detect auth failures; check data.result.
       const data = (await res.json()) as {
         result: boolean;
         message: string;
@@ -38,8 +34,6 @@ export function LoginPage() {
         setError(data.message || '登录失败');
         return;
       }
-      // Hand the raw JWT to the in-memory store; api/client.ts attaches it
-      // as 'Authorization: JWT <access>' on every subsequent request.
       login(data.data.access);
     } catch {
       setError('网络错误，请重试');
@@ -49,45 +43,70 @@ export function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4 relative">
-      <div className="absolute top-4 right-4">
+    <div className="min-h-screen flex items-center justify-center bg-background p-4 relative overflow-hidden select-none">
+      {/* Subtle ambient lighting gradients */}
+      <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] rounded-full bg-indigo-500/10 blur-[120px] pointer-events-none" />
+      <div className="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] rounded-full bg-purple-500/10 blur-[120px] pointer-events-none" />
+
+      <div className="absolute top-5 right-5 z-20">
         <ThemeToggle />
       </div>
-      <Card className="w-full max-w-sm border-border bg-card/80 backdrop-blur-sm">
-        <CardHeader className="text-center pb-2">
-          <div className="mx-auto mb-3 w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-            <Music className="w-6 h-6 text-primary" />
+
+      <Card className="w-full max-w-sm glass-floating border-border/80 rounded-2xl shadow-2xl relative z-10 overflow-hidden">
+        <div className="h-1.5 w-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500" />
+        <CardHeader className="text-center pb-3 pt-6">
+          <div className="mx-auto mb-3.5 w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-500/25 text-white">
+            <Radio className="w-7 h-7 animate-pulse" />
           </div>
-          <CardTitle className="text-lg font-semibold">音乐标签 Web 版</CardTitle>
-          <p className="text-xs text-muted-foreground mt-1">请登录以继续</p>
+          <CardTitle className="text-lg font-bold tracking-tight">Music Tag Web</CardTitle>
+          <p className="text-xs text-muted-foreground mt-1">音乐元数据管理与即时试听控制台</p>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pb-6">
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">用户名</label>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground/80 flex items-center gap-1.5">
+                <User className="w-3.5 h-3.5 text-muted-foreground" />
+                <span>用户名</span>
+              </label>
               <Input
                 value={username}
-                onChange={e => setUsername(e.target.value)}
+                onChange={(e) => setUsername(e.target.value)}
                 placeholder="admin"
-                className="h-9"
+                className="h-10 text-xs rounded-xl bg-background/60"
                 autoFocus
               />
             </div>
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">密码</label>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground/80 flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 text-muted-foreground" />
+                <span>密码</span>
+              </label>
               <Input
                 type="password"
                 value={password}
-                onChange={e => setPassword(e.target.value)}
+                onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••"
-                className="h-9"
+                className="h-10 text-xs rounded-xl bg-background/60"
               />
             </div>
             {error && (
-              <p className="text-xs text-destructive">{error}</p>
+              <div className="p-2.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs">
+                {error}
+              </div>
             )}
-            <Button type="submit" className="w-full h-9" disabled={loading}>
-              {loading ? '登录中...' : '登 录'}
+            <Button
+              type="submit"
+              className="w-full h-10 rounded-xl text-xs font-semibold shadow-md shadow-primary/20 mt-2"
+              disabled={loading}
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  登录中…
+                </>
+              ) : (
+                '登 录'
+              )}
             </Button>
           </form>
         </CardContent>

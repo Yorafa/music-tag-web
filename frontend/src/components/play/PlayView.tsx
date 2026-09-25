@@ -31,6 +31,7 @@ import { useNoticeStore } from '@/store/useNoticeStore';
 import { buildMediaUrl } from '@/lib/mediaUrl';
 import { readTagsFromPath } from '@/lib/id3Reader';
 import { COVER_PLACEHOLDER_GRADIENTS, resolveCoverSrc } from '@/utils/cover';
+import { needsMusicInfoRefetch } from '@/utils/persistMusicInfo';
 import { cn } from '@/lib/utils';
 
 // Gradient placeholder index — deterministic per-row stable hash based on
@@ -93,12 +94,10 @@ async function openEditorFor(row: LibraryRow) {
   editorActions.setMusicInfo(row.musicInfo ?? {});
   editorActions.setEditorOpen(true);
 
-  // `Object.values(...).some(v => v != null)` rather than
-  // `Object.keys(...).length === 0` — preserves partial caches the
-  // user has already applied (none today, but the contract matches
-  // Worklist's so future Plan-B-side caches fit without divergence).
-  const cacheHasAnyValue = Object.values(row.musicInfo ?? {}).some(v => v != null);
-  if (!row.musicInfo || !cacheHasAnyValue) {
+  // `needsMusicInfoRefetch` rather than "any non-null field" — lightweight
+  // caches from localStorage keep title/artist but strip data-URI covers,
+  // so we still re-fetch to restore album art on open.
+  if (needsMusicInfoRefetch(row.musicInfo)) {
     try {
       const info = await readTagsFromPath(row.fullPath);
       // Race guard: a newer click may have already switched the

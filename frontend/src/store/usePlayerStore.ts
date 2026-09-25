@@ -43,6 +43,11 @@ interface PlayerState {
    *  particular preview is stalling" signal right next to the row
    *  that triggered it, rather than burying it in a global toast. */
   isBuffering: boolean;
+  /** When true, PlayerBar renders as a fixed bottom layer above Dialog
+   *  portals (z > dialog overlay) so cloud-search previews stay
+   *  controllable while the search sheet is open. Owned by the surface
+   *  that opens the dialog (CloudSearchDialog); not persisted. */
+  floatOverDialog: boolean;
 
   /** Start playing a new track. Replaces currentTrack; resets currentTime
    *  to 0 and (optionally) seeds the queue for next/prev navigation. */
@@ -65,6 +70,7 @@ interface PlayerState {
    *  onCanPlay handlers so the buffering signal is observable outside
    *  the <audio> element (PlayButton, future spinner, etc.). */
   setIsBuffering: (b: boolean) => void;
+  setFloatOverDialog: (v: boolean) => void;
   clearError: () => void;
 }
 
@@ -85,6 +91,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   volume: loadInitialVolume(),
   error: null,
   isBuffering: false,
+  floatOverDialog: false,
 
   playTrack: (track, opts) =>
     set({
@@ -155,5 +162,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setCurrentTime: (sec) => set({ currentTime: sec }),
   setDuration: (sec) => set({ duration: sec }),
   setIsBuffering: (b) => set({ isBuffering: b }),
+  setFloatOverDialog: (v) => set({ floatOverDialog: v }),
   clearError: () => set({ error: null }),
 }));

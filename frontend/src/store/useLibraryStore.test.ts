@@ -205,4 +205,90 @@ describe('useLibraryStore', () => {
     expect(useLibraryStore.getState().query).toBe('');
     expect(localStorage.getItem('library.v1')).toBeNull();
   });
+
+  it('setMusicInfo persists lightweight tags and strips data-URI artwork', async () => {
+    getFileListMock.mockResolvedValueOnce(listResp([fileNode('p.mp3', 1)]));
+    await useLibraryStore.getState().enqueueDirs(['lib-me']);
+
+    useLibraryStore.getState().setMusicInfo('lib-me/p.mp3', {
+      title: 'Hello',
+      artist: 'World',
+      artwork: 'data:image/jpeg;base64,' + 'A'.repeat(2000),
+      album_img: 'data:image/jpeg;base64,' + 'B'.repeat(2000),
+    });
+
+    const stored = JSON.parse(localStorage.getItem('library.v1') || 'null');
+    expect(stored.rows[0].musicInfo.title).toBe('Hello');
+    expect(stored.rows[0].musicInfo.artist).toBe('World');
+    expect(stored.rows[0].musicInfo.artwork).toBeUndefined();
+    expect(stored.rows[0].musicInfo.album_img).toBeUndefined();
+  });
+
+  it('boot rehydrates missing musicInfo for persisted rows', async () => {
+    localStorage.setItem(
+      'library.v1',
+      JSON.stringify({
+        rows: [{ id: 'r/m.flac', fullPath: 'r/m.flac', fileName: 'm.flac' }],
+        dirs: ['r'],
+      }),
+    );
+
+    const { readTagsFromPath } = await import('@/lib/id3Reader');
+    const readMock = readTagsFromPath as unknown as ReturnType<typeof vi.fn>;
+    readMock.mockResolvedValueOnce({
+      title: 'Recovered',
+      artist: 'Boot',
+      artwork: 'data:image/jpeg;base64,abc',
+    });
+
+    vi.resetModules();
+    const { useLibraryStore: fresh } = await import('@/store/useLibraryStore');
+    // Give the fire-and-forget boot hydrator a tick.
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(fresh.getState().rows[0].musicInfo?.title).toBe('Recovered');
+    expect(fresh.getState().rows[0].musicInfo?.artwork).toBe(
+      'data:image/jpeg;base64,abc',
+    );
+    const stored = JSON.parse(localStorage.getItem('library.v1') || 'null');
+    expect(stored.rows[0].musicInfo.title).toBe('Recovered');
+    // data-URI is stripped again on persist; in-memory keeps it for thumbs.
+    expect(stored.rows[0].musicInfo.artwork).toBeUndefined();
+  });
+
+  it('boot re-fetches when lightweight tags lack a cover', async () => {
+    localStorage.setItem(
+      'library.v1',
+      JSON.stringify({
+        rows: [
+          {
+            id: 'r/c.flac',
+            fullPath: 'r/c.flac',
+            fileName: 'c.flac',
+            musicInfo: { title: 'Stripped', artist: 'OnlyText' },
+          },
+        ],
+        dirs: ['r'],
+      }),
+    );
+
+    const { readTagsFromPath } = await import('@/lib/id3Reader');
+    const readMock = readTagsFromPath as unknown as ReturnType<typeof vi.fn>;
+    readMock.mockResolvedValueOnce({
+      title: 'Stripped',
+      artist: 'OnlyText',
+      artwork: 'data:image/jpeg;base64,coverbytes',
+    });
+
+    vi.resetModules();
+    const { useLibraryStore: fresh } = await import('@/store/useLibraryStore');
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(readMock).toHaveBeenCalled();
+    expect(fresh.getState().rows[0].musicInfo?.artwork).toBe(
+      'data:image/jpeg;base64,coverbytes',
+    );
+  });
 });

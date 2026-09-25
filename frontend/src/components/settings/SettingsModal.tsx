@@ -1,11 +1,25 @@
-import { useEffect, useRef, useState } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useRef, useState } from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+} from '@/components/ui/tabs';
 import { Settings } from 'lucide-react';
 import { readString, writeString } from '@/utils/persist';
 import { PATH_ALIAS, formatDisplayPath, parseDisplayPath } from '@/utils/path';
+import { OperationLogsTab } from '@/components/audit/OperationLogsTab';
+import { SourcesTabContent } from './SourcesTabContent';
 
 const DOWNLOAD_PATH_KEY = 'settings.downloadPath';
 
@@ -18,8 +32,11 @@ export function SettingsModal({ open, onOpenChange }: Props) {
   // 历史背景：该面板早先同时管「音乐源」与「标签源」（与 SearchPanel 的
   // SourcePickerModal 重复维护同一个 useSourceStore key）和「Subsonic API
   // Token」（Django 时代残留、与现 httpx /api/ 无接线）——这一轮全部移除。
-  // 现在只保留下载路径这一项。
-  // 本轮进一步：原本依赖 `useEffect([open])` 在 dialog 打开时从
+  // 本轮（C.4 / Stage B UI）进一步：把现有的「下载路径」作为「常规」tab，
+  // 与新加的「音乐源」tab 并列；选择 shadcn Tabs 作为容器，因为
+  // components/ui/tabs.tsx 已 ship（drop-in）。
+  //
+  // 本轮再次进一步：原本依赖 `useEffect([open])` 在 dialog 打开时从
   // localStorage rehydrate（会在 effect 内同步 setState，触发
   // react-hooks/set-state-in-effect 警告），改为父 SettingsButton 用
   // `{open && <SettingsModal />}` 条件挂载，组件 useState 初始化器在
@@ -44,14 +61,10 @@ export function SettingsModal({ open, onOpenChange }: Props) {
   // 改为 {open && ...} 条件挂载，每次打开都重新挂一个本组件实例，组件的
   // useState 初始化器直接重读 localStorage fresh；这也避免了 React 18 的
   // react-hooks/set-state-in-effect lint 警告。
-
-  // store 变（非用户输入触发）→ display 同步。仅当用户没在编辑才同步，
-  // 否则下一次 keystroke 会清掉草稿。
-  useEffect(() => {
-    if (pathBarEditingRef.current) return;
-    const next = formatDisplayPath(downloadPath);
-    setPathBarInput((prev) => (prev === next ? prev : next));
-  }, [downloadPath]);
+  // downloadPath 在本组件内部只有 handleSave / onBlur / onChange 三处
+  // 写入，三处都同时调用 setPathBarInput(formatDisplayPath(parsed))，所以
+  // 不需要再有一个 `useEffect(() => setPathBarInput(...), [downloadPath])`
+  // 来同步——保留会触发 set-state-in-effect lint。
 
   const handleSave = () => {
     pathBarEditingRef.current = false;
@@ -62,84 +75,99 @@ export function SettingsModal({ open, onOpenChange }: Props) {
     onOpenChange(false);
   };
 
+  // Tabs default = "general" — the existing 下载路径 form lives there.
+  // Re-mount trick (heavy content's already in SourcesTab's effect): when
+  // the dialog opens, the modal mounts fresh; Tabs' defaultValue kicks
+  // the user onto the «通用» tab. Switching to «音乐源» is a panel
+  // swap, not a remount, so any in-flight reload state survives.
+  const [activeTab, setActiveTab] = useState('general');
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md max-h-[85vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-sm flex items-center gap-2">
             <Settings className="w-4 h-4" /> 设置
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-3 py-2">
-          <div className="space-y-1.5">
-            <Label className="text-xs">默认下载路径</Label>
-            <Input
-              value={pathBarInput}
-              onChange={(e) => {
-                pathBarEditingRef.current = true;
-                setPathBarInput(e.target.value);
-              }}
-              onFocus={(e) => {
-                pathBarEditingRef.current = true;
-                // 选中全部，方便用户输入新值覆盖。
-                e.currentTarget.select();
-              }}
-              onBlur={() => {
-                // 失焦即归一化显示 + 落盘：等价输入（'foo/' → 'foo'）不会重复
-                // 触发写入，但路径确实改了则跟保存一样写一次。这条隐式自动
-                // 保存让用户用 dialog 时不必每次都点「保存」按钮。
-                const parsed = parseDisplayPath(pathBarInput);
-                setPathBarInput(formatDisplayPath(parsed));
-                if (parsed !== downloadPath) {
-                  setDownloadPath(parsed);
-                  writeString(DOWNLOAD_PATH_KEY, parsed);
-                }
-                pathBarEditingRef.current = false;
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  handleSave();
-                  e.currentTarget.blur();
-                } else if (e.key === 'Escape') {
-                  // 放弃草稿，恢复到 store 当前值。e.preventDefault() 把
-                  // native keydown 标记为 defaultPrevented=true；base-ui
-                  // Dialog 的 Esc 关闭是绑在 document.addEventListener 上、
-                  // 习惯上会检查 event.defaultPrevented——这会让 dialog 不
-                  // 关闭 + 我们走 revert 分支。
-                  // 接受"中文/日文 IME candidate Esc 期间 preventDefault
-                  // 可能略干扰候选取消"作为代价：下载路径几乎不含 CJK 字
-                  // 符，IME 输入中按 Esc 的实际概率很低，maintaining 一致
-                  // 的 revert 语义更重要。如果未来需要严格兼容 IME，可以
-                  // 在这里加 `if (e.isComposing) return;` 的 guard，但需要
-                  // 同时在 DialogContent 上挂 capture-phase keydown listener
-                  // 来阻止 BASE-UI 关 dialog（否则 revert guard 反而会让
-                  // dialog 仍关——比不大）。
-                  pathBarEditingRef.current = false;
-                  setPathBarInput(formatDisplayPath(downloadPath));
-                  e.preventDefault();
-                  e.currentTarget.blur();
-                }
-              }}
-              placeholder={`${PATH_ALIAS}/...`}
-              className="h-8 text-sm font-mono"
-            />
-            <p className="text-[11px] text-muted-foreground">
-              搜索结果下载的默认存储路径（相对音乐库根目录{' '}
-              <code className="px-1 py-0.5 rounded bg-muted/40 text-[10px] font-mono">
-                {PATH_ALIAS}
-              </code>
-              ）。
-            </p>
-            <p className="text-[11px] text-muted-foreground">
-              输入后失焦自动保存；留空时下载到音乐库根目录。
-            </p>
-          </div>
-        </div>
+        <Tabs value={activeTab} onValueChange={setActiveTab} orientation="horizontal">
+          <TabsList>
+            <TabsTrigger value="general">通用</TabsTrigger>
+            <TabsTrigger value="sources">音乐源</TabsTrigger>
+            <TabsTrigger value="logs">操作日志</TabsTrigger>
+          </TabsList>
 
-        <div className="flex justify-end pt-2 border-t border-border">
-          <Button size="sm" onClick={handleSave}>保存</Button>
-        </div>
+          <TabsContent value="general" className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs">默认下载路径</Label>
+              <Input
+                value={pathBarInput}
+                onChange={(e) => {
+                  pathBarEditingRef.current = true;
+                  setPathBarInput(e.target.value);
+                }}
+                onFocus={(e) => {
+                  pathBarEditingRef.current = true;
+                  // 选中全部，方便用户输入新值覆盖。
+                  e.currentTarget.select();
+                }}
+                onBlur={() => {
+                  // 失焦即归一化显示 + 落盘：等价输入（'foo/' → 'foo'）不会重复
+                  // 触发写入，但路径确实改了则跟保存一样写一次。这条隐式自动
+                  // 保存让用户用 dialog 时不必每次都点「保存」按钮。
+                  const parsed = parseDisplayPath(pathBarInput);
+                  setPathBarInput(formatDisplayPath(parsed));
+                  if (parsed !== downloadPath) {
+                    setDownloadPath(parsed);
+                    writeString(DOWNLOAD_PATH_KEY, parsed);
+                  }
+                  pathBarEditingRef.current = false;
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleSave();
+                    e.currentTarget.blur();
+                  } else if (e.key === 'Escape') {
+                    pathBarEditingRef.current = false;
+                    setPathBarInput(formatDisplayPath(downloadPath));
+                    e.preventDefault();
+                    e.currentTarget.blur();
+                  }
+                }}
+                placeholder={`${PATH_ALIAS}/...`}
+                className="h-8 text-sm font-mono"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                搜索结果下载的默认存储路径（相对音乐库根目录{' '}
+                <code className="px-1 py-0.5 rounded bg-muted/40 text-[10px] font-mono">
+                  {PATH_ALIAS}
+                </code>
+                ）。
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                输入后失焦自动保存；留空时下载到音乐库根目录。
+              </p>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="sources" className="py-2">
+            <SourcesTabContent />
+          </TabsContent>
+
+          <TabsContent value="logs" className="py-2">
+            <OperationLogsTab />
+          </TabsContent>
+        </Tabs>
+
+        {/* Save button only applies to the 通用 form. The音乐源 tab
+            has its own reload button inside SourcesTab so Save closes
+            the dialog without acting on sources state. */}
+        {activeTab === 'general' ? (
+          <DialogFooter showCloseButton className="border-t border-border pt-2">
+            <Button size="sm" onClick={handleSave}>保存</Button>
+          </DialogFooter>
+        ) : null}
       </DialogContent>
     </Dialog>
   );

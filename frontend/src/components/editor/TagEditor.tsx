@@ -17,6 +17,7 @@
 import { useState, type CSSProperties } from 'react';
 import { useEditorStore, editorActions } from '@/store/useEditorStore';
 import { useWorklistStore } from '@/store/useWorklistStore';
+import { useLibraryStore } from '@/store/useLibraryStore';
 import { updateId3, fetchId3ByTitle, uploadImage } from '@/api/client';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -219,12 +220,21 @@ export function TagEditor() {
       }];
       const res = await updateId3(params);
       if (res.result) {
-        // Mark the Worklist row as scraped on success. Falls through
-        // silently if fullPath isn't a row id (e.g. open editor in
-        // play mode — no Worklist row to mark).
+        // Mark the Worklist row as scraped on success and mirror the
+        // just-saved musicInfo into both Worklist + Library caches so
+        // list previews + localStorage survive reload without waiting
+        // for another music_id3 round-trip. Falls through silently if
+        // fullPath isn't a known row id in that store.
         const rowId = useEditorStore.getState().fullPath;
+        const savedInfo = useEditorStore.getState().musicInfo;
         if (rowId) {
           useWorklistStore.getState().setStatus(rowId, 'scraped');
+          if (savedInfo) {
+            // Both stores share fullPath as row id; setMusicInfo is a
+            // no-op when the id is absent from that store.
+            useWorklistStore.getState().setMusicInfo(rowId, savedInfo);
+            useLibraryStore.getState().setMusicInfo(rowId, savedInfo);
+          }
         }
       }
     } finally {

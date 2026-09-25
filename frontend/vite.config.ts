@@ -12,7 +12,15 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      // REST API (JWT via axios interceptor).
       '/api': {
+        target: 'http://127.0.0.1:8005',
+        changeOrigin: true,
+      },
+      // Local library byte stream used by <audio> + browser-side
+      // id3Reader Range fetches. Without this proxy, Vite dev returns
+      // 404 for /media/* and hydrateTags silently leaves rows untagged.
+      '/media': {
         target: 'http://127.0.0.1:8005',
         changeOrigin: true,
       },

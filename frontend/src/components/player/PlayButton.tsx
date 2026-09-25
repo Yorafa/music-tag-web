@@ -1,8 +1,14 @@
+import { useState } from 'react';
 import { Play, Pause, Loader2 } from 'lucide-react';
 import { usePlayerStore, type PlayerTrack } from '@/store/usePlayerStore';
 import { useSourceStore } from '@/store/useSourceStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
-import { resolveStreamUrl, metadataOnlyMessage } from '@/lib/streamUrl';
+import {
+  resolveStreamUrl,
+  metadataOnlyMessage,
+  waitForStreamReady,
+  sourceErrorMessage,
+} from '@/lib/streamUrl';
 
 interface Props {
   track: PlayerTrack;
@@ -44,13 +50,18 @@ export function PlayButton({ track, size = 'sm', className }: Props) {
   const isBuffering = usePlayerStore((s) => s.isBuffering);
   const playTrack = usePlayerStore((s) => s.playTrack);
   const togglePlay = usePlayerStore((s) => s.togglePlay);
+  const setIsBuffering = usePlayerStore((s) => s.setIsBuffering);
   const pushToast = useNoticeStore((s) => s.push);
+  // Local arming spinner for the preflight wait (202 download_pending
+  // rounds) before currentTrack is committed — isBuffering alone only
+  // covers the active track after playTrack().
+  const [arming, setArming] = useState(false);
 
   const isThis = currentTrack?.id === track.id;
   // Only the currently-playing row reflects buffering. Other rows show
   // a clean Play icon, since they're not waiting on anything.
-  const loading = isThis && isBuffering;
-  const showPause = isThis && isPlaying;
+  const loading = arming || (isThis && isBuffering);
+  const showPause = isThis && isPlaying && !arming;
   const playable = useHasPlayableUrl(track);
 
   const onClick = async (e: React.MouseEvent) => {
@@ -69,13 +80,28 @@ export function PlayButton({ track, size = 'sm', className }: Props) {
       return;
     }
 
-    // No per-source gate (legacy youtube ensureDownload) — the gateway
-    // StreamAudio handler enqueues a download task on cache-miss and
-    // long-polls the cache dir for up to 10s before returning. If the
-    // file still isn't there, the response goes 202 + Retry-After or
-    // a Failure envelope, and <audio>.error → onMediaError surfaces
-    // the per-source toast via sourceErrorMessage(track.source.source).
-    playTrack({ ...track, url: r.url });
+    // DownloadSource (youtube): gateway may 202 until worker lands the
+    // file. Native <audio> cannot honour Retry-After, so preflight here
+    // and only then commit audio.src. TagSource proxy paths usually
+    // return audio immediately; waitForStreamReady is a cheap Range
+    // probe in that case.
+    setArming(true);
+    setIsBuffering(true);
+    try {
+      await waitForStreamReady(r.url);
+      playTrack({ ...track, url: r.url });
+    } catch (err) {
+      const sourceName =
+        track.source.kind === 'plugin' ? track.source.source : undefined;
+      const msg =
+        err instanceof Error && err.message
+          ? err.message
+          : sourceErrorMessage(sourceName);
+      pushToast(msg, 'warn');
+      setIsBuffering(false);
+    } finally {
+      setArming(false);
+    }
   };
 
   const iconSize = size === 'md' ? 'w-5 h-5' : 'w-3.5 h-3.5';

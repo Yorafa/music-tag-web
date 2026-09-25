@@ -7,25 +7,28 @@
 //
 // 设计要点：
 //   - 输入：Dialog 打开时 autoFocus。
-//   - 源：useSourceStore.sources 中 kind==='tag' 子集；用 useMemo 派生
+//   - 源：useSourceStore.sources 中 searchable===true 的全部源
+//     （tag + download，含 youtube）；用 useMemo 派生
 //     `effectiveSource`（而非 useEffect + setState），规避
 //     react-hooks/set-state-in-effect —— base-ui 的 Select.Root 在无值
 //     时会传 null 给 onValueChange，用 wrapper 跳过 null。
 //   - 搜索：searchMusic({query, sources:[effectiveSource], pages:{},
 //     limit:20})。单源单页，不做「加载更多」分页——经典搜索 UX。
-//   - 结果：每条复用 PlayButton 做试听，<a target="_blank"> 做下载。
+//   - 结果：每条复用 PlayButton 做试听；
+//       * 下载到浏览器：resolveDownloadUrl（/api/stream?as_attachment=1）
+//       * 下载到本机：POST /api/download/ → MUSIC_DIR 挂载（仅 DownloadSource）
+//     YouTube 等 DownloadSource 无 song.url，不能再靠外链。
 //   - 状态全本地，不入 store、不持久化——打开关闭自动清空。
 //
 // 与 PlayView 的契约：open + onOpenChange。
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import { searchMusic } from '@/api/client';
+import { searchMusic, downloadToLibrary } from '@/api/client';
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,13 +43,15 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { PlayButton } from '@/components/player/PlayButton';
 import { useSourceStore } from '@/store/useSourceStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
+import { usePlayerStore } from '@/store/usePlayerStore';
+import { resolveDownloadUrl, audioDownloadBasename } from '@/lib/streamUrl';
 import type { SearchResult } from '@/types';
 import {
   Search,
   Loader2,
   Music,
   Download,
-  XIcon,
+  FolderPlus,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -55,10 +60,10 @@ interface Props {
   onOpenChange: (open: boolean) => void;
 }
 
-/** 当 useSourceStore 还未 hydrate 出 tag 源时的兜底值。这个名字被有意
+/** 当 useSourceStore 还未 hydrate 出可搜索源时的兜底值。这个名字被有意
  *  设成「绝大多数 backend 注册的常见 plugin 名」，这样 effectiveSource
  *  在源未到达前用一个大概率合法的占位，源到达后会被 default_on 或第一
- * 个 tag 源覆盖。 */
+ *  个 searchable 源覆盖。 */
 const SOURCE_FALLBACK = 'netease';
 
 export function CloudSearchDialog({ open, onOpenChange }: Props) {
@@ -77,18 +82,33 @@ export function CloudSearchDialog({ open, onOpenChange }: Props) {
     void loadSources();
   }, [loadSources]);
 
-  // 派生 effectiveSource：源未就绪或没有 tag 源 → fallback；用户已选过
-  // 合法源 → 沿用；否则挑 default_on，再否则第一个。注意：派生值而不是
-  // 写 state，规避 react-hooks/set-state-in-effect。
-  const tagSources = useMemo(
-    () => sourceList.filter((s) => s.kind === 'tag'),
+  // 打开时让 PlayerBar 浮到 Dialog 遮罩之上，关闭/卸载时收回。
+  // cleanup 必须写：快速开关或 unmount 时不能留下 floatOverDialog=true。
+  useEffect(() => {
+    usePlayerStore.getState().setFloatOverDialog(open);
+    return () => {
+      usePlayerStore.getState().setFloatOverDialog(false);
+    };
+  }, [open]);
+
+  // 派生 searchableSources + effectiveSource：包含全部可搜索源
+  // （tag + download/youtube），不再只限 kind==='tag'。
+  // 源未就绪或没有 searchable 源 → fallback；用户已选过合法源 → 沿用；
+  // 否则优先 default_on 的 tag 源，再否则第一个 searchable。
+  // 注意：派生值而不是写 state，规避 react-hooks/set-state-in-effect。
+  const searchableSources = useMemo(
+    () => sourceList.filter((s) => s.searchable),
     [sourceList],
   );
   const effectiveSource = useMemo(() => {
-    if (!sourcesLoaded || tagSources.length === 0) return SOURCE_FALLBACK;
-    if (tagSources.some((s) => s.name === source)) return source;
-    return tagSources.find((s) => s.default_on)?.name ?? tagSources[0].name;
-  }, [sourcesLoaded, tagSources, source]);
+    if (!sourcesLoaded || searchableSources.length === 0) return SOURCE_FALLBACK;
+    if (searchableSources.some((s) => s.name === source)) return source;
+    return (
+      searchableSources.find((s) => s.default_on && s.kind === 'tag')?.name ??
+      searchableSources.find((s) => s.default_on)?.name ??
+      searchableSources[0].name
+    );
+  }, [sourcesLoaded, searchableSources, source]);
 
   // base-ui 的 Select.Root 在无值时会向 onValueChange 传 null。包一层
   // 跳过 null，避免 setSource(null) 类型不兼容 + 静默丢用户选值两种
@@ -100,7 +120,7 @@ export function CloudSearchDialog({ open, onOpenChange }: Props) {
   const handleSearch = async () => {
     const trimmed = query.trim();
     if (!trimmed || !sourcesLoaded) return;
-    if (tagSources.length === 0) {
+    if (searchableSources.length === 0) {
       useNoticeStore.getState().push('没有可用的云音乐源', 'warn');
       return;
     }
@@ -142,11 +162,18 @@ export function CloudSearchDialog({ open, onOpenChange }: Props) {
     }
   };
 
-  const handleClose = () => onOpenChange(false);
-
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col p-0 gap-0 overflow-hidden">
+    // modal="trap-focus"：焦点仍在弹层内，但允许点击外部（浮起的
+    // PlayerBar）做试听控制。disablePointerDismissal：点播放条不关弹层。
+    // 关闭只保留 DialogContent 右上角 X（showCloseButton 默认 true），
+    // 不再在 footer 放第二个「关闭」——用户反馈右下角重复。
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      modal="trap-focus"
+      disablePointerDismissal
+    >
+      <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col p-0 gap-0 overflow-hidden mb-20 sm:mb-24">
         <DialogHeader className="px-4 pt-4 pb-2 border-b border-border shrink-0">
           <DialogTitle className="text-base">搜索云音乐</DialogTitle>
         </DialogHeader>
@@ -171,12 +198,12 @@ export function CloudSearchDialog({ open, onOpenChange }: Props) {
               <SelectValue placeholder="选择源" />
             </SelectTrigger>
             <SelectContent>
-              {tagSources.length === 0 ? (
+              {searchableSources.length === 0 ? (
                 <SelectItem value={SOURCE_FALLBACK} disabled>
                   无可用源
                 </SelectItem>
               ) : (
-                tagSources.map((s) => (
+                searchableSources.map((s) => (
                   <SelectItem key={s.name} value={s.name}>
                     {s.display_name}
                   </SelectItem>
@@ -191,7 +218,7 @@ export function CloudSearchDialog({ open, onOpenChange }: Props) {
               loading ||
               !query.trim() ||
               !sourcesLoaded ||
-              tagSources.length === 0
+              searchableSources.length === 0
             }
             className="h-9 px-3 gap-1.5"
           >
@@ -239,17 +266,13 @@ export function CloudSearchDialog({ open, onOpenChange }: Props) {
           )}
         </ScrollArea>
 
-        <DialogFooter className="px-4 py-3 border-t border-border shrink-0 flex-row justify-between gap-2">
-          <span className="text-xs text-muted-foreground tabular-nums self-center">
-            {hasSearched && !loading && results.length > 0
-              ? `共 ${results.length} 条`
-              : ''}
-          </span>
-          <Button type="button" variant="ghost" size="sm" onClick={handleClose}>
-            <XIcon className="w-3.5 h-3.5 mr-1.5" />
-            关闭
-          </Button>
-        </DialogFooter>
+        {hasSearched && !loading && results.length > 0 && (
+          <div className="px-4 py-2.5 border-t border-border shrink-0">
+            <span className="text-xs text-muted-foreground tabular-nums">
+              共 {results.length} 条
+            </span>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -258,6 +281,60 @@ export function CloudSearchDialog({ open, onOpenChange }: Props) {
 /** 单条结果。提到外层让主组件短一点 + 复用 PlayButton/Download 这种
  *  内联 JSX 块之间的样式保持一致。 */
 function ResultRow({ song }: { song: SearchResult }) {
+  // Same dual download paths as SearchPanel:
+  //   - 下载到浏览器: /api/stream?as_attachment=1
+  //   - 下载到本机: POST /api/download/ → MUSIC_DIR mount (DownloadSource only)
+  const sourceList = useSourceStore((s) => s.sources);
+  const pushToast = useNoticeStore((s) => s.push);
+  const [saving, setSaving] = useState(false);
+  const fileName = audioDownloadBasename(
+    song.artist,
+    song.title || song.name,
+    'ogg',
+  );
+  const downloadHref = resolveDownloadUrl(
+    { kind: 'plugin', source: song.source, songId: song.id },
+    song.url || undefined,
+    sourceList,
+    fileName,
+  );
+  const canSaveToServer =
+    sourceList.find((s) => s.name === song.source)?.kind === 'download';
+
+  const handleDownloadToServer = useCallback(async () => {
+    if (saving || !canSaveToServer) return;
+    setSaving(true);
+    try {
+      const dir = (localStorage.getItem('settings.downloadPath') || '')
+        .replace(/^\/+|\/+$/g, '')
+        .replace(/\.\./g, '');
+      const downloadPath = dir ? `${dir}/${fileName}` : fileName;
+      const resp = await downloadToLibrary({
+        source: song.source,
+        video_id: song.id,
+        download_path: downloadPath,
+        extra_audio_format: 'ogg',
+      });
+      if (resp.result) {
+        if (resp.skipped) {
+          pushToast(`已写入本机：${resp.dest ?? fileName}`, 'info');
+        } else {
+          pushToast(`已提交下载到本机：${resp.message || fileName}`, 'info');
+        }
+      } else {
+        pushToast(`下载到本机失败：${resp.message || '未知原因'}`, 'warn');
+      }
+    } catch (err) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      pushToast(
+        `下载到本机失败：${axiosErr?.response?.data?.message ?? '网络错误'}`,
+        'warn',
+      );
+    } finally {
+      setSaving(false);
+    }
+  }, [saving, canSaveToServer, fileName, song.source, song.id, pushToast]);
+
   return (
     <div
       className={cn(
@@ -315,13 +392,12 @@ function ResultRow({ song }: { song: SearchResult }) {
           }}
         />
 
-        {song.url ? (
+        {downloadHref ? (
           <a
-            href={song.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            title={`下载 ${song.title || song.name}`}
-            aria-label={`下载 ${song.title || song.name}`}
+            href={downloadHref}
+            download={fileName}
+            title={`下载到浏览器：${fileName}`}
+            aria-label={`下载到浏览器：${fileName}`}
             className="inline-flex items-center justify-center w-7 h-7 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
           >
             <Download className="w-3.5 h-3.5" />
@@ -329,10 +405,39 @@ function ResultRow({ song }: { song: SearchResult }) {
         ) : (
           <div
             className="w-7 h-7 shrink-0 flex items-center justify-center text-muted-foreground/60"
-            title="暂未提供下载链接"
+            title="该来源仅提供元数据，不支持下载"
             aria-label="暂未提供下载链接"
           >
             <Download className="w-3.5 h-3.5 opacity-40" />
+          </div>
+        )}
+
+        {canSaveToServer ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              void handleDownloadToServer();
+            }}
+            disabled={saving}
+            aria-busy={saving}
+            title={`下载到本机（服务器挂载目录 MUSIC_DIR）：${fileName}`}
+            aria-label={`下载到本机：${fileName}`}
+            className="inline-flex items-center justify-center w-7 h-7 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {saving ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <FolderPlus className="w-3.5 h-3.5" />
+            )}
+          </button>
+        ) : (
+          <div
+            className="w-7 h-7 shrink-0 flex items-center justify-center text-muted-foreground/40"
+            title="该来源仅提供试听，下载到本机需走下载源（如 YouTube）"
+            aria-label="该来源不支持下载到本机"
+          >
+            <FolderPlus className="w-3.5 h-3.5 opacity-40" />
           </div>
         )}
       </div>
