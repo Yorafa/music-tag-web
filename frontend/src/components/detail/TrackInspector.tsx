@@ -41,6 +41,8 @@ import {
   getMusicId3,
 } from '@/api/client';
 import { resolveCoverSrc, COVER_PLACEHOLDER_GRADIENTS } from '@/utils/cover';
+import { renamedPathFromUpdate, baseNameOf } from '@/components/detail/renameResult';
+import { useDetailStore } from '@/store/useDetailStore';
 import type { MusicSource, MusicTagInfo, SongInfo } from '@/types';
 import type { DetailTarget } from '@/store/useDetailStore';
 
@@ -54,6 +56,11 @@ interface Props {
 function getInitialFormData(row: DetailTarget): Partial<MusicTagInfo> {
   const info = row.musicInfo ?? {};
   return {
+    // Seeded from the actual file, not from any cached tag: `filename` is
+    // a rename instruction, and sending an empty or stale value is a
+    // request to move the file. An untouched field resolves to the same
+    // path and the handler skips the rename.
+    filename: row.fileName,
     title: info.title || row.fileName.replace(/\.[^/.]+$/, '').trim(),
     artist: info.artist || '',
     album: info.album || '',
@@ -72,6 +79,9 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
   const setMusicInfo = useWorklistStore((s) => s.setMusicInfo);
   const setStatus = useWorklistStore((s) => s.setStatus);
   const setLibraryMusicInfo = useLibraryStore((s) => s.setMusicInfo);
+  const renameWorklistRow = useWorklistStore((s) => s.renameRow);
+  const renameLibraryRow = useLibraryStore((s) => s.renameRow);
+  const renameDetailTarget = useDetailStore((s) => s.renameTarget);
   const playTrack = usePlayerStore((s) => s.playTrack);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const currentTrack = usePlayerStore((s) => s.currentTrack);
@@ -147,10 +157,14 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
   // Save all modified tags
   const handleSaveTags = async () => {
     setSaving(true);
+    // Captured before the request: once the handler renames the file this
+    // path stops resolving, so it is needed to match the response and to
+    // tell the stores which row moved.
+    const savedFrom = row.fullPath;
     try {
-      await updateId3([
+      const res = await updateId3([
         {
-          file_full_path: row.fullPath,
+          file_full_path: savedFrom,
           file_name: row.fileName,
           ...formData,
         },
@@ -160,10 +174,27 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
       // 音乐库 also refresh the scraper table's status badge and
       // preview, and vice versa, without either view knowing which
       // section the dialog was opened from.
-      setMusicInfo(row.fullPath, formData);
-      setStatus(row.fullPath, 'scraped');
-      setLibraryMusicInfo(row.fullPath, formData);
-      useNoticeStore.getState().push(`已成功保存「${formData.title || row.fileName}」标签`, 'info');
+      setMusicInfo(savedFrom, formData);
+      setStatus(savedFrom, 'scraped');
+      setLibraryMusicInfo(savedFrom, formData);
+
+      // Did the save also move the file? The handler only renames when
+      // info["filename"] resolved to a different name, and says so in the
+      // response. A row's id is its path, so if we skip this the table
+      // keeps pointing at a file that is no longer there.
+      const newPath = renamedPathFromUpdate(res, savedFrom);
+      if (newPath) {
+        const newFileName = baseNameOf(newPath);
+        renameWorklistRow(savedFrom, newPath, newFileName);
+        renameLibraryRow(savedFrom, newPath, newFileName);
+        renameDetailTarget(savedFrom, newPath, newFileName);
+        setFormData((prev) => ({ ...prev, filename: newFileName }));
+        useNoticeStore
+          .getState()
+          .push(`已保存并重命名为「${newFileName}」`, 'info');
+      } else {
+        useNoticeStore.getState().push(`已成功保存「${formData.title || row.fileName}」标签`, 'info');
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       useNoticeStore.getState().push(`保存失败: ${msg}`, 'error');
@@ -368,6 +399,21 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
                   onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                   className="h-9 text-sm font-medium"
                 />
+              </div>
+
+              <div>
+                <Label className="text-sm mb-1.5 block">文件名 (Filename)</Label>
+                <Input
+                  value={formData.filename || ''}
+                  onChange={(e) =>
+                    setFormData({ ...formData, filename: e.target.value })
+                  }
+                  className="h-9 text-sm font-mono"
+                  placeholder="支持 $artist / $title 模板；扩展名自动补全"
+                />
+                <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                  保存时会同时重命名磁盘上的文件；与当前文件名相同则不做任何改动。
+                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-3">

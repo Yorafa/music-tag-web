@@ -80,7 +80,8 @@ func UpdateID3(c *gin.Context) {
 			Failure(c, "路径不安全: "+err.Error())
 			return
 		}
-		if err := applyFileUpdate(filePath, info); err != nil {
+		var renamedTo string
+		if err := applyFileUpdate(filePath, info, &renamedTo); err != nil {
 			if dupErr, ok := err.(ErrDuplicateSkipped); ok {
 				// 记录跳过信息但 handler 整体仍返回成功，避免前端给一行「重复」扔 4xx。
 				report.addSkipped(rawPath, dupErr.Dup)
@@ -91,7 +92,7 @@ func UpdateID3(c *gin.Context) {
 			Failure(c, fmt.Sprintf("update %s: %v", filepath.Base(filePath), err))
 			return
 		}
-		report.addDone(rawPath)
+		report.addDone(rawPath, renamedTo)
 		audit.Log(c.Request.Context(), audit.ActionUpdateID3, rawPath, "admin", audit.StatusSuccess, 1, info, nil)
 	}
 	SuccessData(c, report.toJSON())
@@ -104,11 +105,19 @@ type updateBatchReport struct {
 	skipped []map[string]interface{}
 }
 
-func (r *updateBatchReport) addDone(path string) {
-	r.done = append(r.done, map[string]interface{}{
+// addDone records one successful write. newFileName is non-empty only
+// when the call also renamed the file — the frontend keys its rows by
+// path, so without this it would keep pointing at a name that no longer
+// exists after the user renames from the detail dialog.
+func (r *updateBatchReport) addDone(path, newFileName string) {
+	entry := map[string]interface{}{
 		"file_full_path": path,
 		"status":         "updated",
-	})
+	}
+	if newFileName != "" {
+		entry["new_file_name"] = newFileName
+	}
+	r.done = append(r.done, entry)
 }
 func (r *updateBatchReport) addSkipped(path string, dup dedup.Result) {
 	r.skipped = append(r.skipped, map[string]interface{}{
@@ -194,7 +203,8 @@ func BatchUpdateID3(c *gin.Context) {
 					"file_full_path": leaf,
 					"filename":       e.Name(),
 				})
-				if err := applyFileUpdate(stringValue(merged["file_full_path"]), merged); err != nil {
+				var renamedTo string
+				if err := applyFileUpdate(stringValue(merged["file_full_path"]), merged, &renamedTo); err != nil {
 					if dupErr, ok := err.(ErrDuplicateSkipped); ok {
 						report.addSkipped(relToMusicRoot(leaf), dupErr.Dup)
 						continue
@@ -202,7 +212,7 @@ func BatchUpdateID3(c *gin.Context) {
 					Failure(c, err.Error())
 					return
 				}
-				report.addDone(relToMusicRoot(leaf))
+				report.addDone(relToMusicRoot(leaf), renamedTo)
 			}
 			continue
 		}
@@ -214,7 +224,8 @@ func BatchUpdateID3(c *gin.Context) {
 		merged := mergeInfo(req.MusicInfo, map[string]interface{}{
 			"file_full_path": leaf,
 		})
-		if err := applyFileUpdate(stringValue(merged["file_full_path"]), merged); err != nil {
+		var renamedTo string
+		if err := applyFileUpdate(stringValue(merged["file_full_path"]), merged, &renamedTo); err != nil {
 			if dupErr, ok := err.(ErrDuplicateSkipped); ok {
 				report.addSkipped(relToMusicRoot(leaf), dupErr.Dup)
 				continue
@@ -222,7 +233,7 @@ func BatchUpdateID3(c *gin.Context) {
 			Failure(c, err.Error())
 			return
 		}
-		report.addDone(relToMusicRoot(leaf))
+		report.addDone(relToMusicRoot(leaf), renamedTo)
 	}
 	status := audit.StatusSuccess
 	if len(report.skipped) > 0 && len(report.done) > 0 {
@@ -376,7 +387,14 @@ func relToMusicRoot(abs string) string {
 //
 // Renamed targets are computed via utils.SafeJoin so callers cannot drive
 // the rename into an arbitrary parent directory.
-func applyFileUpdate(filePath string, info map[string]interface{}) error {
+// applyFileUpdate writes tags (and sidecars) for one file, renaming it
+// last if info["filename"] asked for a different name.
+//
+// renamedTo, when non-nil, receives the new BASE name after a successful
+// rename and is left untouched otherwise. Only the base name is reported
+// because the rename target is always in the same parent directory, so
+// the caller can rebuild the relative path from the one it already has.
+func applyFileUpdate(filePath string, info map[string]interface{}, renamedTo *string) error {
 	if !isAudioFile(filePath) {
 		return nil
 	}
@@ -516,6 +534,9 @@ func applyFileUpdate(filePath string, info map[string]interface{}) error {
 	if renameWanted {
 		if err := os.Rename(filePath, renameTarget); err != nil {
 			return fmt.Errorf("rename: %w", err)
+		}
+		if renamedTo != nil {
+			*renamedTo = filepath.Base(renameTarget)
 		}
 	}
 	return nil

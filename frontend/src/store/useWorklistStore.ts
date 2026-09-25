@@ -106,6 +106,13 @@ interface WorklistState {
    *  two rows with the same filename in different dirs stay
    *  independent. */
   setMusicInfo: (id: string, info: Partial<MusicTagInfo>) => void;
+  /** Move a row to a new path after the file behind it was renamed.
+   *
+   *  A row's id IS its fullPath, so a rename is an identity change, not a
+   *  field update: `id`, `fullPath` and `fileName` all move together, and
+   *  `selectedIds` — which is keyed by the same path — has to follow or the
+   *  checkbox desyncs from the row it was ticking. */
+  renameRow: (oldPath: string, newPath: string, newFileName: string) => void;
 }
 
 interface PersistedShape {
@@ -347,6 +354,26 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
       );
       persistRows(nextRows);
       return { rows: nextRows };
+    });
+  },
+
+  renameRow: (oldPath, newPath, newFileName) => {
+    set((s) => {
+      if (!s.rows.some((r) => r.id === oldPath)) return s;
+      // The handler refuses a colliding rename, so this should be
+      // unreachable — but merging two rows into one id would silently drop
+      // a file from the queue, which is worse than ignoring the update.
+      if (newPath !== oldPath && s.rows.some((r) => r.id === newPath)) return s;
+      const nextRows = s.rows.map((r) =>
+        r.id === oldPath
+          ? { ...r, id: newPath, fullPath: newPath, fileName: newFileName }
+          : r,
+      );
+      persistRows(nextRows);
+      return {
+        rows: nextRows,
+        selectedIds: s.selectedIds.map((id) => (id === oldPath ? newPath : id)),
+      };
     });
   },
 }));

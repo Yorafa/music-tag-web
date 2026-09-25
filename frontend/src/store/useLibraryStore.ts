@@ -112,6 +112,10 @@ interface LibraryState {
    *  Mirrors useWorklistStore.setMusicInfo shape + indexed-by-id
    *  dedupe semantics. */
   setMusicInfo(id: string, info: Partial<MusicTagInfo>): void;
+  /** Move a row to a new path after the file behind it was renamed.
+   *  LibraryRow.id is fullPath too, so this mirrors the worklist store's
+   *  renameRow minus the selection bookkeeping. */
+  renameRow(oldPath: string, newPath: string, newFileName: string): void;
 }
 
 const boot = loadPersisted();
@@ -228,6 +232,20 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       const nextRows = s.rows.map((r) =>
         r.id === id
           ? { ...r, musicInfo: { ...(r.musicInfo ?? {}), ...info } }
+          : r,
+      );
+      persist({ rows: nextRows, dirs: s.dirs });
+      return { rows: nextRows };
+    });
+  },
+
+  renameRow: (oldPath, newPath, newFileName) => {
+    set((s) => {
+      if (!s.rows.some((r) => r.id === oldPath)) return s;
+      if (newPath !== oldPath && s.rows.some((r) => r.id === newPath)) return s;
+      const nextRows = s.rows.map((r) =>
+        r.id === oldPath
+          ? { ...r, id: newPath, fullPath: newPath, fileName: newFileName }
           : r,
       );
       persist({ rows: nextRows, dirs: s.dirs });

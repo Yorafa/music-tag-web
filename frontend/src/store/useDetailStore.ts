@@ -43,6 +43,12 @@ interface DetailState {
   target: DetailTarget | null;
   openDetail: (target: DetailTarget) => void;
   closeDetail: () => void;
+  /** Repoint an open dialog at a file that has just been renamed.
+   *
+   *  `target` is a snapshot taken when the row was tapped, not a live
+   *  lookup, so it goes stale the moment the file moves. Without this the
+   *  dialog would keep saving to a path that no longer exists. */
+  renameTarget: (oldPath: string, newPath: string, newFileName: string) => void;
 }
 
 export const useDetailStore = create<DetailState>((set) => ({
@@ -51,4 +57,17 @@ export const useDetailStore = create<DetailState>((set) => ({
   openDetail: (target) => set({ target }),
 
   closeDetail: () => set({ target: null }),
+
+  renameTarget: (oldPath, newPath, newFileName) =>
+    set((s) =>
+      s.target && s.target.fullPath === oldPath
+        ? {
+            target: {
+              ...s.target,
+              fullPath: newPath,
+              fileName: newFileName,
+            },
+          }
+        : s,
+    ),
 }));

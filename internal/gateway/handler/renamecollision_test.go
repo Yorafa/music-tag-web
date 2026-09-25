@@ -43,7 +43,7 @@ func TestApplyFileUpdate_RefusesToOverwrite(t *testing.T) {
 	err = applyFileUpdate(src, map[string]interface{}{
 		"title":    "Renamed Title",
 		"filename": "target",
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("applyFileUpdate succeeded — the existing file was silently replaced")
 	}
@@ -83,7 +83,7 @@ func TestApplyFileUpdate_AllowsFreeTarget(t *testing.T) {
 
 	if err := applyFileUpdate(src, map[string]interface{}{
 		"filename": "after",
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("applyFileUpdate: %v", err)
 	}
 
@@ -107,7 +107,7 @@ func TestApplyFileUpdate_RenamesOntoItselfIsANoOp(t *testing.T) {
 
 	if err := applyFileUpdate(src, map[string]interface{}{
 		"filename": "same",
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("applyFileUpdate on an unchanged name: %v", err)
 	}
 	if _, err := os.Stat(src); err != nil {
@@ -137,7 +137,7 @@ func TestApplyFileUpdate_KeepsResultUnderMusicRoot(t *testing.T) {
 	sentinel := "zzz-escape-sentinel-9f3a.mp3"
 	err := applyFileUpdate(src, map[string]interface{}{
 		"filename": "../../etc/" + sentinel,
-	})
+	}, nil)
 
 	// Nothing named after the sentinel may exist anywhere — not directly
 	// above the music root, not two levels up, not in /etc.
