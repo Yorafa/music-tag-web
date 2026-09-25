@@ -134,6 +134,15 @@ func (s *Server) doSearch(ctx context.Context, title string, page, pagesize int)
 				m["album_img"] = strings.ReplaceAll(img, "{size}", "150")
 			}
 			m["year"] = m["PublishTime"]
+			// Kugou's WebFilter search reports `Duration` in SECONDS
+			// (verified live: 119 for a 1:59 track — the same value
+			// NetEase sends as 119133 ms). Also accept `duration` in case
+			// the shape moves back to the mobile endpoint.
+			if d, ok := m["Duration"]; ok {
+				m["duration"] = plugin.DurationFromSeconds(d)
+			} else {
+				m["duration"] = plugin.DurationFromSeconds(m["duration"])
+			}
 			songs = append(songs, m)
 		}
 	}
@@ -162,6 +171,7 @@ func mapToPBSong(m map[string]interface{}) *pb.Song {
 		AlbumId:  getStr("album_id"),
 		AlbumImg: getStr("album_img"),
 		Year:     getStr("year"),
+		Duration: plugin.DurationFromSeconds(m["duration"]),
 	}
 }
 

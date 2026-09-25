@@ -20,6 +20,12 @@ type Song struct {
 	Mid      string  `json:"mid,omitempty"`
 	Cover    string  `json:"cover,omitempty"`
 	Score    float64 `json:"score,omitempty"`
+	// Duration is the track length in SECONDS, already normalized by the
+	// plugin. Upstream units differ (NetEase reports milliseconds, the
+	// rest seconds), so the conversion belongs at the edge rather than in
+	// every consumer. Zero means unknown: MusicBrainz search results
+	// carry no length, and that is a normal empty rather than a failure.
+	Duration float64 `json:"duration,omitempty"`
 }
 
 // SearchResult wraps a search response with pagination info.

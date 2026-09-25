@@ -9,6 +9,7 @@ import { PlayButton } from '@/components/player/PlayButton';
 import { useSourceStore } from '@/store/useSourceStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { resolveDownloadUrl, audioDownloadBasename } from '@/lib/streamUrl';
+import { formatDuration, toSeconds } from '@/utils/duration';
 import { COVER_PLACEHOLDER_GRADIENTS } from '@/utils/cover';
 import type { SearchResult } from '@/types';
 import {
@@ -209,6 +210,10 @@ export function CloudSearchView() {
                 );
                 const isDlSource = song.source === 'youtube';
                 const gradIdx = gradientIdx(`${song.name}-${song.artist}`);
+                // Empty for sources that report no length (MusicBrainz
+                // search carries none), which is why it is interpolated
+                // rather than rendered unconditionally.
+                const duration = formatDuration(song.duration);
 
                 return (
                   <Card
@@ -241,12 +246,7 @@ export function CloudSearchView() {
                               title: song.title || song.name,
                               artist: song.artist || '',
                               cover: song.cover,
-                              durationSec:
-                                typeof song.duration === 'number'
-                                  ? song.duration
-                                  : song.duration
-                                    ? Number(song.duration)
-                                    : undefined,
+                              durationSec: toSeconds(song.duration) ?? undefined,
                               source: { kind: 'plugin', source: song.source, songId: song.id },
                             }}
                           />
@@ -267,6 +267,7 @@ export function CloudSearchView() {
                         <div className="text-[11px] text-muted-foreground truncate">
                           {song.artist || '未知艺术家'}
                           {song.album ? ` · ${song.album}` : ''}
+                          {duration ? ` · ${duration}` : ''}
                         </div>
                       </div>
 

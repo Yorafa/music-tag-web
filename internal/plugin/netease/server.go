@@ -27,6 +27,7 @@ import (
 	"time"
 
 	pb "go-music-tag/api/proto/tagplugin"
+	"go-music-tag/internal/plugin"
 )
 
 const baseURL = "https://music.163.com"
@@ -234,6 +235,7 @@ func songToPB(m map[string]interface{}) *pb.Song {
 		AlbumId:  str(m["album_id"]),
 		AlbumImg: str(m["album_img"]),
 		Year:     str(m["year"]),
+		Duration: plugin.DurationFromSeconds(m["duration"]),
 	}
 }
 
@@ -288,6 +290,12 @@ func (s *Server) normalize(songs []map[string]interface{}) []map[string]interfac
 		song["album_id"] = albumID
 		song["album_img"] = cover
 		song["year"] = year
+		// Track length. NetEase reports `duration` in MILLISECONDS
+		// (verified against /api/search/get: 119133 for a 1:59 track),
+		// unlike every other source here. Normalize to seconds once, at
+		// the edge, so nothing downstream has to remember which source
+		// was which. A missing/zero value stays 0 = "unknown".
+		song["duration"] = plugin.DurationFromMillis(song["duration"])
 	}
 	return songs
 }

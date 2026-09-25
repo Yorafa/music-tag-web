@@ -23,20 +23,27 @@ const (
 
 // Song is the normalized music-metadata record returned by every tag source.
 type Song struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Artist        string                 `protobuf:"bytes,3,opt,name=artist,proto3" json:"artist,omitempty"`
-	ArtistId      string                 `protobuf:"bytes,4,opt,name=artist_id,json=artistId,proto3" json:"artist_id,omitempty"`
-	Album         string                 `protobuf:"bytes,5,opt,name=album,proto3" json:"album,omitempty"`
-	AlbumId       string                 `protobuf:"bytes,6,opt,name=album_id,json=albumId,proto3" json:"album_id,omitempty"`
-	AlbumImg      string                 `protobuf:"bytes,7,opt,name=album_img,json=albumImg,proto3" json:"album_img,omitempty"`
-	Year          string                 `protobuf:"bytes,8,opt,name=year,proto3" json:"year,omitempty"`
-	Source        string                 `protobuf:"bytes,9,opt,name=source,proto3" json:"source,omitempty"` // populated by gateway handler, not the plugin itself
-	Genre         string                 `protobuf:"bytes,10,opt,name=genre,proto3" json:"genre,omitempty"`
-	Mid           string                 `protobuf:"bytes,11,opt,name=mid,proto3" json:"mid,omitempty"`
-	Cover         string                 `protobuf:"bytes,12,opt,name=cover,proto3" json:"cover,omitempty"`
-	Score         float64                `protobuf:"fixed64,13,opt,name=score,proto3" json:"score,omitempty"` // populated by smart_tag aggregation
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Id       string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name     string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Artist   string                 `protobuf:"bytes,3,opt,name=artist,proto3" json:"artist,omitempty"`
+	ArtistId string                 `protobuf:"bytes,4,opt,name=artist_id,json=artistId,proto3" json:"artist_id,omitempty"`
+	Album    string                 `protobuf:"bytes,5,opt,name=album,proto3" json:"album,omitempty"`
+	AlbumId  string                 `protobuf:"bytes,6,opt,name=album_id,json=albumId,proto3" json:"album_id,omitempty"`
+	AlbumImg string                 `protobuf:"bytes,7,opt,name=album_img,json=albumImg,proto3" json:"album_img,omitempty"`
+	Year     string                 `protobuf:"bytes,8,opt,name=year,proto3" json:"year,omitempty"`
+	Source   string                 `protobuf:"bytes,9,opt,name=source,proto3" json:"source,omitempty"` // populated by gateway handler, not the plugin itself
+	Genre    string                 `protobuf:"bytes,10,opt,name=genre,proto3" json:"genre,omitempty"`
+	Mid      string                 `protobuf:"bytes,11,opt,name=mid,proto3" json:"mid,omitempty"`
+	Cover    string                 `protobuf:"bytes,12,opt,name=cover,proto3" json:"cover,omitempty"`
+	Score    float64                `protobuf:"fixed64,13,opt,name=score,proto3" json:"score,omitempty"` // populated by smart_tag aggregation
+	// Track length in SECONDS, normalized by each plugin before it gets
+	// here. Upstream units are not consistent — NetEase reports
+	// milliseconds, QQ/Kugou/Kuwo/Migu seconds — so the conversion belongs
+	// in the plugin, not in every consumer. 0 means "unknown": MusicBrainz
+	// search results carry no length, and that is a normal empty, not an
+	// error.
+	Duration      float64 `protobuf:"fixed64,14,opt,name=duration,proto3" json:"duration,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -158,6 +165,13 @@ func (x *Song) GetCover() string {
 func (x *Song) GetScore() float64 {
 	if x != nil {
 		return x.Score
+	}
+	return 0
+}
+
+func (x *Song) GetDuration() float64 {
+	if x != nil {
+		return x.Duration
 	}
 	return 0
 }
@@ -673,7 +687,7 @@ var File_tag_source_proto protoreflect.FileDescriptor
 
 const file_tag_source_proto_rawDesc = "" +
 	"\n" +
-	"\x10tag_source.proto\x12\ttagplugin\"\xad\x02\n" +
+	"\x10tag_source.proto\x12\ttagplugin\"\xc9\x02\n" +
 	"\x04Song\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
@@ -688,7 +702,8 @@ const file_tag_source_proto_rawDesc = "" +
 	" \x01(\tR\x05genre\x12\x10\n" +
 	"\x03mid\x18\v \x01(\tR\x03mid\x12\x14\n" +
 	"\x05cover\x18\f \x01(\tR\x05cover\x12\x14\n" +
-	"\x05score\x18\r \x01(\x01R\x05score\"O\n" +
+	"\x05score\x18\r \x01(\x01R\x05score\x12\x1a\n" +
+	"\bduration\x18\x0e \x01(\x01R\bduration\"O\n" +
 	"\rSearchRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x12\n" +
 	"\x04page\x18\x02 \x01(\x05R\x04page\x12\x14\n" +

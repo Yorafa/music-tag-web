@@ -150,6 +150,12 @@ func SearchMusic(c *gin.Context) {
 					Artist: it.Channel,
 					Cover:  it.Thumbnail,
 					Source: source,
+					// yt-dlp reports the length in seconds, already
+					// normalised by the DownloadItem contract. This was
+					// the one source that HAD a duration and dropped it
+					// on the floor here, so YouTube rows showed no time
+					// while every other source would have.
+					Duration: it.Duration,
 				})
 			}
 			newPages[source] = curPage

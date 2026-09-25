@@ -120,6 +120,7 @@ type song struct {
 	AlbumID  string
 	AlbumImg string
 	Year     string
+	Duration float64
 }
 
 func (s song) toPB() *pb.Song {
@@ -127,6 +128,7 @@ func (s song) toPB() *pb.Song {
 		Id: s.ID, Name: s.Name, Artist: s.Artist,
 		Album: s.Album, AlbumId: s.AlbumID,
 		AlbumImg: s.AlbumImg, Year: s.Year,
+		Duration: s.Duration,
 	}
 }
 
@@ -180,6 +182,8 @@ func (sv *Server) doSearch(ctx context.Context, title string, page, limit int) (
 			ID:   miguFirstNonEmpty(item, "contentId", "content_id", "resourceId", "id"),
 			Name: str(item["name"]),
 			Year: "",
+			// Migu reports the track length as `duration`, in SECONDS.
+			Duration: plugin.DurationFromSeconds(item["duration"]),
 		}
 		if singers, ok := item["singers"].([]interface{}); ok {
 			var names []string

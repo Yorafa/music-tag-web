@@ -189,13 +189,14 @@ type song struct {
 	AlbumID  string
 	AlbumImg string
 	Year     string
+	Duration float64
 }
 
 func (s song) toPB() *pb.Song {
 	return &pb.Song{
 		Id: s.ID, Mid: s.Mid, Name: s.Name, Artist: s.Artist,
 		Album: s.Album, AlbumId: s.AlbumID,
-		AlbumImg: s.AlbumImg, Year: s.Year,
+		AlbumImg: s.AlbumImg, Year: s.Year, Duration: s.Duration,
 	}
 }
 
@@ -344,6 +345,13 @@ func (s *Server) doSearch(ctx context.Context, query string, page, limit int) ([
 		}
 		sg.Year = str(item["time_public"])
 		sg.AlbumImg = "http://y.qq.com/music/photo_new/T002R300x300M000" + sg.AlbumID + ".jpg"
+		// QQ Music reports the track length as `interval`, in SECONDS.
+		// Some rows carry it as `playTime` instead, and some carry
+		// neither, so read both and keep whichever yields a real length.
+		sg.Duration = plugin.DurationFromSeconds(item["interval"])
+		if sg.Duration <= 0 {
+			sg.Duration = plugin.DurationFromSeconds(item["playTime"])
+		}
 		out = append(out, sg)
 	}
 	// 新版 API 的 meta 是空对象（nextpage 恒为 0），退化为「满页即有更多」启发式

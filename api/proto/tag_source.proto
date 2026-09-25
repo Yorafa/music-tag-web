@@ -21,6 +21,13 @@ message Song {
   string mid = 11;
   string cover = 12;
   double score = 13; // populated by smart_tag aggregation
+  // Track length in SECONDS, normalized by each plugin before it gets
+  // here. Upstream units are not consistent — NetEase reports
+  // milliseconds, QQ/Kugou/Kuwo/Migu seconds — so the conversion belongs
+  // in the plugin, not in every consumer. 0 means "unknown": MusicBrainz
+  // search results carry no length, and that is a normal empty, not an
+  // error.
+  double duration = 14;
 }
 
 message SearchRequest {

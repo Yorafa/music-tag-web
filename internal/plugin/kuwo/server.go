@@ -147,6 +147,7 @@ type song struct {
 	Album    string
 	AlbumID  string
 	AlbumImg string
+	Duration float64
 }
 
 func (s song) toPB() *pb.Song {
@@ -154,6 +155,7 @@ func (s song) toPB() *pb.Song {
 		Id: s.ID, Name: s.Name, Artist: s.Artist,
 		Album: s.Album, AlbumId: s.AlbumID,
 		AlbumImg: s.AlbumImg,
+		Duration: s.Duration,
 	}
 }
 
@@ -167,6 +169,14 @@ type kuwoSearchItem struct {
 	Album    string `json:"ALBUM"`
 	AlbumID  string `json:"ALBUMID"`
 	HtsMVPIC string `json:"hts_MVPIC"`
+	// Kuwo sends the track length twice: DURATION in seconds and
+	// TIMELENGTH in milliseconds, and which one is populated varies by
+	// row (the musiclist cohort tends to carry only TIMELENGTH). Both are
+	// decoded as interface{} because the upstream is inconsistent about
+	// sending 119 versus "119" — a typed float64 field would fail the
+	// whole search on a string.
+	Duration   interface{} `json:"DURATION"`
+	TimeLength interface{} `json:"TIMELENGTH"`
 }
 
 func (s *Server) doSearch(ctx context.Context, title string, page, limit int) ([]song, bool, error) {
@@ -220,6 +230,10 @@ func (s *Server) doSearch(ctx context.Context, title string, page, limit int) ([
 		if artist == "" {
 			artist = it.Singer // musiclist cohort uses SINGER
 		}
+		dur := plugin.DurationFromSeconds(it.Duration)
+		if dur <= 0 {
+			dur = plugin.DurationFromMillis(it.TimeLength)
+		}
 		out = append(out, song{
 			ID:       strings.TrimPrefix(it.MusicRID, "MUSIC_"),
 			Name:     it.SongName,
@@ -227,6 +241,7 @@ func (s *Server) doSearch(ctx context.Context, title string, page, limit int) ([
 			Album:    it.Album,
 			AlbumID:  it.AlbumID,
 			AlbumImg: it.HtsMVPIC,
+			Duration: dur,
 		})
 	}
 	return out, len(out) >= limit, nil

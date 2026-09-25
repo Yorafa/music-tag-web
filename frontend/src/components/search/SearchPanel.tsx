@@ -10,6 +10,7 @@ import type { SearchResult, SearchPagination } from '@/types';
 import { useSourceStore } from '@/store/useSourceStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { resolveDownloadUrl, audioDownloadBasename } from '@/lib/streamUrl';
+import { formatDuration } from '@/utils/duration';
 
 // Static color map preserves visual consistency across restarts for the
 // search-eligible sources we ship today (YouTube is intentionally
@@ -44,15 +45,6 @@ function colorForSource(name: string): string {
     h = ((h << 5) - h + name.charCodeAt(i)) | 0;
   }
   return FALLBACK_PALETTE[Math.abs(h) % FALLBACK_PALETTE.length];
-}
-
-function formatDuration(d: string | number | undefined): string {
-  if (!d) return '';
-  const secs = typeof d === 'string' ? parseInt(d, 10) : d;
-  if (isNaN(secs)) return String(d);
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 export function SearchPanel() {

@@ -428,5 +428,6 @@ func pbToSong(s *pb.Song) Song {
 		Mid:      s.Mid,
 		Cover:    s.Cover,
 		Score:    s.Score,
+		Duration: s.Duration,
 	}
 }
