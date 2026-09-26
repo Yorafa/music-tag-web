@@ -1,0 +1,68 @@
+name: Pages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'showcase/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# Allow the concurrent runs of this workflow to cancel each other:
+# a newer push to master always wins over an in-flight publish.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    name: Deploy showcase to GitHub Pages
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Verify artifact is non-empty
+        # Guard against publishing a blank site: Pages would happily serve
+        # an empty directory and 404 every visitor with no obvious cause.
+        run: |
+          set -euo pipefail
+          count=$(find showcase -type f | wc -l)
+          echo "Files in showcase/: $count"
+          if [ "$count" -eq 0 ]; then
+            echo "::error::showcase/ contains no files — refusing to publish an empty site"
+            exit 1
+          fi
+          for required in showcase/index.html showcase/style.css showcase/favicon.svg; do
+            if [ ! -f "$required" ]; then
+              echo "::error::missing required page file: $required"
+              exit 1
+            fi
+          done
+          # The page is intentionally dependency-free: no CDN, no build step.
+          # Fail loudly if someone introduces an external stylesheet or script.
+          if grep -rnE '<(script|link)[^>]+(src|href)=["'"'"']https?://' showcase/; then
+            echo "::error::external asset reference found — showcase must stay self-contained"
+            exit 1
+          fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: showcase
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

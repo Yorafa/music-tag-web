@@ -1,5 +1,3 @@
-![](img_6.jpg)
-
 # 🚀 Go Music Tag Web — Self-hosted Docker 音乐元数据批量编辑工具（Go + gRPC + React）
 [简体中文](README.md) | [English](#)
 
@@ -10,6 +8,8 @@
     <img src="https://img.shields.io/badge/self--hosted-Docker-orange?style=plastic" alt="self-hosted">
     <img src="https://img.shields.io/badge/platform-amd64/arm64-pink?style=plastic" alt="docker-platform">
 </div>
+
+🌐 **项目展示页**：<https://yorafa.github.io/music-tag-web/>（纯静态，由 [`.github/workflows/pages.yml`](.github/workflows/pages.yml) 在每次推 `master` 时自动发布）
 
 > ⚠️ **本项目 fork 自 [`xhongc/music-tag-web`](https://github.com/xhongc/music-tag-web)**——原 Python/Django 单体代码已**完整重构**为 Go 1.25 + gRPC 微服务插件 + React 19 SPA 架构。本仓库以 GPL V3 协议 fork-publish 独立维护；上游著作权与许可证全文保留在根目录 [`LICENSE`](LICENSE)。重构过程的 rationale 详见底部 [Acknowledgements](#acknowledgements)。
 
@@ -96,6 +96,7 @@ docker compose logs gateway | grep -A 6 FIRST-BOOT
 
 | 文档 | 内容 |
 |---|---|
+| [`showcase/index.html`](showcase/index.html) | 纯静态项目展示页（`showcase/` 目录，GitHub Pages 发布源） |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | 部署：懒人模式 / 显式 `.env` / volume 与属主 / 旧版本升级 / 故障排查表 |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 本地开发：环境准备、`Makefile`、pre-flight gate（全套命令）、热部署、host 调试、开发期易踩的坑 |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 架构：分层表、容器拓扑、镜像体积与共享层、插件进程模型 |

@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Go Music Tag Web — 自托管音乐元数据批量编辑器</title>
+<meta name="description" content="Go Music Tag Web：self-hosted、Docker 化、面向 NAS / Homelab 的批量音乐元数据编辑工具。Go 1.25 + gRPC 微服务 + React 19，全部本地处理。" />
+<meta name="theme-color" content="#0d1117" />
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="#top">
+    <img src="favicon.svg" alt="" width="28" height="28" />
+    <span>Go Music Tag Web</span>
+  </a>
+  <nav>
+    <a href="#features">功能</a>
+    <a href="#architecture">架构</a>
+    <a href="#quickstart">快速开始</a>
+    <a href="#docs">文档</a>
+    <a class="cta" href="https://github.com/Yorafa/music-tag-web" rel="noopener">GitHub</a>
+  </nav>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <h1>浏览器远程编辑本地私有曲库的<br />标题、专辑、艺术家、歌词与封面</h1>
+    <p class="lede">
+      Go Music Tag Web 是一款 self-hosted、Docker 化的批量音乐元数据编辑工具，
+      作为 <b>Navidrome</b> / <b>Jellyfin</b> / <b>Funkwhale</b> 等自托管音乐服务器的 sidecar 服务。
+      适配群晖、威联通、unRAID、Linux 小主机。
+    </p>
+    <p class="actions">
+      <a class="btn primary" href="https://github.com/Yorafa/music-tag-web" rel="noopener">★ Star on GitHub</a>
+      <a class="btn" href="#quickstart">快速开始</a>
+      <a class="btn ghost" href="https://github.com/Yorafa/music-tag-web/blob/master/README.md" rel="noopener">完整 README</a>
+    </p>
+    <ul class="pills">
+      <li>14 种音频格式</li>
+      <li>7 个元数据源 + 1 个下载源</li>
+      <li>11 个容器 · 约 560 MB</li>
+      <li>amd64 / arm64</li>
+      <li>GPL V3</li>
+    </ul>
+  </section>
+
+  <section class="strip">
+    <div><b>0</b><span>文件上传第三方</span></div>
+    <div><b>8</b><span>独立 gRPC 插件进程</span></div>
+    <div><b>6</b><span>项安全默认值测试兜底</span></div>
+    <div><b>2</b><span>层查重（SHA-256 + 声纹）</span></div>
+  </section>
+
+  <section id="features">
+    <h2>核心功能</h2>
+    <p class="section-note">
+      标记：<span class="tag done">已实现</span> · <span class="tag partial">部分实现</span> · <span class="tag none">暂未实现</span>。
+      完整 status 表与每个 feature 的取舍理由见
+      <a href="https://github.com/Yorafa/music-tag-web/blob/master/docs/FEATURE-COVERAGE.md" rel="noopener">功能覆盖矩阵</a>。
+    </p>
+
+    <div class="grid">
+      <article class="card">
+        <h3>标签编辑</h3>
+        <p>全格式 ID3 / Vorbis / APE 读写。单条实时编辑，或选 N 首人工批量填值——每字段带「不修改」勾选，留空即清空该标签。歌词与封面 sidecar 自动落盘。</p>
+        <span class="tag done">已实现</span>
+      </article>
+
+      <article class="card">
+        <h3>元数据刮削</h3>
+        <p>7 个源 fan-out 聚合 + 去重 + 按匹配度排序。搜索源可动态开关，per-source YAML override 热重载。</p>
+        <span class="tag done">已实现</span>
+      </article>
+
+      <article class="card">
+        <h3>候选可信度</h3>
+        <p>声纹置信度标「声纹匹配 xx%」；纯文本来源只陈述事实（标题完全 / 部分匹配），没有分数就写「未按音频校验」——<b>不编数字</b>。</p>
+        <span class="tag done">已实现</span>
+      </article>
+
+      <article class="card">
+        <h3>曲库查重</h3>
+        <p>只读跑四层漏斗：文件名 / SHA-256 / 声纹 / 元数据，标「重复 / 疑似 / 唯一」。只有内容级证据才算重复。</p>
+        <span class="tag done">已实现</span>
+      </article>
+
+      <article class="card">
+        <h3>一键删除重复文件</h3>
+        <p>仅内容级重复开放，互相指认时两边都不删。删除是移入 <code>DATA_DIR/.trash/&lt;时间戳&gt;/</code>，不是真删。</p>
+        <span class="tag done">已实现</span>
+      </article>
+
+      <article class="card">
+        <h3>歌词与封面</h3>
+        <p>歌词多源拉取，写回 lyrics tag + 同名 <code>.lrc</code> sidecar。封面远端拉取带 SSRF 防护，也支持自定义上传。</p>
+        <span class="tag done">已实现</span>
+      </article>
+
+      <article class="card">
+        <h3>文件名解析与改名</h3>
+        <p>解析预览返回 token + 逐行 <code>{artist,title,status}</code>，apply 走 asynq 批量写；也可反向按 8 字段模板从标签重命名，dry-run 零写入。</p>
+        <span class="tag done">已实现</span>
+      </article>
+
+      <article class="card">
+        <h3>声纹索引与缓存</h3>
+        <p>索引自维护（有进展就排下一次，30s + <code>Unique</code> 去重）。子指纹带 duration 存进索引，重复查重零解码：400ms → 24ms。</p>
+        <span class="tag done">已实现</span>
+      </article>
+
+      <article class="card">
+        <h3>下载 / 抓取</h3>
+        <p>YouTube / B 站走 yt-dlp，参数 sanitize 防 <code>--exec=</code> 注入；另有 5 个音乐源 download plugin。</p>
+        <span class="tag done">已实现</span>
+      </article>
+
+      <article class="card">
+        <h3>操作审计</h3>
+        <p>GORM <code>OperationLog</code> 持久化 + 侧边栏审计面板：多维过滤、模糊检索、变动详情、清空。</p>
+        <span class="tag done">已实现</span>
+      </article>
+
+      <article class="card muted">
+        <h3>播放统计</h3>
+        <p>DB <code>AccessedDate</code> 列已 reserved 但未消费；无 Subsonic <code>/rest/</code> 上报。</p>
+        <span class="tag none">暂未实现</span>
+      </article>
+
+      <article class="card muted">
+        <h3>整轨切割 / 转换</h3>
+        <p>无 CUE 解析 / 切轨代码。缺的是转换 task 与 UI，不是 binary（youtube 镜像已装 ffmpeg）。</p>
+        <span class="tag none">暂未实现</span>
+      </article>
+    </div>
+  </section>
+
+  <section id="architecture">
+    <h2>架构速览</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>层</th><th>实现</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>HTTP 服务</td><td>Go 1.25 + gin（gateway：API + React SPA 静态 + <code>/media/*</code> Range 流）</td></tr>
+          <tr><td>异步任务</td><td>asynq + Redis（worker）</td></tr>
+          <tr><td>音乐源</td><td><b>gRPC 微服务</b>：7 个元数据源 + 1 个下载源（youtube）——各自独立进程</td></tr>
+          <tr><td>Tag I/O</td><td><code>bogem/id3v2</code> + <code>dhowden/tag</code>（纯 Go 库，无 Python FFI）</td></tr>
+          <tr><td>前端</td><td>React 19 + Vite 7 + TypeScript + Tailwind 4 + shadcn/ui + Zustand</td></tr>
+          <tr><td>鉴权</td><td>JWT in-memory + bcrypt；fail-closed 默认值检测</td></tr>
+          <tr><td>部署</td><td>单条 <code>docker compose up -d --build</code> 拉起 gateway + worker + 8 gRPC plugin + redis，共 11 个容器</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="section-note">
+      镜像体积为什么是 560 MB（88 MB ffmpeg 库如何在四个镜像间共用一次）、容器拓扑、插件进程模型 →
+      <a href="https://github.com/Yorafa/music-tag-web/blob/master/docs/ARCHITECTURE.md" rel="noopener">架构文档</a>。
+    </p>
+
+    <div class="topology">
+      <h3>容器拓扑</h3>
+<pre><code>                     ┌──────────────┐
+   browser  ────────▶ │   gateway    │  gin · API + SPA + /media/*
+                     └──────┬───────┘
+                            │ gRPC          ┌──────────────────────────────┐
+              ┌─────────────┼─────────────▶ │ netease / kugou / kuwo /    │
+              │             │               │ migu / qmusic / musicbrainz │
+              │             │               │ / acoustid / youtube         │
+              │             │               │  （8 个独立进程，失败隔离）    │
+              │             │               └──────────────────────────────┘
+              │             │
+              │             │  task enqueue ┌────────┐
+              │             └──────────────▶│ redis  │
+              │                              └───┬────┘
+              │                                  │ pop
+              │                                  ▼
+              │                            ┌──────────┐
+              └──────  job progress  ◀────│  worker  │ asynq · Tag I/O
+                                           └──────────┘</code></pre>
+    </div>
+  </section>
+
+  <section id="quickstart">
+    <h2>快速开始</h2>
+    <p class="section-note">
+      不需要在 host 上构建前端——React SPA 在 <code>Dockerfile.gateway</code> 的 frontend stage 里构建好并烘进镜像。
+    </p>
+<pre><code>git clone https://github.com/Yorafa/music-tag-web.git
+cd music-tag-web
+mkdir -p ./music ./data
+docker compose up -d --build
+
+# 等约 30 s，取首启口令（明文密码只出现这一次）
+docker compose logs gateway | grep -A 6 FIRST-BOOT</code></pre>
+    <p class="section-note">
+      打开 <code>http://localhost:9150/admin</code>。
+      容器以 uid/gid <b>10001</b> 非 root 运行，首次部署要
+      <code>sudo chown -R 10001:10001 ./music ./data</code>。
+      显式配置 / 升级 / 排错见
+      <a href="https://github.com/Yorafa/music-tag-web/blob/master/docs/DEPLOYMENT.md" rel="noopener">部署文档</a>。
+    </p>
+  </section>
+
+  <section id="docs">
+    <h2>相关文档</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>文档</th><th>内容</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><a href="https://github.com/Yorafa/music-tag-web/blob/master/docs/DEPLOYMENT.md" rel="noopener">DEPLOYMENT.md</a></td><td>懒人模式 / 显式 <code>.env</code> / volume 与属主 / 旧版本升级 / 故障排查表</td></tr>
+          <tr><td><a href="https://github.com/Yorafa/music-tag-web/blob/master/docs/DEVELOPMENT.md" rel="noopener">DEVELOPMENT.md</a></td><td>本地环境准备、<code>Makefile</code>、pre-flight gate、热部署、开发期易踩的坑</td></tr>
+          <tr><td><a href="https://github.com/Yorafa/music-tag-web/blob/master/docs/ARCHITECTURE.md" rel="noopener">ARCHITECTURE.md</a></td><td>分层表、容器拓扑、镜像体积与共享层、插件进程模型</td></tr>
+          <tr><td><a href="https://github.com/Yorafa/music-tag-web/blob/master/docs/FEATURE-COVERAGE.md" rel="noopener">FEATURE-COVERAGE.md</a></td><td>功能覆盖矩阵（单一来源）：每个 feature 的 status、path 引用、未实现项理由</td></tr>
+          <tr><td><a href="https://github.com/Yorafa/music-tag-web/blob/master/SECURITY.md" rel="noopener">SECURITY.md</a></td><td>运维安全默认值 / 威胁模型 / runbook</td></tr>
+          <tr><td><a href="https://github.com/Yorafa/music-tag-web/blob/master/docs/plugable-plugins.md" rel="noopener">plugable-plugins.md</a></td><td>插件架构设计草图（Stage A 已落地 / B–D 未排期）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="security">
+      <h3>安全默认值</h3>
+      <p>
+        6 项 hardening 全部落地且各有测试兜底：SSRF 拒 loopback / 私有网段、路径遍历 containment、
+        yt-dlp 参数 sanitize 三层防线、JWT / admin 默认值 fail-closed、CORS 白名单无反射、容器非 root。
+        完整威胁模型与 runbook →
+        <a href="https://github.com/Yorafa/music-tag-web/blob/master/SECURITY.md" rel="noopener">SECURITY.md</a>。
+      </p>
+    </div>
+  </section>
+
+  <section id="lineage">
+    <h2>上游与重构</h2>
+    <p class="section-note">
+      本项目 fork 自 <a href="https://github.com/xhongc/music-tag-web" rel="noopener">xhongc/music-tag-web</a>，
+      原 Python/Django 单体代码已<b>完整重写</b>为 Go 1.25 + gRPC 微服务插件 + React 19 SPA 架构。
+      本仓库以 GPL V3 协议 fork-publish 独立维护。
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th></th><th>upstream</th><th>本仓库</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>后端</td><td>Python 3 + Django + gunicorn + celery</td><td>Go 1.25 + gin + asynq + Redis</td></tr>
+          <tr><td>音乐源</td><td>同进程 python module</td><td>独立 gRPC 服务进程</td></tr>
+          <tr><td>Tag I/O</td><td><code>mutagen</code>（Python 库）</td><td><code>bogem/id3v2</code> + <code>dhowden/tag</code>（纯 Go）</td></tr>
+          <tr><td>前端</td><td>Django template + Bootstrap jQuery</td><td>React 19 + Vite 7 + TypeScript + Tailwind 4 + shadcn/ui + Zustand</td></tr>
+          <tr><td>鉴权</td><td>Django session</td><td>JWT in-memory + bcrypt</td></tr>
+          <tr><td>默认配置保护</td><td>软默认值</td><td>Fail-closed（占位 JWT_SECRET / 默认 admin 都被拒）</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <p>
+    <b>Go Music Tag Web</b> — GNU GPL v3.0 ·
+    <a href="https://github.com/Yorafa/music-tag-web/blob/master/LICENSE" rel="noopener">LICENSE</a> ·
+    <a href="https://github.com/Yorafa/music-tag-web/issues" rel="noopener">Issues</a>
+  </p>
+  <p class="fine">
+    本站为项目介绍展示页。禁止任何形式的商业用途。本项目仅编辑本地已有音乐文件的元数据，
+    不提供、不下载、不存储任何受版权保护的音频本体。
+  </p>
+</footer>
+
+</body>
+</html>
