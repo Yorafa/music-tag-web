@@ -114,6 +114,11 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// the modal can show a clean "re-preview" prompt.
 		authed.POST("/tag/preview_parse_filenames/", handler.PreviewParseFilenames)
 		authed.POST("/tag/apply_parsed_filenames/", handler.ApplyParsedFilenames)
+		// The inverse of the two above: tags → filename. The preview
+		// is a dry run and writes nothing, which is the whole point —
+		// a bulk rename is not something to apply unread.
+		authed.POST("/tag/preview_rename_from_tags/", handler.PreviewRenameFromTags)
+		authed.POST("/tag/apply_rename_from_tags/", handler.ApplyRenameFromTags)
 		// Side-effecting task routes are POST, not GET (REVIEW.md P1-1).
 		// JWTAuth also accepts the JWT from an AUTHORIZATION cookie (the
 		// frontend writes a JS-readable one so <audio> can authenticate),

@@ -319,6 +319,82 @@ export async function downloadToLibrary(params: {
 // a deploy problem; the client just stops asking. Overrides belong in
 // `data/sources/*.yaml` and take effect on plugin-container restart.
 
+// ─── 从标签改名: preview → apply round-trip ─────────────────────────
+
+/** One file's planned rename. Mirrors `handler.RenamePlanRow`.
+ *
+ *  `new_name` carries the extension — that is what lands on disk, and
+ *  what the client writes back into the table. `missing` lists template
+ *  fields that were empty for this file, which is why the name may have
+ *  a gap in it. */
+export interface RenamePlanRow {
+  path: string;
+  old_name: string;
+  new_name: string;
+  status: 'ok' | 'no_change' | 'taken' | 'blocked' | 'failed';
+  missing?: string[];
+  detail?: string;
+}
+
+/** Mirrors the two `Rename*` status constants. */
+export const RENAME_STATUSES = {
+  /** The file will move. The only bucket the apply button cares about. */
+  ok: 'ok',
+  /** The template reproduces the name the file already has. Not a
+   *  failure — half a selection already being correct is normal. */
+  noChange: 'no_change',
+  /** Another file, in this batch or already on disk, wants this name.
+   *  os.Rename replaces, so this is the case that loses data. */
+  taken: 'taken',
+  /** The template cannot be used here: unknown field, no placeholders,
+   *  or it rendered to nothing. */
+  blocked: 'blocked',
+  /** The rename itself errored. */
+  failed: 'failed',
+} as const;
+
+export interface RenameResponse {
+  rows: RenamePlanRow[];
+  tally: Record<string, number>;
+  dry_run: boolean;
+}
+
+/** POST /api/tag/preview_rename_from_tags/ — plan the rename, write
+ *  nothing. Returns each file's old and new name plus a status, so a
+ *  500-file rename can be read before it is committed.
+ *
+ *  `template` is a per-file expansion, not a name: `paths` are relative
+ *  to MUSIC_DIR (the server rejects `'..'` escapes via SafeJoin) and
+ *  every one of them renders `template` against its own tags. */
+export async function previewRenameFromTags(
+  paths: string[],
+  template: string,
+): Promise<RenameResponse> {
+  const { data } = await api.post('tag/preview_rename_from_tags/', {
+    paths,
+    template,
+  });
+  return unwrapEnvelope<RenameResponse>(data, 'preview_rename_from_tags');
+}
+
+/** POST /api/tag/apply_rename_from_tags/ — same body as the preview.
+ *
+ *  The server re-plans every row rather than trusting a client-supplied
+ *  plan, so a file renamed between preview and click cannot be renamed
+ *  twice, and an edited template cannot apply a stale plan. The
+ *  response is therefore the authoritative result, not a receipt for
+ *  what was previewed. */
+export async function applyRenameFromTags(
+  paths: string[],
+  template: string,
+): Promise<RenameResponse> {
+  const { data } = await api.post('tag/apply_rename_from_tags/', {
+    paths,
+    template,
+  });
+  return unwrapEnvelope<RenameResponse>(data, 'apply_rename_from_tags');
+}
+
 // ─── 解析文件名: preview → apply round-trip ─────────────────────────
 
 /** The tag fields the parser can fill, in the order the modal shows them.

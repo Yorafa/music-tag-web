@@ -4,6 +4,7 @@ import {
   FolderTree,
   FolderX,
   FileText,
+  FileEdit,
   Trash2,
   FolderPlus,
   CheckSquare,
@@ -31,6 +32,7 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { ParseFilenamesModal } from '@/components/scraper/ParseFilenamesModal';
+import { RenameFromTagsDialog } from '@/components/workstation/RenameFromTagsDialog';
 import { BatchEditDialog } from '@/components/workstation/BatchEditDialog';
 import { skippedNotesFromUpdate } from '@/utils/skippedNotes';
 import { useWorklistStore, type WorklistGrouping } from '@/store/useWorklistStore';
@@ -89,6 +91,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   const clearDuplicates = useWorklistStore((s) => s.clearDuplicates);
 
   const [parseOpen, setParseOpen] = useState(false);
+  const [renameFromTagsOpen, setRenameFromTagsOpen] = useState(false);
   // Kept here, not in the modal, so re-opening does not start from an
   // empty pattern: one downloader's naming convention does not change
   // between batches.
@@ -618,6 +621,26 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           <span>解析文件名</span>
         </Button>
 
+        {/* The inverse: build each filename from the file's own tags.
+            A preview-then-apply dialog, because a bulk rename is not
+            something to apply unread. */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            if (!hasSelection) {
+              useNoticeStore.getState().push('请先选择至少一首音乐', 'info');
+              return;
+            }
+            setRenameFromTagsOpen(true);
+          }}
+          className="h-8 gap-1 text-xs"
+          title="按文件里已有的标签重新生成文件名，写入前可预览"
+        >
+          <FileEdit className="w-3.5 h-3.5 text-muted-foreground" />
+          <span>从标签改名</span>
+        </Button>
+
         {/* Tidy Folder */}
         <Button
           variant="outline"
@@ -781,6 +804,12 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
       )}
 
       {/* Parse Filenames Modal */}
+      <RenameFromTagsDialog
+        open={renameFromTagsOpen}
+        onOpenChange={setRenameFromTagsOpen}
+        selectedPaths={selectedIds.length > 0 ? selectedIds : rows.map((r) => r.fullPath)}
+      />
+
       <ParseFilenamesModal
         open={parseOpen}
         onOpenChange={setParseOpen}

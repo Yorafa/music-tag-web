@@ -367,3 +367,19 @@ Deploy / runtime:
 `Failure()` 返回 HTTP 200 + 信封 `code:"400"`，不是 HTTP 400。前端靠
 `unwrapEnvelope` 把 `result:false` 转成异常并带出 `message`。只有 401/422
 是真正的状态码。
+
+## 19. 文件名模板有两个渲染器，别用错
+
+`utils.RenderTemplate` 是宽松版：**找不到的 key 会把 `${genre}` 原样留在输出里**。
+它的调用方都不是文件名，所以那是合理降级。文件名路径必须用
+`utils.ExpandFilenameTemplate`——未知字段直接报错。
+
+这不是理论风险。`genre` 和 `year` 曾经根本不在 `readFileContext` 的 key 集合里，
+于是一条完全合理的 `${artist} - ${year} - ${title}` 会产出一个文件叫
+`周杰伦 - ${year} - 晴天.mp3`，没有任何错误。现在两个变量都读了，未知字段会
+被拒绝，缺字段则留空位并在响应里报告。
+
+批量重名的检测 key 必须是**完整目标路径**，不是裸文件名：不同专辑下同名
+曲目是常态，用裸名会把多专辑曲库的每一个文件都判成冲突。而这正是
+`os.Rename` 会覆盖、逐文件 `stat` 看不见的那一种——两个文件渲染到同一个目标，
+先到的赢，后到的报 `taken`。

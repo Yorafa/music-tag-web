@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -880,10 +881,23 @@ func renameTemplateVars(onDisk map[string]string, upd *tag.TagUpdate) map[string
 	if upd.TrackNumber != nil {
 		vars["tracknumber"] = firstBeforeSlash(*upd.TrackNumber)
 	}
+	if upd.Genre != nil {
+		vars["genre"] = *upd.Genre
+	}
+	if upd.Year != nil {
+		vars["year"] = *upd.Year
+	}
 	return vars
 }
 
 // readFileContext 与 Django MusicIDS.var_dict() 字段对齐。
+//
+// The key set is utils.RenameTemplateFields plus `filename`. It USED to
+// be seven keys with genre and year missing, and the permissive renderer
+// left an unfound key in the output as literal text — so a template
+// naming them produced a file called "artist - ${year} - title.mp3",
+// silently. Both fields are read here now; `filename` stays because this
+// map also feeds callers that are not templates.
 func readFileContext(path string) map[string]string {
 	info, err := tag.Read(path)
 	if err != nil {
@@ -894,10 +908,20 @@ func readFileContext(path string) map[string]string {
 		"artist":      info.Artist,
 		"albumartist": info.AlbumArtist,
 		"album":       info.Album,
+		"genre":       info.Genre,
+		"year":        yearString(info.Year),
 		"filename":    info.Filename,
 		"discnumber":  firstBeforeSlash(info.DiscNumber),
 		"tracknumber": firstBeforeSlash(info.TrackNumber),
 	}
+}
+
+// yearString renders a year for a template. TagInfo.Year is an int where
+// 0 means "no year tag", and ${year} on such a file should expand to
+// nothing — which the expansion then reports as an empty field — rather
+// than putting a literal "0" in a filename.
+func yearString(y int) string {
+	return strconv.Itoa(y)
 }
 
 // firstBeforeSlash 取 "3/12" 里的 "3"：Vorbis 的 disc/track 编号常写成
