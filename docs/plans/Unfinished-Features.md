@@ -1,20 +1,7 @@
 # Plan — Unfinished Features (Filename Parse + Grouping UI + Source YAML)
 
-> ⚠️ **文件名索引已过期（2026-09-26 核对）。** 本文件是 **point-in-time 的计划记录**（Status: shipped，round-10 / 2026-07-24），正文里的路径是当时的写法，保留是为了留住决策过程，**不是**当前代码位置。随后的 frontend 重构拆掉了这些路径，照着正文找会找不到：
+> ℹ️ **路径已按当前代码校正（2026-09-26）。** 本文是 point-in-time 的计划记录（Status: shipped，round-10 / 2026-07-24），正文里的前端路径已随重构一并更新为现行位置（`Worklist*` / `ScrapeTopBar` / `GroupHeaderRow` → `workstation/Workstation*`，`SettingsModal` → `settings/SettingsView.tsx`）。决策过程本身保持原样未做追述。
 >
-> | 本文件里的旧路径 | 现在的实际位置 |
-> |---|---|
-> | `scraper/Worklist.tsx` | `workstation/WorkstationView.tsx` |
-> | `scraper/WorklistHeaderBar.tsx` | `workstation/WorkstationToolbar.tsx` |
-> | `scraper/GroupHeaderRow.tsx` | `workstation/WorkstationTable.tsx`（分组行渲染就在这个文件里） |
-> | `scraper/ScrapeTopBar.tsx` | `workstation/WorkstationToolbar.tsx` |
-> | `settings/SettingsModal.tsx` | `settings/SettingsView.tsx` + `settings/SourcesTabContent.tsx` |
-> | `frontend/src/utils/parseFilename.ts` | 只剩共享 fixture `utils/parseFilename.testdata.json`；解析逻辑在后端 `internal/utils/filenames.go`，前端不再有 TS 镜像 |
-> | `internal/tasks/matchscore.go` | 已删除（连同它上面那条 zhconv defer TODO） |
-> | `internal/utils/find_audio.go` | 已删除 |
->
-> 功能层面的当前状态以 [`../FEATURE-COVERAGE.md`](../FEATURE-COVERAGE.md) 为准；本文件只作历史参考。
-
 > **Status:** `[shipped]` — Tracks C.2, C.3, C.4 已在 round-10 (2026-07-24) 完整 ship。Frontend `npx tsc --noEmit` + `npx eslint --max-warnings 0 .` + `npm test` (130 vitest) 全绿。Backend `go build`/`vet`/tests 待非-snap Go install 才能跑完整 (本机 `/snap/go/11227/` stdlib 损坏,环境问题,非代码)。
 > **Owner:** You
 > **Source of truth:** [`../FEATURE-COVERAGE.md`](../FEATURE-COVERAGE.md) — 表里的 🚧 Partial 与 ❌ Aspirational 是本 plan 的候选清单(本轮 ship 后已大幅收窄)。
@@ -28,8 +15,8 @@
 
 | Track | 实现状态 (round-10 ship) | Foundation 文件 (已 PRESENT) | Shipped changes |
 |---|---|---|---|
-| C.2 | **SHIPPED** (frontend 全绿;backend code ship,tests 待 non-snap Go install) | `internal/events/bus.go`、`internal/db/models.go`、`internal/db/db.go`、`internal/gateway/router/router.go`、`internal/gateway/handler/update.go`、`internal/tag/reader.go`、`internal/tag/writer.go`、`frontend/src/api/client.ts`、`frontend/src/components/scraper/ScrapeTopBar.tsx` | 详见 [Appendix: Shipped Files](#appendix-shipped-files-round-10) § C.2 |
-| C.3 | **SHIPPED** (frontend only, 130 vitest 全绿) | `frontend/src/store/useWorklistStore.ts`、`frontend/src/components/scraper/ScrapeTopBar.tsx`、`frontend/src/components/scraper/Worklist.tsx`、`frontend/src/components/scraper/WorklistHeaderBar.tsx`、`frontend/src/index.css` (含 `var(--surface-2)`) | 详见 [Appendix: Shipped Files](#appendix-shipped-files-round-10) § C.3 |
+| C.2 | **SHIPPED** (frontend 全绿;backend code ship,tests 待 non-snap Go install) | `internal/events/bus.go`、`internal/db/models.go`、`internal/db/db.go`、`internal/gateway/router/router.go`、`internal/gateway/handler/update.go`、`internal/tag/reader.go`、`internal/tag/writer.go`、`frontend/src/api/client.ts`、`frontend/src/components/workstation/WorkstationToolbar.tsx` | 详见 [Appendix: Shipped Files](#appendix-shipped-files-round-10) § C.2 |
+| C.3 | **SHIPPED** (frontend only, 130 vitest 全绿) | `frontend/src/store/useWorklistStore.ts`、`frontend/src/components/workstation/WorkstationToolbar.tsx`、`frontend/src/components/workstation/WorkstationView.tsx`、`frontend/src/components/workstation/WorkstationToolbar.tsx`、`frontend/src/index.css` (含 `var(--surface-2)`) | 详见 [Appendix: Shipped Files](#appendix-shipped-files-round-10) § C.3 |
 | C.4 | **SHIPPED** (backend + frontend;yaml override + hot reload + read-only UI) | `internal/plugin/registry.go` (现存在,加了 `(*Registry).RefreshOverrides` method) | 详见 [Appendix: Shipped Files](#appendix-shipped-files-round-10) § C.4 |
 
 > 验证来源 (file-tool `glob` 逐个查):见 [Appendix: Shipped Files](#appendix-shipped-files-round-10) 各 track 下列表的路径。`internal/plugin/registry.go` 逆 验证 PRESENT 是 — 该文件 为 plan C.4 Step 2 提供了现成的 central registry,仅需 追加 `(*Registry).RefreshOverrides` method;不需重 创建 registry 架构 (遇到 C.4 Step 2 caveat 中的 「现存在」路径)。
@@ -49,18 +36,18 @@
 - `internal/gateway/router/router.go` — wire `POST /api/tag/preview_parse_filenames/` + `POST /api/tag/apply_parsed_filenames/`
 - `internal/tasks/parsedfilenames.go` (new) — asynq `TypeApplyParsedFilenames` worker (name-only writes, no audit log)
 - `internal/tasks/tasks.go` — add `TypeApplyParsedFilenames` const
-- `frontend/src/utils/parseFilename.ts` (new) — TS regex mirror, NFC normalize
+- `internal/utils/filenames.go`（前端 TS 镜像已删，解析只在后端） (new) — TS regex mirror, NFC normalize
 - `frontend/src/utils/parseFilename.testdata.json` (new) — byte-identical to go-side (SHA-256 contract)
-- `frontend/src/utils/parseFilename.test.ts` (new) — bidirectional deep-equal over shared fixture
+- `frontend/src/utils/parseFilename.testdata.json`（共享 fixture；TS 镜像已删） (new) — bidirectional deep-equal over shared fixture
 - `frontend/src/api/client.ts` — `previewParseFilenames` + `applyParsedFilenames` hooks
 - `frontend/src/components/scraper/ParseFilenamesModal.tsx` (new) — mount-preview → override → apply
-- `frontend/src/components/scraper/ScrapeTopBar.tsx` — [Parse filenames] 按钮 + modal mount
+- `frontend/src/components/workstation/WorkstationToolbar.tsx` — [Parse filenames] 按钮 + modal mount
 
 **C.3 — Album/Artist Grouping UI**
 - `frontend/src/store/useWorklistStore.ts` — `grouping: 'none'|'album'|'artist'` + `collapsedGroups` (session-only Set) + `setGrouping`/`toggleGrouping`/`toggleGroupCollapsed` 动作 + `worklist.grouping.v1` 独立 localStorage key (Open Details E)
-- `frontend/src/components/scraper/Worklist.tsx` — `deriveGrouped()` 派生 selector + flattened 渲染
-- `frontend/src/components/scraper/GroupHeaderRow.tsx` (new) — `var(--surface-2)` background + chevron toggle
-- `frontend/src/components/scraper/WorklistHeaderBar.tsx` — chip row `[无] [专辑] [歌手]`
+- `frontend/src/components/workstation/WorkstationView.tsx` — `deriveGrouped()` 派生 selector + flattened 渲染
+- `frontend/src/components/workstation/WorkstationTable.tsx` (new) — `var(--surface-2)` background + chevron toggle
+- `frontend/src/components/workstation/WorkstationToolbar.tsx` — chip row `[无] [专辑] [歌手]`
 
 **C.4 — Source YAML Override (Stage B of plugable-plugins)**
 - `internal/config/loader.go` (new) — `LoadSourceOverrides(dir)` + YAML scan, 5-test `TestLoadSourceOverrides_*`
@@ -75,7 +62,7 @@
 - `data/sources/*.yaml` (operator-side, runtime-createable) — `kuwo.yaml`, `kg.yaml`, `migu.yaml`, `qmusic.yaml`
 - `frontend/src/api/client.ts` — `refreshSources()` + `getSourceOverride(name?)`
 - `frontend/src/store/useSourceStore.ts` — `refreshSources()` + `getSourceOverrides()` hooks
-- `frontend/src/components/settings/SettingsModal.tsx` — Sources tab (Tabs drop-in, reload button 触发 hot reload)
+- `frontend/src/components/settings/SettingsView.tsx` — Sources tab (Tabs drop-in, reload button 触发 hot reload)
 
 > **Removed 和 absent 的 infrastructure**:
 > - `/api/notice/poll/` 长轮询通道 (原 C.1 Step 0) — 现 NONE shipped;C.2 / C.4 progress 提示仍走现有 `useNoticeStore` + `NoticeCenterButton` (frontend 单向通知;不进 plan scope;batch feedback 不需新 endpoint)。
@@ -88,7 +75,7 @@
 | Track | 触发场景 | 后端 | 前端 | Worker |
 |---|---|---|---|---|
 | C.2 Filename Parse backend round-trip | 老 collection 没 tag、文件名规整 (`Artist - Title.flac`) | new endpoint + preview_token cache + apply 端点 | preview / override / confirm modal | asynq 批量 tag write |
-| C.3 Album/Artist Grouping UI | 1000+ 文件目录导航 | (none,纯前端) | WorklistHeaderBar toggle + 派生 selector + GroupHeaderRow | — |
+| C.3 Album/Artist Grouping UI | 1000+ 文件目录导航 | (none,纯前端) | WorkstationToolbar toggle + 派生 selector + 分组行 | — |
 | C.4 Source YAML Override (Stage B of plugable-plugins) | plugin cohort drift (kuwo/kg/migu 上游 URL 变化,API key 轮换) | 启动期加载 `data/sources/*.yaml` 覆盖 plugin 配置 | SettingsModal 加 source 配置只读 view + 触发 reload | — |
 
 depends-on 互不相干:任何一件失败都不会 block 另外两件。
@@ -132,9 +119,9 @@ depends-on 互不相干:任何一件失败都不会 block 另外两件。
 | `internal/cache/parsed_preview.go` (new) | token → `ParsedBundle` cache, TTL 10 min (不复用 `path_cache.go` — 那是 path→TrackEntry LRU,不适用) |
 | `internal/gateway/handler/update.go` | `PreviewParseFilenames(c)` + `ApplyParsedFilenames(c)` |
 | `internal/tasks/parsedfilenames.go` (new) | asynq `TypeApplyParsedFilenames` (无 audit log;不写 OperationLog) |
-| `frontend/src/utils/parseFilename.ts` (new) | 抽出 `client.ts::parseFromFilename` regex (mirror backend Go),作为 source-of-truth 的 frontend test fixture |
+| `internal/utils/filenames.go`（前端 TS 镜像已删，解析只在后端） (new) | 抽出 `client.ts::parseFromFilename` regex (mirror backend Go),作为 source-of-truth 的 frontend test fixture |
 | `frontend/src/api/client.ts` | 利用 `parseFilename` (本地 preview) + `previewParseFilenames` / `applyParsedFilenames` (server round-trip) |
-| `frontend/src/components/scraper/ScrapeTopBar.tsx` | [Parse filenames] 按钮 + modal |
+| `frontend/src/components/workstation/WorkstationToolbar.tsx` | [Parse filenames] 按钮 + modal |
 
 ## API 契约
 
@@ -165,17 +152,17 @@ backend 从 cache 反序列化 preview + 合并 overrides → enqueue `TypeApply
    ```
    default regex: `^\s*(?P<a>[^-/\\|·]+?)\s*[-_/\\|·]\s*(?P<t>[^\\/]+?)\s*$`, `opts.Separator` 可 override。
    **Unicode**:Functions 在输入前做 `norm.NFC.String(name)` 归一化 (在 macOS NFD-uploads 场景下保证 byte-identical 输出)。
-2. `frontend/src/utils/parseFilename.ts`: 抽出 `client.ts` 内现有 regex,签名同 Go 函数,内部也跑 `name.normalize('NFC')`。
+2. `internal/utils/filenames.go`（前端 TS 镜像已删，解析只在后端）: 抽出 `client.ts` 内现有 regex,签名同 Go 函数,内部也跑 `name.normalize('NFC')`。
 3. Fixture 文件位置:
    - `internal/utils/filenames_testdata.json` (200+ 加 CJK + ASCII + boundary case, NFC-normalized)
    - `frontend/src/utils/parseFilename.testdata.json` (mirror,字节相同)
 4. Contract test:
    - `internal/utils/filenames_test.go`: 加载 fixture,对每行 port logic 走一遍,产出 `{path, artist, title, status}` 结构数组。
-   - `frontend/src/utils/parseFilename.test.ts`: 同样加载 fixture,同样产出结构数组。
+   - `frontend/src/utils/parseFilename.testdata.json`（共享 fixture；TS 镜像已删）: 同样加载 fixture,同样产出结构数组。
    - 两个 test 都用 `assert.deepEqual(structuredResult, expectedFixture)` (深比较,**不是** byte-identical 字符串)。
    - CI 跑两步,任一失败即红。fixture 文件本身 hash 校验 (两端 SWE-bench,任何一只改了 hash 不一致就红)。
 
-**Verify**: contract test 在 CI 跑即红/绿 (`go test ./internal/utils/ -run TestParseFilenameContract` + `npx vitest src/utils/parseFilename.test.ts`)。
+**Verify**: contract test 在 CI 跑即红/绿 (`go test ./internal/utils/ -run TestParseFilenameContract` + `npx vitest`（共享 fixture 的 Go/TS 双引擎 deep-equal 已并入 utils 测试）)。
 `TestParseFilename_NFCEqualsNFD`: explicit NFD normalize 到 NFC,产出与 NFC 输入一致。
 
 ### Step 2 — preview_token cache + apply handler
@@ -188,7 +175,7 @@ backend 从 cache 反序列化 preview + 合并 overrides → enqueue `TypeApply
    func Load(token string) (ParsedBundle, error)  // 验证 TTL 不过期,否则返 ErrTokenExpired
    ```
 2. `internal/gateway/handler/update.go::PreviewParseFilenames`:
-   - 验 payload,过滤仅 audio file (走 `internal/utils/find_audio.go` existing)
+   - 验 payload,过滤仅 audio file (走 （已删除） existing)
    - 调 `PortParseFilename` for each
    - 存 `ParsedBundle` + 生成 token
 3. `ApplyParsedFilenames(c)`:
@@ -203,7 +190,7 @@ backend 从 cache 反序列化 preview + 合并 overrides → enqueue `TypeApply
 ### Step 3 — 前端 wire + modal
 
 1. `client.ts` 新 endpoint + `parseFilename` 复用。
-2. `ScrapeTopBar.tsx` 加 [Parse filenames] 按钮:开 modal,前端先 `parseFilename` 本地预览作为 UI hint;调 `previewParseFilenames` 拿 ground truth + token。两结果不一致时 (前端 hint 仅 fallback,以 backend `previews[]` 为准)。
+2. `WorkstationToolbar.tsx` 加 [Parse filenames] 按钮:开 modal,前端先 `parseFilename` 本地预览作为 UI hint;调 `previewParseFilenames` 拿 ground truth + token。两结果不一致时 (前端 hint 仅 fallback,以 backend `previews[]` 为准)。
 3. modal 行: `path`, `artist` input, `title` input, status badge。confirm 后调 `applyParsedFilenames({preview_token, overrides})`。
 
 **Verify**: `npx vitest run` 覆盖 ① override merge ② modal status badge ③ NFC/NFD 同名样同个 name 加路 front preview 后调 backend,assert backend result 为 NFC-normalized canonical。
@@ -213,7 +200,7 @@ backend 从 cache 反序列化 preview + 合并 overrides → enqueue `TypeApply
 - [x] `npx tsc --noEmit` 与 `npm run lint` 过 (frontend 全绿)
 - [ ] `go build ./...` 与 `go vet ./...` 过 (代码 ship,本机 snap Go 损坏阻止运行)
 - [ ] `go test ./internal/utils/ ./internal/cache/ ./internal/gateway/handler/ ./internal/tasks/` 全绿 (代码 ship,同 上)
-- [x] `npx vitest run` 全绿 (130 vitest;含 `parseFilename.test.ts` + 双向 contract)
+- [x] `npx vitest run` 全绿 (130 vitest;含 `parseFilename.testdata.json` + 双向 contract)
 - [ ] e2e: 50 un-tagged FLAC → Parse filenames → preview 应付 · manual override 5 · confirm → backend enqueue → ID3 写确认 · reload list 看新值 (frontend 全部 wire 完,后端 单元/integration test 等非-snap Go)
 - [x] Contract test 跨 backend regex ≠ frontend regex on 200+ fixture — deep-equal 红 / 绿 (SHA-256 fixture 一致;双向 deep-equal pass)
 - [x] README Features 表「文件名解析」 row 🚧 → ✅ link C.2
@@ -233,9 +220,9 @@ backend 从 cache 反序列化 preview + 合并 overrides → enqueue `TypeApply
 | 文件 | 变更 |
 |---|---|---|
 | `frontend/src/store/useWorklistStore.ts` | 加 `grouping: 'none'\|'album'\|'artist'` + `setGrouping(g)` + persist `worklist.grouping.v1` |
-| `frontend/src/components/scraper/Worklist.tsx` | `useMemo` 派生 `GroupedRow[]`;flat render (不做 virtualization);slot `GroupHeaderRow` |
-| `frontend/src/components/scraper/GroupHeaderRow.tsx` (new) | group header UI · `var(--surface-2)` 背景 |
-| `frontend/src/components/scraper/WorklistHeaderBar.tsx` | group toggle button (放在 `WorklistHeaderBar`,不在 `ScrapeTopBar`) |
+| `frontend/src/components/workstation/WorkstationView.tsx` | `useMemo` 派生 `GroupedRow[]`;flat render (不做 virtualization);slot 分组行（现由 `WorkstationTable.tsx` 内联渲染） |
+| `frontend/src/components/workstation/WorkstationTable.tsx` (new) | group header UI · `var(--surface-2)` 背景 |
+| `frontend/src/components/workstation/WorkstationToolbar.tsx` | group toggle button (放在 `WorkstationToolbar`,不在 `WorkstationToolbar`) |
 
 ## Step-by-step
 
@@ -259,15 +246,15 @@ backend 从 cache 反序列化 preview + 合并 overrides → enqueue `TypeApply
    - `'album'` = `row.musicInfo?.album ?? 'unknown album'` (未 scrape 行降入 'unknown album' group,**不**静默 drop)
    - `'artist'` = `row.musicInfo?.artist ?? 'unknown artist'`
 3. group toggle 互斥:三选一 (`'none' | 'album' | 'artist'`),不是两两 toggling。
-4. `Worklist.tsx` 渲染:flat `motion.ul` + `GroupHeaderRow` 插入在 group boundary 处。不引入 virtualization lib,该 plan scope 限 flat 渲染。如果列表超过 ~5000 行实际 UX 体验下降,后续追踪为单独 计划。
+4. `WorkstationView.tsx` 渲染:flat `motion.ul` + 分组行（现由 `WorkstationTable.tsx` 内联渲染） 插入在 group boundary 处。不引入 virtualization lib,该 plan scope 限 flat 渲染。如果列表超过 ~5000 行实际 UX 体验下降,后续追踪为单独 计划。
 5. group header collapse state:session-only (reload 不保留 expanded),`expanded: boolean` 在 `useWorklistStore` 加一个 `collapsedGroups: Set<string>` session-only 字段。
-6. multi-select (`selectedIds`) 跨 group 保持原有逻辑;`GroupHeaderRow` 点击 toggle collapse,**不** toggle row 选中。
+6. multi-select (`selectedIds`) 跨 group 保持原有逻辑;分组行（现由 `WorkstationTable.tsx` 内联渲染） 点击 toggle collapse,**不** toggle row 选中。
 
 **Verify**: `npx vitest run` RTL 覆盖 ① switch groupBy「专辑」 → headers 出现 ② switch「无」 → headers 不出现 ③ multi-select 跨 header 选中逻辑正确 ④ collapse state ⑤ 1 unknown-album row 不 drop,落到 'unknown album' 单独 group
 
 ### Step 3 — UI polish
 
-1. `WorklistHeaderBar` 在 `( + filter + 全选 )` 一行旁加 chip row `[无] [专辑] [歌手]`。`ScrapeTopBar` 不动。
+1. `WorkstationToolbar` 在 `( + filter + 全选 )` 一行旁加 chip row `[无] [专辑] [歌手]`。`WorkstationToolbar` 不动。
 2. Group header 走 `var(--surface-2)` (token 已落地于 `frontend/src/index.css`)。
 3. Empty group (filter 排除,无 row) 不渲染 header。
 
@@ -276,7 +263,7 @@ backend 从 cache 反序列化 preview + 合并 overrides → enqueue `TypeApply
 ### Step 4 — Done criteria (round-10 验收)
 
 - [x] `npx tsc --noEmit` 与 `npm run lint` 过 (全绿)
-- [x] `npx vitest run` 全绿 (130 vitest;含 useWorklistStore grouping + GroupHeaderRow RTL)
+- [x] `npx vitest run` 全绿 (130 vitest;含 useWorklistStore grouping + 分组行渲染测试)
 - [ ] e2e: 1000+ file list + group 「专辑」 → headers 出现 70ms transition;跨 group 选 5 row → 计数正确 (e2e 手验待 operator,代码 ship)
 - [x] localStorage `worklist.grouping.v1` reload 后 setting 保持 (`worklist.grouping.v1` 独立 key 验证 ✓)
 - [x] README Features 「文件按艺术家/专辑分组」 row 🚧 → ✅ link C.3
@@ -328,7 +315,7 @@ func (s *Server) SetAPIBase(apiBase string) { kuwoAudioURL = apiBase }
 | `internal/plugin/registry.go` | 加 `(*Registry).RefreshOverrides(overrides map[string]Override)` |
 | `internal/gateway/handler/source.go` | `RefreshSourceOverrides(c)` + `GetSourceOverride(c)` |
 | `internal/gateway/router/router.go` | 挂 `POST /api/sources/refresh/` + `GET /api/sources/override/` |
-| `frontend/src/components/settings/SettingsModal.tsx` | 加只读 source config view tab (修改仅服务器文件) |
+| `frontend/src/components/settings/SettingsView.tsx` | 加只读 source config view tab (修改仅服务器文件) |
 | `frontend/src/api/client.ts` | `refreshSources()` + `getSourceOverride(name?)` |
 
 ## YAML schema
@@ -397,11 +384,11 @@ enabled: true
 
 **Verify**: `go test ./internal/handler/ -run TestRefreshSourceOverrides + TestGetSourceOverride_RedactsSecrets`
 
-### Step 4 — SettingsModal UI
+### Step 4 — 设置页 UI
 
-> **实现期 caveat**: `SettingsModal.tsx` 现 tab 结构需先读现状决是。如果 多 tab 已存在 (常见 shadcn `Tabs`),加 tab 是 drop-in;如果现 modal 是 flat 集合,本 step 需先重构为 `Tabs` 结构(顺带 其他 tab 不变)。但本 plan scope 还是 C.4 为准,不加别的 content。
+> **实现期 caveat**: `SettingsView.tsx` 现 tab 结构需先读现状决是。如果 多 tab 已存在 (常见 shadcn `Tabs`),加 tab 是 drop-in;如果现 modal 是 flat 集合,本 step 需先重构为 `Tabs` 结构(顺带 其他 tab 不变)。但本 plan scope 还是 C.4 为准,不加别的 content。
 
-1. `SettingsModal.tsx` 加新 tab 「Sources」(或 新「Sources」 Section 在 modal 顶部):每 source 一张 card,显示:
+1. `SettingsView.tsx` 加新 tab 「Sources」(或 新「Sources」 Section 在 modal 顶部):每 source 一张 card,显示:
    - name + displayName (本地化 from `SourcesRoute`)
    - 是否当前 override (boolean badge)
    - 当前 API base URL (read-only)
@@ -415,7 +402,7 @@ enabled: true
 - [x] `npx tsc --noEmit` 与 `npm run lint` 过 (全绿)
 - [ ] `go build ./...` 与 `go vet ./...` 过 (代码 ship,本机 snap Go 损坏阻止运行)
 - [ ] `go test ./internal/config/ ./internal/plugin/{kuwo,kg,migu,qmusic}/ ./internal/handler/` 全绿 (`SetSecret` / `SetAPIBase` / `LoadSourceOverrides` / `RefreshOverrides`) (代码 ship,同 上)
-- [x] `npx vitest run` 全绿 (130 vitest;含 SettingsModal Sources tab 渲染 + Reload button 触发)
+- [x] `npx vitest run` 全绿 (130 vitest;含设置页 Sources tab 渲染 + Reload button 触发)
 - [ ] e2e: 编辑 `data/sources/kuwo.yaml` 改 `api_base` → restart gateway → kuwo 搜索走新 base (实际请求发往新 mirror) (代码 ship,e2e 待 operator)
 - [ ] e2e (hot reload): 编辑 yaml → 不重启 → POST `/api/sources/refresh` → 返 `{ refreshed: N }` 200 OK → kuwo 搜索现在走新 base (代码 ship,e2e 待 operator)
 - [x] README Features 表「per-source config override」 ✅ row 新增 link C.4
@@ -430,7 +417,7 @@ enabled: true
 |---|---|
 | C.2 + C.4 触 控? | C.2 asynq task `TypeApplyParsedFilenames` 独立; C.4 `RefreshOverrides` 同步 endpoint。两 track 不共享 audit / progress 通道。 |
 | C.3 与 C.2/C.4 触 控? | C.3 纯前端,无 backend contact;C.2 / C.4 后端 bound 不 init UI state。 |
-| 同一 scrape top bar 工具行? | C.2 `[Parse filenames]` 入口位于 `ScrapeTopBar`。C.4 不进 ScrapeTopBar (其 reload button 在 SettingsModal)。各 位置 不 冲突。 |
+| 同一 scrape top bar 工具行? | C.2 `[Parse filenames]` 入口位于 `WorkstationToolbar`。C.4 不进工具行 (其 reload button 在设置页)。各 位置 不 冲突。 |
 | 进度反馈 (无 notice poll) | 全部 NOT 无 long-poll。`useNoticeStore` 现 front-end 单向 (同进程 内存) `push` 仍可用,但 C.2 / C.4 不产生 progress 不写。Future 雍 处理 跨服务 进度 → 起新 cross-track 「notice poll」 阶段,不在本 plan scope。 |
 
 # When All Three Plans Done (round-10 完成)

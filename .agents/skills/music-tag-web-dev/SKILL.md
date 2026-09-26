@@ -168,6 +168,7 @@ Route groups:
 - `POST /api/check_duplicate/` — read-only dedup scan over an explicit path list (逐行返回，单个失败不拖垮整批)
 - `POST /api/delete_files/` — remove files from the library（**移入 `DATA_DIR/.trash/<ts>/`，不是 unlink**；拒绝目录/符号链接/越界路径；删除后清 `music_folder` 索引行；记 `delete_files` 审计）
 - `POST /api/prune_empty_folders/` — 清空目录 + 清残留索引行（UI: 「清理残留」）
+- `POST /api/prune_empty_folders/preview/` — 只读的 dry-run，返回 `{empty_dirs, vanished_rows, total}`，供确认框逐条列出。走 `PruneEmptyFoldersHandler.PreviewPrune`，与真实清理共用同一份实现
 
 **Static:**
 - `/media/*filepath` — Range streaming for audio

@@ -3,7 +3,7 @@
 > 单一真实来源：本表标注 README 中宣称的功能在代码里的实现状态（已落地 / 部分落地 / 未展开）。与 `README.md` 「核心功能 / Features」段双向耦合。
 >
 > 交叉引用：
-> - [`plugable-plugins.md`](plugable-plugins.md) — 设计文档，把它列出的 ❌ 项目（Stage B/C/D）作为未来的 staging 计划；本表与该文档的"aspirational"项是协调关系。
+> - [`plugable-plugins.md`](plugable-plugins.md) — 设计文档。它的 Stage A / B **已 ship**（见 §2 的 `per-source config override`），Stage C（goja 沙箱 JS plugin）/ D（runtime admin UI）仍是 future pitch；本表与该文档的"aspirational"项是协调关系。
 
 **图例**
 - ✅ **Implemented** — 对应代码路径、文件引用，端到端可用
@@ -40,6 +40,7 @@
 | 下载入库的文件对查重可见 | ✅ | `internal/dedup/audiotable.go`。`music_folder.file_type` 曾有两个写入方各写一套词表（scanner 写 `music`/`folder`/`image`，yt_dl 写**音源名** `youtube`/`netease`…），于是所有按 `file_type='music'` 过滤的查询都**漏掉了每一个「加入库」下载的音轨**：拿不到 duration → 永不进候选集 → 它的重压副本查不出来，且全程无任何日志。现在 yt_dl 也改用 `audioext.FileTypeForRow`，而查重侧根本不再看 `file_type` —— 改为**按扩展名**（`audioext`）判定是不是音频、**按是否在 MUSIC_DIR 下**判定属不属于曲库（这才是把 `/tmp/audio_cache` 排除掉的那条约束，且不会随写入方漂移）。音源名仍记在 `TaskRecord.source` / 审计日志 / 缓存路径里 |
 | 声纹缓存 | ✅ | `music_folder.{fingerprint,fp_size,fp_mtime}` + `internal/dedup/fpcache.go`。一次 `fpcalc` 解码 120 秒音频要 0.4s，而一次查重要解码**被测文件 + 时长窗口内每个候选**，所以重复查重（尤其刚做完的「查重」按钮）原本每次都重付一遍这笔钱。缓存后重复查重零解码。失效判据是 size **和** mtime（纳秒）：原地转码路径和行都不变，没有失效判据的缓存不是变陈旧，而是**永远报旧歌的重复**。索引任务顺带存指纹几乎免费 —— fpcalc 是解码瓶颈，读一行 DURATION 和读全部指纹都是 0.4s，所以原先「只读 DURATION 就退出」的优化方向本身是错的。**文件已删但行还在**时 stat 失败即视为 miss，否则一个已删音轨会靠缓存blob 永久留在候选集里，指向一个打不开的路径。实测重复查重 400ms → 24ms |
 | 清理残留索引行 | ✅ | `internal/tasks/prune.go` 的 `pruneVanished`，跟在「清理残留」按钮后（与清理空目录同一个任务，审计里分开记 `removed` / `vanished_rows`）。文件从外部消失（文件管理器、宿主机改挂载卷、rsync）时扫描器和 tidy 都不会删它的行，于是残留行累积，**每次查重都要先 stat 再逐个驳回**；曲库页面读的是盘不是表，所以用户看不见它们 —— 纯浪费。**刻意不做集合差集**（`WHERE path NOT IN`，扫描器明文禁止：子扫描失败会连整个没访问到的库一起删掉），而是**逐行问内核文件在不在**，只有确定的 ENOENT 才删；权限/IO 错误一律保留（“不知道”不等于“没了”，测试用 ENOTDIR 而不是 chmod，因为容器里是 root）。folder 行不删（子行的 `parent_id` 指着它）。LIKE 通配符要显式 `ESCAPE`：LIKE **没有**默认转义字符，`\_` 会被当成「反斜杠 + 任意字符」，而库路径里带下划线是常态（`Album_One`） |
+| 清理前预览 + 确认 | ✅ | `POST /api/prune_empty_folders/preview/`（`handler.PreviewPruneEmptyFolders`）+ 「清理残留」确认框。确认框列出**具体路径**而不是数量：空目录取决于上一次 tidy 留下了什么，残留行取决于哪些文件从外部消失了，用户都预测不到。预览走的是任务处理函数自己的 dry-run（`pruneEmptyMode` / `pruneVanishedMode`），不是另写一份 —— 两份实现一旦分家，确认框就成了谎话。dry run 必须自己模拟向上的级联（`directoryWouldEmpty`）：真实清理靠 `os.Remove` 失败来判定非空，dry run 不能真删，就只能按“子目录都已被清掉”递归判断，否则预览会比实际少报一层。预览只读，所以不进 worker 队列，gateway 直接答 |
 | 曲库查重页（只读） | ✅ | `POST /api/check_duplicate/`（`internal/gateway/handler/duplicate.go`）。智能刮削页选中行 → 「查重」→ 行上 `重复`/`疑似`/`唯一` 徽章 + 侧栏「只看重复」筛选。与写入路径共用 `dedupCheckFor`，两边判定不会分歧。逐行返回（单个文件不可查不拖垮整批），路径经 `SafeJoin` 限制在 MUSIC_DIR 内 |
 | 删除重复文件 | ✅ | `POST /api/delete_files/`（同上文件）。仅接受内容级 `duplicate` 判定；两侧互相指认时两边都不删。实现为**移入 `DATA_DIR/.trash/<ts>/`** 而非 unlink（保留相对路径，可恢复；trash 在 MUSIC_DIR 之外所以扫描器与 `http.Dir(MUSIC_DIR)` 都不会再服务它）。拒绝目录 / 符号链接 / 越界路径；跨设备回退到 copy+remove（默认 compose 就是两个独立 bind mount）；删除后同步清掉 `music_folder` 索引行（否则陈旧的 `duration` 会让已删文件永久留在候选集里），并记一条 `delete_files` 审计 |
 | 搜索源动态列表（`GET /api/sources/`） | ✅ | `internal/gateway/handler/source.go` 中 `ListSources` + `frontend/src/store/useSourceStore.ts` |

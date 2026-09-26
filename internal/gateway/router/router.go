@@ -135,6 +135,10 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// 空目录清理: what TidyFolder leaves behind. POST for the same
 		// reason as its neighbours — it mutates the filesystem.
 		authed.POST("/prune_empty_folders/", handler.PruneEmptyFolders)
+		// Read-only preview of the same cleanup, so the confirmation
+		// dialog can list what is about to go instead of asking the
+		// user to approve an invisible operation.
+		authed.POST("/prune_empty_folders/preview/", handler.PreviewPruneEmptyFolders)
 		// Duplicate scan for the scrape Worklist. POST rather than GET
 		// even though it only reads: it spawns fpcalc per candidate, so
 		// a GET would let a single <img src> or prefetch trigger a

@@ -38,6 +38,7 @@ import {
   fetchId3ByTitle,
   batchUpdateId3,
   pruneEmptyFolders,
+  previewPruneEmpty,
   checkDuplicate,
   deleteFiles,
 } from '@/api/client';
@@ -118,6 +119,17 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   });
   const [tidyRunning, setTidyRunning] = useState(false);
   const [pruning, setPruning] = useState(false);
+  const [pruneOpen, setPruneOpen] = useState(false);
+  // What the cleanup would remove, fetched when the dialog opens. Kept as a
+  // discriminated shape rather than two nullable lists so "still loading"
+  // and "loaded, nothing to do" cannot be confused — the second is a real
+  // answer and the dialog has to be able to say so.
+  const [prunePreview, setPrunePreview] = useState<{
+    loading: boolean;
+    emptyDirs: string[];
+    vanishedRows: string[];
+    error?: boolean;
+  }>({ loading: false, emptyDirs: [], vanishedRows: [] });
 
   const hasSelection = selectedIds.length > 0;
   const isAllSelected = rows.length > 0 && selectedIds.length === rows.length;
@@ -316,18 +328,31 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
     }
     };
 
-  // Delete the directories 整理目录 leaves behind, and drop index rows for
-  // files that are gone. Deliberately a separate button from tidy rather than
-  // a step inside it: tidy moves files and the user may want to check the
-  // result before anything is deleted, and a tidy that silently removed
-  // directories would be doing two destructive things behind one
-  // confirmation.
+  // Open the cleanup confirmation, fetching what it would remove first.
+  //
+  // The preview is fetched on open rather than assumed, because the two
+  // things this removes are not things the user can predict: an empty
+  // directory depends on what the last tidy left behind, and a stale index
+  // row depends on files that vanished outside the app. Asking "are you
+  // sure?" without saying what would go is not a confirmation.
   const handlePruneEmpty = async () => {
+    setPrunePreview({ loading: true, emptyDirs: [], vanishedRows: [] });
+    setPruneOpen(true);
+    try {
+      const preview = await previewPruneEmpty();
+      setPrunePreview({ loading: false, ...preview });
+    } catch {
+      setPrunePreview({ loading: false, emptyDirs: [], vanishedRows: [], error: true });
+    }
+  };
+
+  const handleConfirmPrune = async () => {
     setPruning(true);
     try {
       const res = await pruneEmptyFolders();
       if (res?.result) {
         useNoticeStore.getState().push('已提交清理任务，结果见操作审计', 'info');
+        setPruneOpen(false);
       } else {
         useNoticeStore.getState().push('清理任务提交失败', 'warn');
       }
@@ -828,6 +853,89 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
               className="text-xs h-8"
             >
               {isDeletingDup ? '删除中…' : `确认删除 ${dupTargets.length} 个`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Prune confirmation. Both halves are listed by path, not by count:
+          a count is something the user can only agree with, and this is an
+          operation that removes things. */}
+      <Dialog open={pruneOpen} onOpenChange={setPruneOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base flex items-center gap-2">
+              <FolderX className="w-4 h-4" />
+              确认清理残留？
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1 text-xs">
+            {prunePreview.loading ? (
+              <p className="text-muted-foreground py-4 text-center">正在统计…</p>
+            ) : prunePreview.error ? (
+              <p className="text-destructive">
+                读取清理预览失败，为避免误删已取消本次操作。请重试或查看服务端日志。
+              </p>
+            ) : prunePreview.emptyDirs.length === 0 && prunePreview.vanishedRows.length === 0 ? (
+              <p className="text-muted-foreground">
+                曲库很干净：没有空目录，索引里也没有指向已不存在文件的记录。
+              </p>
+            ) : (
+              <>
+                {prunePreview.emptyDirs.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-muted-foreground">
+                      将删除 {prunePreview.emptyDirs.length} 个空目录（只删真正空的；含封面或{' '}
+                      <code className="px-1 rounded bg-muted/50 font-mono">.lrc</code> 的目录会保留）：
+                    </p>
+                    <div className="max-h-32 overflow-y-auto rounded border border-border/60 bg-surface-1 divide-y divide-border/40">
+                      {prunePreview.emptyDirs.map((d) => (
+                        <div key={d} className="px-2 py-1 font-mono truncate">
+                          {d}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {prunePreview.vanishedRows.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-muted-foreground">
+                      将清理 {prunePreview.vanishedRows.length}{' '}
+                      条已失效的索引行（文件已不在磁盘上，但索引里还留着）：
+                    </p>
+                    <div className="max-h-32 overflow-y-auto rounded border border-border/60 bg-surface-1 divide-y divide-border/40">
+                      {prunePreview.vanishedRows.map((r) => (
+                        <div key={r} className="px-2 py-1 font-mono truncate">
+                          {r}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <p className="text-muted-foreground">
+                  这里<strong className="text-foreground">不会删除任何音频文件</strong>
+                  ，只删空目录和失效索引行。已从外部删除的文件不会被恢复。
+                </p>
+              </>
+            )}
+          </div>
+          <DialogFooter showCloseButton>
+            <Button
+              variant="destructive"
+              onClick={handleConfirmPrune}
+              disabled={
+                pruning ||
+                prunePreview.loading ||
+                prunePreview.error ||
+                prunePreview.emptyDirs.length + prunePreview.vanishedRows.length === 0
+              }
+              className="text-xs h-8"
+            >
+              {pruning
+                ? '提交中…'
+                : prunePreview.emptyDirs.length + prunePreview.vanishedRows.length === 0
+                  ? '无需清理'
+                  : `确认清理 ${prunePreview.emptyDirs.length + prunePreview.vanishedRows.length} 项`}
             </Button>
           </DialogFooter>
         </DialogContent>

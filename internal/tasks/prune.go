@@ -83,6 +83,14 @@ func plural(n int) string {
 // same pass. So `Artist/Album` emptied by a tidy, and then the `Artist` that
 // held only that album, both disappear without anyone having to say so twice.
 func (h *PruneEmptyFoldersHandler) pruneEmpty(ctx context.Context, subPaths [][2]string) ([]string, error) {
+	return h.pruneEmptyMode(ctx, subPaths, false)
+}
+
+// pruneEmptyMode is pruneEmpty with the deletion switchable, so the same
+// walk can answer "what would you remove?" without touching the disk. The
+// preview is what the confirmation dialog renders; running a second,
+// slightly different walk to produce it would let the two disagree.
+func (h *PruneEmptyFoldersHandler) pruneEmptyMode(ctx context.Context, subPaths [][2]string, dryRun bool) ([]string, error) {
 	root := h.musicRoot()
 	if root == "" {
 		return nil, fmt.Errorf("prune: music root not configured")
@@ -151,6 +159,14 @@ func (h *PruneEmptyFoldersHandler) pruneEmpty(ctx context.Context, subPaths [][2
 	})
 
 	var removed []string
+	// A dry run has to answer the same question the real pass answers one
+	// level at a time: "would the kernel accept this?" — which for the
+	// real pass means os.Remove, and for the preview means "is this
+	// directory empty, or empty only once the children already claimed
+	// below it are gone?". Skipping that second part made the preview
+	// stop one level short of the cascade, so the dialog would promise
+	// two directories where the task removes three.
+	willGo := make(map[string]bool, len(dirs))
 	for _, dir := range dirs {
 		select {
 		case <-ctx.Done():
@@ -158,10 +174,15 @@ func (h *PruneEmptyFoldersHandler) pruneEmpty(ctx context.Context, subPaths [][2
 		default:
 		}
 		// os.Remove, deliberately not RemoveAll: a non-empty directory is
-		// left exactly as it is.
-		if err := os.Remove(dir); err != nil {
+		// left exactly as it is, and that decision is the kernel's.
+		if !dryRun {
+			if err := os.Remove(dir); err != nil {
+				continue
+			}
+		} else if !directoryWouldEmpty(dir, willGo) {
 			continue
 		}
+		willGo[dir] = true
 		rel, relErr := filepath.Rel(root, dir)
 		if relErr != nil {
 			rel = dir
@@ -170,6 +191,30 @@ func (h *PruneEmptyFoldersHandler) pruneEmpty(ctx context.Context, subPaths [][2
 	}
 	sort.Strings(removed)
 	return removed, nil
+}
+
+// directoryWouldEmpty reports whether dir holds nothing that would survive
+// the pass: either nothing at all, or only subdirectories already accounted
+// for as going away.
+//
+// This mirrors what os.Remove will decide, minus the removal. An entry that
+// is a file, a symlink, or a directory the walk skipped (data/, anything
+// reached through a symlink) keeps its parent alive — which is the same
+// answer the real pass arrives at when the kernel refuses the parent.
+func directoryWouldEmpty(dir string, willGo map[string]bool) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			return false
+		}
+		if !willGo[filepath.Join(dir, e.Name())] {
+			return false
+		}
+	}
+	return true
 }
 
 // pruneVanished drops index rows for library files that are no longer on
@@ -197,6 +242,10 @@ func (h *PruneEmptyFoldersHandler) pruneEmpty(ctx context.Context, subPaths [][2
 // parent_id points at them, so removing one can strand the rest of the tree.
 // See TestPruneVanished_KeepsFolderRows.
 func (h *PruneEmptyFoldersHandler) pruneVanished(ctx context.Context, subPaths [][2]string) []string {
+	return h.pruneVanishedMode(ctx, subPaths, false)
+}
+
+func (h *PruneEmptyFoldersHandler) pruneVanishedMode(ctx context.Context, subPaths [][2]string, dryRun bool) []string {
 	root := h.musicRoot()
 	if root == "" {
 		return nil
@@ -253,9 +302,11 @@ func (h *PruneEmptyFoldersHandler) pruneVanished(ctx context.Context, subPaths [
 				log.Printf("[prune] keep %s: %v", row.Path, err)
 				continue
 			}
-			if err := h.DB.Where("path = ?", row.Path).Delete(&db.Folder{}).Error; err != nil {
-				log.Printf("[prune] delete %s: %v", row.Path, err)
-				continue
+			if !dryRun {
+				if err := h.DB.Where("path = ?", row.Path).Delete(&db.Folder{}).Error; err != nil {
+					log.Printf("[prune] delete %s: %v", row.Path, err)
+					continue
+				}
 			}
 			rel, relErr := filepath.Rel(root, row.Path)
 			if relErr != nil {
@@ -287,6 +338,25 @@ func (h *PruneEmptyFoldersHandler) pruneVanished(ctx context.Context, subPaths [
 func likeEscape(s string) string {
 	r := strings.NewReplacer(`!`, `!!`, `%`, `!%`, `_`, `!_`)
 	return r.Replace(s)
+}
+
+// PreviewPrune answers "what would 清理残留 remove?" without removing
+// anything, and is what the confirmation dialog renders.
+//
+// It runs the same two passes the real task runs, in dry-run mode, rather
+// than a parallel implementation: a preview computed any other way is a
+// second thing that can disagree with the first, and the whole point of
+// asking the user to confirm is that the list they approve is the list
+// that gets acted on.
+//
+// Read-only, so the gateway can answer it inline instead of round-tripping
+// through the worker queue the way the mutation does.
+func (h *PruneEmptyFoldersHandler) PreviewPrune(ctx context.Context, subPaths [][2]string) ([]string, []string, error) {
+	dirs, err := h.pruneEmptyMode(ctx, subPaths, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	return dirs, h.pruneVanishedMode(ctx, subPaths, true), nil
 }
 
 func (h *PruneEmptyFoldersHandler) musicRoot() string {

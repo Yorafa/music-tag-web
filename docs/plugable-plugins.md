@@ -1,12 +1,11 @@
 # Pluggable Plugin Architecture — 设计文档
 
-**Status**：Design —— **Stage A 与 Stage B 已 ship**（A: `GET /api/sources/` + `useSourceStore` + `SettingsModal` Sources tab + 插件注册表 fan-out；B: per-source YAML 覆写）。Stage C（`goja` 沙箱 JS plugin）与 Stage D（runtime admin UI）仍是 future-feature pitch，不在 roadmap 内。落地状态以 [`FEATURE-COVERAGE.md`](FEATURE-COVERAGE.md) §2 为准。
+**Status**：Design —— **Stage A 与 Stage B 已 ship**（A: `GET /api/sources/` + `useSourceStore` + `settings/SourcesTabContent.tsx` + 插件注册表 fan-out；B: per-source YAML 覆写）。Stage C（`goja` 沙箱 JS plugin）与 Stage D（runtime admin UI）仍是 future-feature pitch，不在 roadmap 内。落地状态以 [`FEATURE-COVERAGE.md`](FEATURE-COVERAGE.md) §2 为准。
 
-> ⚠️ **正文里的前端路径已过期（2026-09-26 核对）。** 本文是 2025-06-29 的设计文档，正文保留是为了留住设计动机。随后的 frontend 重构拆掉了这些路径：`SearchPanel.tsx` 已不存在（云端搜索现在是 `search/CloudSearchView.tsx`），`SettingsModal.tsx` 变成 `settings/SettingsView.tsx` + `settings/SourcesTabContent.tsx`。`SourcePickerModal.tsx` 仍在（现位于 `search/`）。
 **Audience**：self-hosted 家庭影音中心用例，单一可信用户
 **Date**：2025-06-29
 
-> **Cross-ref**：本文评估的是**整张 L × P 矩阵**；目前真正落地的只有 Stage A（其 plumbing——`GET /api/sources/`、`useSourceStore`、`SettingsModal`、插件注册表 fan-out——在 [`FEATURE-COVERAGE.md`](FEATURE-COVERAGE.md) §2 中标为 ✅）。Stage B（per-source YAML 覆写）、Stage C（通过 `dop251/goja` 跑沙箱 JS plugin）、Stage D（runtime admin UI）属于 **future-feature pitches**——不在任何当前 README claim 集合内。`FEATURE-COVERAGE.md` 里 ❌ 的集合是另一份列表（README 今日宣称但代码里没做的项），与本表的 aspirational 项**概念上相邻**但**集合上不同**：本表讲"插件粒度未来长什么样"，矩阵讲"README 今天的宣称哪些没做"。按你问的问题选对应的文档，不要把两者混在一起 filing issue。§ Deferred/aspirational 列出的是**今天** README 已宣称但没实现的项。两者都 aspirational、都脱离当前 roadmap，但**集合层面是不同的**：
+> **Cross-ref**：本文评估的是**整张 L × P 矩阵**；目前真正落地的只有 Stage A（其 plumbing——`GET /api/sources/`、`useSourceStore`、`settings/SettingsView.tsx`、插件注册表 fan-out——在 [`FEATURE-COVERAGE.md`](FEATURE-COVERAGE.md) §2 中标为 ✅）。Stage B（per-source YAML 覆写）、Stage C（通过 `dop251/goja` 跑沙箱 JS plugin）、Stage D（runtime admin UI）属于 **future-feature pitches**——不在任何当前 README claim 集合内。`FEATURE-COVERAGE.md` 里 ❌ 的集合是另一份列表（README 今日宣称但代码里没做的项），与本表的 aspirational 项**概念上相邻**但**集合上不同**：本表讲"插件粒度未来长什么样"，矩阵讲"README 今天的宣称哪些没做"。按你问的问题选对应的文档，不要把两者混在一起 filing issue。§ Deferred/aspirational 列出的是**今天** README 已宣称但没实现的项。两者都 aspirational、都脱离当前 roadmap，但**集合层面是不同的**：
 
 ---
 
@@ -70,7 +69,7 @@
 
 Stage A 故意停在"把内置 plugins 暴露给前端"这一步：
 
-1. Stage A 切断前端（`SearchPanel.tsx`、`SourcePickerModal.tsx` 里硬编码的 source 字符串）和后端（`handler/tag.go` 里硬编码的 `sourcesDefault` 切片）之间的强耦合。
+1. Stage A 切断前端（`CloudSearchView.tsx`、`SourcePickerModal.tsx` 里硬编码的 source 字符串）和后端（`handler/tag.go` 里硬编码的 `sourcesDefault` 切片）之间的强耦合。
 2. 一旦 Stage A 上线，**新增任何 source 仍然要写 Go 代码**，但**不再需要任何前端改动**——新 source 会自动出现，因为前端只渲染后端返回的那份列表。
 3. Stage A 是 **Stage B**（per-source config）和 **Stage C**（用户自写 JS plugins）的底座，所以独立停在 Stage A 也已经回本。
 
@@ -140,7 +139,7 @@ Stage A 故意停在"把内置 plugins 暴露给前端"这一步：
 | `frontend/src/types/index.ts` | 新增 `SourceInfo` TypeScript 类型 | +12 |
 | `frontend/src/api/client.ts` | 新增 `getSources(): Promise<SourceInfo[]>` API 调用 | +8 |
 | `frontend/src/store/useSourceStore.ts` | **新增文件**：Zustand store，含 `sources`、`enabled: Set<string>`、`loadSources()`、`toggle(name)`；`persist` 写到 `localStorage["app.enabledSources"]` | +60 |
-| `frontend/src/components/search/SearchPanel.tsx` | 删除硬编码 `SEARCH_SOURCES` / `SOURCE_COLORS` / `VALID_SOURCES`；挂 `useSourceStore.loadSources()`；把 `enabled` 集合透传进 `searchMusic()` 请求体 | −40 / +30 |
+| `frontend/src/components/search/CloudSearchView.tsx` | 删除硬编码 `SEARCH_SOURCES` / `SOURCE_COLORS` / `VALID_SOURCES`；挂 `useSourceStore.loadSources()`；把 `enabled` 集合透传进 `searchMusic()` 请求体 | −40 / +30 |
 | `frontend/src/components/search/SourcePickerModal.tsx` | 硬编码 chip 列表换成从 store 读取；按 `kind` 字段分别渲染 tag 行 / download 行 | −20 / +20 |
 | `frontend/src/components/settings/` （新建目录） | 一个极简的新页面：per-source toggle 行 + `searchable` / `lyric` 角标 | +50 |
 
@@ -214,7 +213,7 @@ Web UI 来启 / 停 / 改 / 测 plugin，无需重启。约 ½ 天工作量。
 - [x] 本文档编写 + review
 - [ ] `docs/plugable-plugins.md` 已提交
 - [ ] 后端 `handler/source.go` + router + tag.go 改动合并 → `go build` clean
-- [ ] 前端 `useSourceStore.ts` + `SourcePickerModal` + `SearchPanel` + Settings 页面合并 → `tsc` clean
+- [ ] 前端 `useSourceStore.ts` + `SourcePickerModal` + `CloudSearchView` + Settings 页面合并 → `tsc` clean
 - [ ] Manual e2e：放一个 `sources/netease.js` 占位（Stage C 脚手架）后，前端**无需 rebuild**就在 UI 上显现为 disabled chip
 - [ ] `sourcesDefault` 常量已删除
 

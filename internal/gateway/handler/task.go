@@ -83,6 +83,49 @@ func TidyFolder(c *gin.Context) {
 	})
 }
 
+// PreviewPruneEmptyFolders handles POST /api/prune_empty_folders/preview/ —
+// report what the cleanup would remove, without removing it.
+//
+// The confirmation dialog needs the list, not a count: "16 stale rows" is
+// something the user can only nod at, whereas the sixteen paths are
+// something they can check against what they remember deleting. A count
+// would also be worthless if wrong, which is the argument for showing the
+// real thing.
+//
+// Read-only, so unlike the mutation this does not go through the worker
+// queue — a round trip to get a preview would mean the dialog renders
+// before the answer arrives, and the list could go stale between the
+// preview and the confirmation anyway. It reuses the task handler's own
+// dry-run passes, so what is shown is what would be done.
+func PreviewPruneEmptyFolders(c *gin.Context) {
+	var req struct {
+		SubPaths [][2]string `json:"sub_paths"`
+	}
+	// Same contract as the mutation: an absent body means the whole library.
+	_ = c.ShouldBindJSON(&req)
+
+	h := &tasks.PruneEmptyFoldersHandler{DB: dedupDB}
+	dirs, rows, err := h.PreviewPrune(c.Request.Context(), req.SubPaths)
+	if err != nil {
+		Failure(c, err.Error())
+		return
+	}
+	// Empty slices rather than nil, so the JSON carries [] instead of null.
+	// A client that maps over this should not have to know that "nothing to
+	// do" arrives as a different type than "something to do".
+	if dirs == nil {
+		dirs = []string{}
+	}
+	if rows == nil {
+		rows = []string{}
+	}
+	SuccessData(c, gin.H{
+		"empty_dirs":    dirs,
+		"vanished_rows": rows,
+		"total":         len(dirs) + len(rows),
+	})
+}
+
 // PruneEmptyFolders handles POST /api/prune_empty_folders/ — enqueue a task
 // that deletes directories left empty by a tidy, a rename or a delete.
 //

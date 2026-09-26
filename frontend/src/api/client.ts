@@ -138,6 +138,29 @@ export async function pruneEmptyFolders(subPaths?: Array<[string, string]>) {
   return data;
 }
 
+/** POST /api/prune_empty_folders/preview/ — what the cleanup would remove,
+ *  without removing it.
+ *
+ *  Read-only, so the gateway answers inline instead of going through the
+ *  worker queue. The confirmation dialog lists these paths: a count the
+ *  user can only nod at is not a confirmation, and a count that is wrong
+ *  is worse than no dialog at all. */
+export async function previewPruneEmpty(subPaths?: Array<[string, string]>) {
+  const { data } = await api.post('prune_empty_folders/preview/', {
+    sub_paths: subPaths ?? [],
+  });
+  const payload = unwrapEnvelope<{
+    empty_dirs?: string[];
+    vanished_rows?: string[];
+    total?: number;
+  }>(data, 'prune_empty_folders/preview');
+  return {
+    emptyDirs: payload.empty_dirs ?? [],
+    vanishedRows: payload.vanished_rows ?? [],
+    total: payload.total ?? 0,
+  };
+}
+
 export async function getActiveQueue() {
   const { data } = await api.get('active_queue/');
   return data;
