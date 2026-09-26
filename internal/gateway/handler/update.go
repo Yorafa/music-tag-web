@@ -182,10 +182,47 @@ func BatchUpdateID3(c *gin.Context) {
 		FileFullPath string                   `json:"file_full_path" binding:"required"`
 		MusicInfo    map[string]interface{}   `json:"music_info" binding:"required"`
 		SelectData   []map[string]interface{} `json:"select_data" binding:"required"`
+		// Action picks the audit.Action to record. Only the two batch
+		// actions are accepted; anything else falls back to
+		// ActionBatchUpdateID3 so a stray value cannot invent an
+		// unrenderable action in the audit log.
+		//
+		// The auto-scrape path sends ActionAutoScrape because it rides
+		// this endpoint but is a different thing from a hand-made
+		// uniform edit: without it a 50-track scrape is
+		// indistinguishable in 操作审计 from 50 rows of "set these four
+		// fields on these files".
+		Action string `json:"action"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Failure(c, "invalid request")
 		return
+	}
+
+	action := audit.ActionBatchUpdateID3
+	if req.Action == audit.ActionAutoScrape {
+		action = audit.ActionAutoScrape
+	}
+
+	// perEntry resolves which tags one select_data row gets. The original
+	// contract is a single shared music_info applied to every selection —
+	// "set these four fields on these forty files" — and that is still the
+	// default. A row may now carry its own music_info, which is what makes
+	// this endpoint usable for auto-scrape: each scraped track has its own
+	// title/artist/album, and folding those into one shared map would write
+	// track A's tags onto track B.
+	perEntry := func(sel map[string]interface{}) map[string]interface{} {
+		if own, ok := sel["music_info"].(map[string]interface{}); ok {
+			return own
+		}
+		return req.MusicInfo
+	}
+	hasPerEntry := false
+	for _, sel := range req.SelectData {
+		if _, ok := sel["music_info"].(map[string]interface{}); ok {
+			hasPerEntry = true
+			break
+		}
 	}
 
 	root := utils.MusicRoot()
@@ -222,7 +259,7 @@ func BatchUpdateID3(c *gin.Context) {
 				if err != nil {
 					continue // skip — name overflowed under a different root (defensive)
 				}
-				merged := mergeInfo(req.MusicInfo, map[string]interface{}{
+				merged := mergeInfo(perEntry(sel), map[string]interface{}{
 					"file_full_path": leaf,
 					"filename":       e.Name(),
 				})
@@ -249,7 +286,7 @@ func BatchUpdateID3(c *gin.Context) {
 			Failure(c, "路径不安全: "+err.Error())
 			return
 		}
-		merged := mergeInfo(req.MusicInfo, map[string]interface{}{
+		merged := mergeInfo(perEntry(sel), map[string]interface{}{
 			"file_full_path": leaf,
 		})
 		res, err := applyFileUpdate(stringValue(merged["file_full_path"]), merged)
@@ -274,13 +311,21 @@ func BatchUpdateID3(c *gin.Context) {
 	} else if len(report.done) == 0 && len(report.skipped) > 0 {
 		status = audit.StatusSkipped
 	}
-	audit.Log(c.Request.Context(), audit.ActionBatchUpdateID3, req.FileFullPath, "admin", status, len(report.done)+len(report.skipped), map[string]interface{}{
+	details := map[string]interface{}{
 		"file_full_path": req.FileFullPath,
-		"music_info":     req.MusicInfo,
 		"select_count":   len(req.SelectData),
 		"done_count":     len(report.done),
 		"skipped_count":  len(report.skipped),
-	}, nil)
+	}
+	if hasPerEntry {
+		// req.MusicInfo is only a placeholder once rows carry their own
+		// tags, so recording it would describe a write that never happened.
+		// What each row actually got is in the response report.
+		details["per_entry_music_info"] = true
+	} else {
+		details["music_info"] = req.MusicInfo
+	}
+	audit.Log(c.Request.Context(), action, req.FileFullPath, "admin", status, len(report.done)+len(report.skipped), details, nil)
 	SuccessData(c, report.toJSON())
 }
 

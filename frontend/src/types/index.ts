@@ -142,6 +142,12 @@ export interface SearchResult {
   // only set by the YouTube download path. Both search surfaces read
   // through searchCoverSrc rather than picking one.
   album_img?: string;
+  /** Wire-shape match against `internal/plugin/interface.go::Song.Genre`.
+   *  Only MusicBrainz fills it today; the other tag sources leave it
+   *  unset, so callers must treat absence as "unknown" rather than
+   *  substituting a default. Auto-scrape omits the field entirely in
+   *  that case, which preserves whatever the file already had. */
+  genre?: string;
   // Wire-shape match against `internal/plugin/interface.go::Song.Mid`
   // (json tag "mid"). The old `song_mid?` name had no readers; this
   // rename is purely payload-shape, not behavioural.

@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import {
   Sparkles,
-  RefreshCw,
   FolderTree,
   FileText,
   Trash2,
@@ -31,11 +30,19 @@ import { ParseFilenamesModal } from '@/components/scraper/ParseFilenamesModal';
 import { useWorklistStore, type WorklistGrouping } from '@/store/useWorklistStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import {
-  fullScanFolder,
   tidyFolder,
   fetchId3ByTitle,
-  updateId3,
+  batchUpdateId3,
 } from '@/api/client';
+import {
+  scrapedMusicInfo,
+  groupSelectionsByDir,
+} from '@/components/workstation/scrapedInfo';
+import {
+  renamedPathFromUpdate,
+  sidecarWarningsFromUpdate,
+  baseNameOf,
+} from '@/components/detail/renameResult';
 import { cn } from '@/lib/utils';
 import type { MusicSource } from '@/types';
 
@@ -62,6 +69,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   const clear = useWorklistStore((s) => s.clear);
   const setStatus = useWorklistStore((s) => s.setStatus);
   const setMusicInfo = useWorklistStore((s) => s.setMusicInfo);
+  const renameRow = useWorklistStore((s) => s.renameRow);
   const grouping = useWorklistStore((s) => s.grouping);
   const setGrouping = useWorklistStore((s) => s.setGrouping);
 
@@ -100,7 +108,16 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
     }
   };
 
-  // Run Batch Auto Scrape directly on selected rows
+  // Run Batch Auto Scrape over the selected rows.
+  //
+  // Two phases, because the two halves have different shapes. The SEARCH
+  // is one request per track and always will be — every row has its own
+  // query. The WRITE used to be one request per track too, which is what
+  // made a 50-row scrape feel broken: 100 serial round-trips, no way to
+  // cancel, and one audit row per track so 操作审计 showed fifty anonymous
+  // single edits instead of one scrape. The writes now go out as one
+  // batch_update_id3 per directory, which is one request for the common
+  // case of a single-folder selection.
   const handleRunBatchScrape = async () => {
     const targetRows = hasSelection
       ? rows.filter((r) => selectedIds.includes(r.fullPath))
@@ -115,18 +132,18 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
     setIsScraping(true);
     setScrapeProgress({ current: 0, total: targetRows.length });
 
-    let successCount = 0;
+    // Phase 1 — search each track, keep the tags we'd write.
+    const matched = new Map<string, Record<string, unknown>>();
     let failCount = 0;
 
     for (let i = 0; i < targetRows.length; i++) {
       const row = targetRows[i];
       setScrapeProgress({ current: i + 1, total: targetRows.length });
 
-      try {
-        const queryTitle =
-          row.musicInfo?.title ||
-          row.fileName.replace(/\.[^/.]+$/, '').trim();
+      const queryTitle =
+        row.musicInfo?.title || row.fileName.replace(/\.[^/.]+$/, '').trim();
 
+      try {
         const primarySource = selectedSources[0] || 'smart_tag';
         const res = await fetchId3ByTitle(
           queryTitle,
@@ -135,37 +152,69 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         );
 
         const candidates = res?.data ?? [];
-        if (candidates.length > 0 && autoApplyFirstMatch) {
-          const topCandidate = candidates[0];
-          const newInfo = {
-            title: topCandidate.name || queryTitle,
-            artist: topCandidate.artist || '',
-            album: topCandidate.album || '',
-            album_img: topCandidate.album_img || '',
-            genre: '流行',
-            year: topCandidate.year || '',
-            lyrics: topCandidate.lyric || topCandidate.lyrics || '',
-          };
-
-          // Update tags on server
-          await updateId3([
-            {
-              file_full_path: row.fullPath,
-              file_name: row.fileName,
-              ...newInfo,
-            },
-          ]);
-
-          setMusicInfo(row.fullPath, newInfo);
-          setStatus(row.fullPath, 'scraped');
-          successCount++;
-        } else {
+        if (candidates.length === 0 || !autoApplyFirstMatch) {
           setStatus(row.fullPath, 'failed');
           failCount++;
+          continue;
         }
+        matched.set(
+          row.fullPath,
+          scrapedMusicInfo(candidates[0], queryTitle),
+        );
       } catch {
         setStatus(row.fullPath, 'failed');
         failCount++;
+      }
+    }
+
+    // Phase 2 — write. The endpoint takes one base directory and joins
+    // each select_data name onto it, so a selection spanning folders
+    // becomes one request per folder rather than one request per track.
+    const groups = groupSelectionsByDir(
+      [...matched.keys()].map((fullPath) => ({ fullPath })),
+      (r) => matched.get(r.fullPath) ?? {},
+    );
+
+    let successCount = 0;
+    const sidecarNotes: string[] = [];
+
+    for (const [dir, selectData] of groups) {
+      const rowsInGroup = selectData.map((s) => ({
+        fullPath: `${dir === '' ? '' : `${dir}/`}${s.name}`,
+      }));
+
+      try {
+        const res = await batchUpdateId3({
+          file_full_path: dir,
+          // Required by the wire contract, but every row below carries
+          // its own music_info, so this map is a placeholder that never
+          // reaches a file. See handler.BatchUpdateID3's perEntry.
+          music_info: {},
+          select_data: selectData,
+          // Records this as 自动刮削 rather than 批量标签, so a scrape is
+          // filterable as itself in 操作审计.
+          action: 'auto_scrape',
+        });
+
+        sidecarNotes.push(...sidecarWarningsFromUpdate(res));
+
+        for (const { fullPath } of rowsInGroup) {
+          const info = matched.get(fullPath);
+          if (info) setMusicInfo(fullPath, info);
+          setStatus(fullPath, 'scraped');
+          successCount++;
+
+          // A write can also rename the file (the filename template), and
+          // a row's identity IS its path — so the store has to be told or
+          // the row is left pointing at something that no longer exists.
+          const newPath = renamedPathFromUpdate(res, fullPath);
+          if (newPath) renameRow(fullPath, newPath, baseNameOf(newPath));
+        }
+      } catch {
+        for (const { fullPath } of rowsInGroup) {
+          setStatus(fullPath, 'failed');
+          failCount++;
+        }
       }
     }
 
@@ -174,6 +223,9 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
     useNoticeStore
       .getState()
       .push(`批量刮削完成：成功 ${successCount} 首，未匹配 ${failCount} 首`, 'info');
+    for (const note of sidecarNotes) {
+      useNoticeStore.getState().push(note, 'warn');
+    }
   };
 
   // Submit Tidy Folder
@@ -184,13 +236,25 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
     }
     setTidyRunning(true);
     try {
-      const sampleId = selectedIds[0] || rows[0]?.fullPath || '';
+      // music_paths is what the worker actually iterates. The old payload
+      // sent file_full_path + select_data instead — fields the endpoint
+      // never reads — so MusicPaths arrived empty and ProcessTask bailed
+      // with "invalid tidy payload" on every single submission. The UI
+      // reported success because enqueueing *did* succeed; the task died
+      // afterwards, five retries, silently. See handler.TidyFolder.
+      const targetRows = hasSelection
+        ? rows.filter((r) => selectedIds.includes(r.fullPath))
+        : rows;
+      if (targetRows.length === 0) {
+        useNoticeStore.getState().push('没有可整理的音乐行', 'warn');
+        setTidyRunning(false);
+        return;
+      }
       const res = await tidyFolder({
         root_path: tidyForm.root_path,
         first_dir: tidyForm.first_dir,
         second_dir: tidyForm.second_dir,
-        file_full_path: sampleId,
-        select_data: [{ id: 0, name: sampleId, icon: 'icon-folder' }],
+        music_paths: targetRows.map((r) => r.fullPath),
       });
       if (res?.result) {
         useNoticeStore.getState().push('已提交目录整理异步任务', 'info');
@@ -203,7 +267,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
     } finally {
       setTidyRunning(false);
     }
-  };
+    };
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-border bg-surface-2/60 shrink-0">
@@ -373,23 +437,6 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         <Separator orientation="vertical" className="mx-0.5 h-4" />
 
         {/* Scan local buttons */}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={async () => {
-            try {
-              const res = await fullScanFolder();
-              useNoticeStore.getState().push(res?.result ? '已提交全盘扫描任务' : '全盘扫描失败', res?.result ? 'info' : 'error');
-            } catch {
-              useNoticeStore.getState().push('全盘扫描失败', 'error');
-            }
-          }}
-          className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground"
-          title="对全盘音乐库进行扫描"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          <span className="hidden lg:inline">全盘扫描</span>
-        </Button>
       </div>
 
       {/* Right Operations: Selection, Grouping, Clear */}

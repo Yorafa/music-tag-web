@@ -106,11 +106,6 @@ export async function uploadImage(file: File) {
 // GET reachable with cookie auth is CSRF-able via a plain link / <img>, since
 // SameSite=Lax still sends the cookie on top-level GET navigations. POST with
 // SameSite=Lax is not sent cross-site, which closes that path.
-export async function scanFolder() {
-  const { data } = await api.post('task1/');
-  return data;
-}
-
 export async function fullScanFolder() {
   const { data } = await api.post('full_scan_folder/');
   return data;
