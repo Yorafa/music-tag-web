@@ -474,8 +474,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.plugin
+      additional_contexts:
+        fpcalbase: "service:fpcalc-base"
       args:
         PLUGIN: youtube
+        # ffmpeg, not just fpcalc: the ffmpeg package and the chromaprint
+        # package share the same four libav* libraries, so building on the
+        # base turns ~88 MB of them from a second stored copy into a shared
+        # layer. See the youtube branch in Dockerfile.plugin.
+        RUNTIME_BASE: runtime_fpcalc
     container_name: go-music-youtube
     # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
     # be two copies of one number kept in sync by hand — compose passed no

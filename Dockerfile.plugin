@@ -72,10 +72,12 @@ FROM alpine:3.20 AS runtime_plain
 # internal/plugin/acoustid/server.go::NewServer, which LookPath's it and sets
 # disabled=true when absent, making every FetchId3ByTitle return zero songs.
 # Until it was installed the plugin was a permanent no-op in Docker even
-# though the feature matrix listed it as implemented. It builds on
-# runtime_fpcalc (Dockerfile.base) rather than installing the package here,
-# which is what lets it share one stored copy of the 88 MB with the gateway
-# and the worker instead of keeping a second one.
+# though the feature matrix listed it as implemented.
+#
+# Both acoustid and youtube build on runtime_fpcalc (Dockerfile.base) rather
+# than a bare alpine, so the ffmpeg libraries all four images need are one
+# stored layer. The other six plugins have no reason to and stay on
+# runtime_plain, which is 12 MB against 115.
 ARG PLUGIN=netease
 FROM ${RUNTIME_BASE} AS runtime
 ARG PLUGIN=netease
@@ -85,8 +87,22 @@ ARG YTDLP_VERSION=2026.8.19
 RUN apk add --no-cache ca-certificates tzdata
 # The youtube branch is the only one that installs ffmpeg itself, and it
 # needs the real binary — yt-dlp's --extract-audio post-processor execs it.
-# The acoustid plugin gets fpcalc from the base above rather than here, so
-# this layer stays untouched for it.
+#
+# Building on runtime_fpcalc rather than a plain alpine is what keeps this
+# cheap. The ffmpeg package pulls libavcodec / libavformat / libavutil /
+# libswresample, and the chromaprint package in the base pulls exactly the
+# same four, so on top of the base apk only has to add what is genuinely
+# extra — the ffmpeg binary plus libavdevice, libavfilter, libpostproc and
+# libswscale, about 30 MB. Measured: /usr/lib goes 88.4 MB -> 119.1 MB, and
+# the 88.4 MB underneath is the layer the gateway, worker and acoustid
+# plugin already share. Starting from a bare alpine instead stored a second
+# copy of all of it.
+#
+# The four extra libraries cannot be dropped even though --extract-audio only
+# decodes and re-encodes: the ffmpeg binary hard-links all four, so removing
+# any of them leaves it refusing to start. Same for the codec libraries
+# themselves — libx265 alone is 19 MB and is an encoder this path never calls,
+# but libavcodec.so NEEDs it.
 RUN if [ "${PLUGIN}" = "youtube" ]; then \
          apk add --no-cache python3 py3-pip ffmpeg \
          && pip3 install --no-cache-dir --break-system-packages \
