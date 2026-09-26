@@ -334,14 +334,29 @@ func parseCORSOrigins(raw string) []string {
 	return out
 }
 
+// parsePluginAddrs reads every PLUGIN_<NAME>_ADDR variable, so the set of
+// sources follows whatever compose configures rather than a list kept in
+// sync by hand. That list silently dropped acoustid: the container ran,
+// healthy, with fpcalc on PATH, while nothing ever dialed it — and because
+// no connection was attempted there was not even an unreachable warning.
+//
+// Format: PLUGIN_NETEASE_ADDR=localhost:50051
 func parsePluginAddrs() map[string]string {
 	m := make(map[string]string)
-	// Format: PLUGIN_NETEASE_ADDR=localhost:50051
-	for _, name := range []string{"netease", "kugou", "kuwo", "migu", "musicbrainz", "qmusic", "youtube"} {
-		key := "PLUGIN_" + strings.ToUpper(name) + "_ADDR"
-		if addr := os.Getenv(key); addr != "" {
-			m[name] = addr
+	for _, kv := range os.Environ() {
+		name, addr, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
 		}
+		rest, ok := strings.CutPrefix(name, "PLUGIN_")
+		if !ok {
+			continue
+		}
+		plugin, ok := strings.CutSuffix(rest, "_ADDR")
+		if !ok || plugin == "" || strings.TrimSpace(addr) == "" {
+			continue
+		}
+		m[strings.ToLower(plugin)] = addr
 	}
 	return m
 }

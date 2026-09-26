@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // ─── Table: isPlaceholderEnv ─────────────────────────────────────────────
 // Single-value sentinels. Match is exact (after TrimSpace + upper), so
@@ -86,5 +89,55 @@ func TestPlaceholderConstantsUnchanged(t *testing.T) {
 	}
 	if placeholderWebhookToken != "__REPLACE_ME__" {
 		t.Errorf("placeholderWebhookToken drifted: got %q", placeholderWebhookToken)
+	}
+}
+
+// ─── parsePluginAddrs ─────────────────────────────────────────────────────
+// The name set is derived from the environment, not a literal in the code.
+// It used to be a literal, and acoustid was missing from it: the container
+// was running and healthy with fpcalc available, and nothing ever dialed
+// it. A plugin that is deployed but absent from a hand-maintained list is
+// invisible, because no connection attempt means no warning either.
+func TestParsePluginAddrsDiscoversEveryConfiguredSource(t *testing.T) {
+	// The seven names docker-compose.yml sets by default. If a new source
+	// is added to compose and lands here, the discovery below must find it.
+	configured := map[string]string{
+		"netease":     "netease:50051",
+		"kugou":       "kugou:50052",
+		"kuwo":        "kuwo:50053",
+		"migu":        "migu:50054",
+		"qmusic":      "qmusic:50055",
+		"musicbrainz": "musicbrainz:50056",
+		"acoustid":    "acoustid:50057",
+		"youtube":     "youtube:50058",
+	}
+	for name, addr := range configured {
+		t.Setenv("PLUGIN_"+strings.ToUpper(name)+"_ADDR", addr)
+	}
+
+	got := parsePluginAddrs()
+	for name, want := range configured {
+		if got[name] != want {
+			t.Errorf("parsePluginAddrs()[%q] = %q, want %q", name, got[name], want)
+		}
+	}
+}
+
+// A variable that is merely PLUGIN_-prefixed is not an address, and one with
+// an empty value is a disabled source rather than a dial to ":".
+func TestParsePluginAddrsSkipsNonAddressAndEmptyValues(t *testing.T) {
+	t.Setenv("PLUGIN_NETEASE_ADDR", "netease:50051")
+	t.Setenv("PLUGIN_TIMEOUT", "30s")
+	t.Setenv("PLUGIN_DEBUG_ADDR", "")
+	t.Setenv("PLUGIN__ADDR", "bogus:1")
+
+	got := parsePluginAddrs()
+	if got["netease"] != "netease:50051" {
+		t.Errorf("netease missing: %+v", got)
+	}
+	for _, key := range []string{"timeout", "debug", ""} {
+		if _, ok := got[key]; ok {
+			t.Errorf("parsePluginAddrs() should not contain key %q: %+v", key, got)
+		}
 	}
 }

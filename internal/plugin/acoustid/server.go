@@ -13,8 +13,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -22,22 +24,40 @@ import (
 	pb "go-music-tag/api/proto/tagplugin"
 )
 
-const apiURL = "https://api.acoustid.org/v2/match"
+const apiURL = "https://api.acoustid.org/v2/lookup"
+
+// defaultAPIKey 是 AcoustID 官方文档里给的公共测试 key，服务端明确写着它
+// 「会在几天后过期，不要用在真实应用里」。所以它只是默认值：真实部署应该
+// 设 ACOUSTID_API_KEY（注册后在 https://acoustid.org/login 取）。
+// 之前这里硬编码的 8o9ZcDHDxb 根本不是有效 key，服务端一律回
+// {"error":{"code":4,"message":"invalid API key"}}。
+const defaultAPIKey = "fMcSGVkZWAI"
+
+const envAPIKey = "ACOUSTID_API_KEY"
 
 type Server struct {
 	pb.UnimplementedTagSourceServer
 	client   *http.Client
 	fpcalc   string
+	apiKey   string
 	disabled bool
 }
 
 func NewServer() *Server {
 	s := &Server{client: &http.Client{Timeout: 15 * time.Second}}
+	s.apiKey = os.Getenv(envAPIKey)
+	if s.apiKey == "" {
+		s.apiKey = defaultAPIKey
+	}
+	if s.apiKey == defaultAPIKey {
+		log.Printf("[acoustid] %s not set; using the shared public test key, which AcoustID may expire. Register at https://acoustid.org/login", envAPIKey)
+	}
 	s.fpcalc = "fpcalc"
 	if path, err := exec.LookPath("fpcalc"); err == nil {
 		s.fpcalc = path
 	} else {
 		s.disabled = true
+		log.Printf("[acoustid] fpcalc not on PATH; every lookup will return empty")
 	}
 	return s
 }
@@ -54,6 +74,11 @@ func (s *Server) Search(_ context.Context, _ *pb.SearchRequest) (*pb.SearchRespo
 }
 
 // FetchId3ByTitle: title 实际为文件路径。fpcalc 缺失则返回空。
+//
+// 每一个失败分支都返回空而不上报错误，因为聚合源 (smart_tag) 会把本插件
+// 和五个真正按曲名搜索的源放在同一个 fan-out 里，一个源的故障不应该让
+// 整个抓取失败。代价是「没匹配上」和「根本没跑成」在响应里长得一样，
+// 所以下面每条分支都留日志 —— 插件的包注释一直声称有，实际并没有。
 func (s *Server) FetchId3ByTitle(ctx context.Context, req *pb.FetchId3Request) (*pb.FetchId3Response, error) {
 	if s.disabled {
 		return &pb.FetchId3Response{Songs: []*pb.Song{}}, nil
@@ -63,10 +88,13 @@ func (s *Server) FetchId3ByTitle(ctx context.Context, req *pb.FetchId3Request) (
 	}
 	fp, duration, err := runFPCalc(s.fpcalc, req.Title)
 	if err != nil {
+		// 最常见的原因是容器没挂音乐库，fpcalc 打不开文件。
+		log.Printf("[acoustid] fpcalc failed for %s: %v", req.Title, err)
 		return &pb.FetchId3Response{}, nil
 	}
 	matches, err := s.match(ctx, fp, duration)
 	if err != nil {
+		log.Printf("[acoustid] match request failed for %s (fp len=%d dur=%d): %v", req.Title, len(fp), duration, err)
 		return &pb.FetchId3Response{}, nil
 	}
 	out := make([]*pb.Song, len(matches))
@@ -139,16 +167,46 @@ type match struct {
 	Album       string
 }
 
+// apiRecording 镜像一条 MusicBrainz recording 在 /v2/lookup 响应里的形状。
+type apiRecording struct {
+	ID            string      `json:"id"`
+	Title         string      `json:"title"`
+	Artists       []apiNamed  `json:"artists"`
+	ReleaseGroups []apiTitled `json:"releasegroups"`
+}
+
+type apiNamed struct {
+	Name string `json:"name"`
+}
+
+type apiTitled struct {
+	Title string `json:"title"`
+}
+
+func matchFor(rec apiRecording) match {
+	artist, album := "", ""
+	if len(rec.Artists) > 0 {
+		artist = rec.Artists[0].Name
+	}
+	if len(rec.ReleaseGroups) > 0 {
+		album = rec.ReleaseGroups[0].Title
+	}
+	return match{RecordingID: rec.ID, Title: rec.Title, Artist: artist, Album: album}
+}
+
 func (s *Server) match(ctx context.Context, fingerprint string, duration int) ([]match, error) {
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)
-	_ = w.WriteField("client", "8o9ZcDHDxb")
+	_ = w.WriteField("client", s.apiKey)
 	_ = w.WriteField("duration", fmt.Sprint(duration))
 	_ = w.WriteField("fingerprint", fingerprint)
 	_ = w.WriteField("meta", "recordings releasegroups compress")
 	w.Close()
 
-	req, _ := http.NewRequestWithContext(ctx, "POST", apiURL, body)
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, body)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -158,36 +216,46 @@ func (s *Server) match(ctx context.Context, fingerprint string, duration int) ([
 	raw, _ := io.ReadAll(resp.Body)
 
 	var data struct {
+		// Errors come back as HTTP 200 with a populated error object, so
+		// checking the status code alone is not enough — and returning an
+		// empty result set for them is what made this plugin look like it
+		// simply never matched anything.
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
 		Results []struct {
-			Recordings []struct {
-				ID      string `json:"id"`
-				Title   string `json:"title"`
-				Artists []struct {
-					Name string `json:"name"`
-				} `json:"artists"`
-				ReleaseGroups []struct {
-					Title string `json:"title"`
-				} `json:"releasegroups"`
-			} `json:"recordings"`
+			Recordings []apiRecording `json:"recordings"`
+			Score      float64        `json:"score"`
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(raw, &data); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("acoustid: decode %s (status %d, body=%.200q): %w", apiURL, resp.StatusCode, raw, err)
 	}
+	if data.Error != nil {
+		return nil, fmt.Errorf("acoustid: api error %d: %s", data.Error.Code, data.Error.Message)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("acoustid: %s returned %s (body=%.200q)", apiURL, resp.Status, raw)
+	}
+	// 不同的 AcoustID 指纹（不同压制、不同音轨）会指向同一条 MusicBrainz
+	// recording，所以直接展开 results 会把同一首歌返回多次。去重，同一条
+	// recording 保留 score 最高的那次。
 	out := make([]match, 0)
+	idx := make(map[string]int, len(data.Results))
+	score := make(map[string]float64, len(data.Results))
 	for _, r := range data.Results {
 		for _, rec := range r.Recordings {
-			artist := ""
-			if len(rec.Artists) > 0 {
-				artist = rec.Artists[0].Name
+			if i, seen := idx[rec.ID]; seen {
+				if r.Score > score[rec.ID] {
+					out[i] = matchFor(rec)
+					score[rec.ID] = r.Score
+				}
+				continue
 			}
-			album := ""
-			if len(rec.ReleaseGroups) > 0 {
-				album = rec.ReleaseGroups[0].Title
-			}
-			out = append(out, match{
-				RecordingID: rec.ID, Title: rec.Title, Artist: artist, Album: album,
-			})
+			idx[rec.ID] = len(out)
+			score[rec.ID] = r.Score
+			out = append(out, matchFor(rec))
 		}
 	}
 	return out, nil

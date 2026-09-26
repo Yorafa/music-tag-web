@@ -425,6 +425,17 @@ services:
     environment:
       ACOUSTID_PORT: "${ACOUSTID_PORT:-50057}"
       ACOUSTID_HEALTH_PORT: "18087"
+      # 未设时回退到官方公共测试 key（官方声明会在数日后过期）。长期部署
+      # 请在 https://acoustid.org/login 注册后把真 key 写进 .env。
+      ACOUSTID_API_KEY: "${ACOUSTID_API_KEY:-}"
+    volumes:
+      # The only plugin that reads the audio itself: fpcalc has to open the
+      # file, and it is handed the path exactly as gateway/worker see it
+      # (/app/media/...). Without this mount fpcalc fails to open every
+      # path and the plugin returns an empty result, which is
+      # indistinguishable from "AcoustID had no match". Mounted read-only —
+      # fingerprinting never writes.
+      - ./music:/app/media:ro
     restart: unless-stopped
 
   youtube:

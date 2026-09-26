@@ -21,7 +21,7 @@
 
 支持 [FLAC / APE / WAV / AIFF / WV / TTA / MP3 / M4A / OGG / MPC / OPUS / WMA / DSF / MP4] 全部主流有损/无损格式；**所有音乐文件本地处理，不上传第三方**；适配群晖、威联通、unRAID、Linux 小主机、amd64 / arm64 架构。
 
-后端 HTTP gateway 与后台 worker 拆为两个独立容器；7 个音乐源（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）**每个都是独立 gRPC 微服务进程**，独立部署、独立失败隔离。Tag I/O 走原生 Go 库（`bogem/id3v2` + `dhowden/tag`），无 FFI / 无 virtualenv / 无外部 binary 调用链。前端是 React SPA，状态走客户端 Zustand + `localStorage` 持久化。整套镜像约 ~80 MB。
+后端 HTTP gateway 与后台 worker 拆为两个独立容器；7 个音乐源（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）**每个都是独立 gRPC 微服务进程**，独立部署、独立失败隔离。Tag I/O 走原生 Go 库（`bogem/id3v2` + `dhowden/tag`），无 FFI / 无 virtualenv / 无外部 binary 调用链。前端是 React SPA，状态走客户端 Zustand + `localStorage` 持久化。整套镜像约 560 MB。
 
 ---
 
@@ -37,7 +37,7 @@
 | 鉴权 | JWT in-memory + bcrypt；fail-closed 默认值检测 |
 | 加密 | gRPC TLS 可选（env `GRPC_USE_TLS=1` + 可选 `GRPC_TLS_CA_FILE`） |
 | 部署 | 单条 `docker compose up -d --build` 拉起 gateway + worker + 8 gRPC plugin + redis（nginx 已合并进 gateway，不再有独立服务；React SPA 已烘进 gateway 镜像，不需要 host 侧先 build） |
-| Docker image | gateway ~17 MB、worker ~16 MB（纯 Go）、7 个音乐源插件各 ~13 MB、youtube 插件 ~190 MB（唯一带 yt-dlp + ffmpeg 的镜像） |
+| Docker image | gateway 131 MB、worker 33 MB（纯 Go）、6 个按曲名搜索的插件各 21.5 MB、acoustid 插件 114 MB、youtube 插件 199 MB（yt-dlp + ffmpeg）。合计约 560 MB + `redis:7-alpine` |
 
 完整 operator 视角的安全默认值见 [`SECURITY.md`](SECURITY.md)；plugable plugin 设计草图见 [`docs/plugable-plugins.md`](docs/plugable-plugins.md)。
 
@@ -335,7 +335,7 @@ curl 'http://localhost:8001/api/search_music/?q=test'
 | `npm run typecheck` 类型错 | 先看 `frontend/src/types/index.ts` 是否漏类型定义。注意这个命令必须用 `tsc -b`；`npx tsc --noEmit` 对本仓库的 solution 配置不检查任何文件，会假绿 |
 | `npm run lint` 报 `react-hooks/exhaustive-deps` 等 | `npm run lint:fix` 自动修，或手动补依赖项 |
 | gateway healthcheck 一直 unhealthy | `docker compose logs gateway` + `docker compose logs redis` 看联通 |
-| AcoustID 搜索没结果 | worker 镜像缺 `libchromaprint-tools`；host 侧 `apt-get install -y libchromaprint-tools` 或自行把它塞进 `Dockerfile.worker` |
+| AcoustID 搜索没结果 | 先看 `docker compose logs acoustid`：fpcalc 缺失、文件打不开、API key 失效都会打日志。fpcalc 缺 → acoustid 容器需 `docker compose build acoustid`（`Dockerfile.plugin` 只为 `PLUGIN=acoustid` 装 `chromaprint`）；文件打不开 → 检查 `docker-compose.yml` 里 acoustid 的 `./music:/app/media:ro` 挂载；key 失效 → 在 `.env` 设 `ACOUSTID_API_KEY`（[acoustid.org/login](https://acoustid.org/login) 注册）。未设时用官方公共测试 key，官方声明会在数日后过期 |
 
 完整 operator 安全默认值见 [`SECURITY.md`](SECURITY.md)；功能 status 表见 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md)；架构设计与 future stages 见 [`docs/plugable-plugins.md`](docs/plugable-plugins.md)。
 
