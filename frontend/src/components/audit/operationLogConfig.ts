@@ -4,6 +4,7 @@ import {
   Sparkles,
   FileText,
   FolderSync,
+  FolderX,
   Download,
   Image as ImageIcon,
   CheckCircle2,
@@ -45,6 +46,11 @@ export const ACTION_CONFIG: Record<string, ActionConfigItem> = {
     label: '文件名解析',
     icon: FileText,
     color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
+  },
+  prune_empty_folders: {
+    label: '清理空目录',
+    icon: FolderX,
+    color: 'bg-stone-500/10 text-stone-400 border-stone-500/30',
   },
   tidy_folder: {
     label: '目录整理',

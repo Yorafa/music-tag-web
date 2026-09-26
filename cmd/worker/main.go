@@ -143,6 +143,10 @@ func main() {
 	// python / yt-dlp / ffmpeg.
 	tasks.NewDownloadGenericMux(mux, tasks.NewDownloadHandler(gormDB, cfg.MusicDir))
 	tasks.NewClearMusicMux(mux, &tasks.ClearMusicHandler{DB: gormDB, DBDriver: dbDriver})
+	tasks.NewPruneEmptyFoldersMux(mux, &tasks.PruneEmptyFoldersHandler{
+		DB:        gormDB,
+		MusicRoot: cfg.MusicDir,
+	})
 	// C.2 filename-parse bulk-apply worker (tag:apply_parsed_filenames).
 	// HandleApplyParsedFilenames is a dependency-free function over the
 	// payload, so it wires as a HandlerFunc. This registration was missing
@@ -151,7 +155,7 @@ func main() {
 	// asynq's archived dead-letter queue — the parsed names were never
 	// written to tags. See docs/plans/Unfinished-Features.md § C.2.
 	tasks.NewApplyParsedFilenamesMux(mux, tasks.HandlerFunc(tasks.HandleApplyParsedFilenames))
-	log.Printf("[worker] all 7 task handlers registered")
+	log.Printf("[worker] all 8 task handlers registered")
 
 	// 4) Start asynq server.
 	asynqCfg := queue.ServerConfig()

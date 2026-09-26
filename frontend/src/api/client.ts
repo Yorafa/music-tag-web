@@ -118,6 +118,21 @@ export async function fullScanFolder() {
  *  attaches `Authorization: JWT <token>`. TaskCenterDropdown previously
  *  called `axios.get('/api/active_queue/')` directly, which sent no
  *  Authorization header and authenticated purely on the cookie mirror. */
+/** POST /api/prune_empty_folders/ — enqueue a task that deletes directories
+ *  left empty by a tidy, a rename or a delete.
+ *
+ *  Runs as an asynq task rather than inline: it is filesystem mutation over
+ *  an unbounded tree, like every other mutation here. Only literally empty
+ *  directories go — a directory still holding a cover.jpg or a .lrc is left
+ *  alone, because tidying can strand those and they are not disposable.
+ *  The removed list lands in 操作审计 as `prune_empty_folders`.
+ *
+ *  `sub_paths` restricts the sweep; omit it for the whole library. */
+export async function pruneEmptyFolders(subPaths?: Array<[string, string]>) {
+  const { data } = await api.post('prune_empty_folders/', { sub_paths: subPaths ?? [] });
+  return data;
+}
+
 export async function getActiveQueue() {
   const { data } = await api.get('active_queue/');
   return data;

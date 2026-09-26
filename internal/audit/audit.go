@@ -16,13 +16,14 @@ import (
 
 // Action 常量定义所有受审计的操作类型。
 const (
-	ActionUpdateID3      = "update_id3"
-	ActionBatchUpdateID3 = "batch_update_id3"
-	ActionAutoScrape     = "auto_scrape"
-	ActionFilenameParse  = "filename_parse"
-	ActionTidyFolder     = "tidy_folder"
-	ActionDownload       = "download"
-	ActionUploadCover    = "upload_cover"
+	ActionUpdateID3         = "update_id3"
+	ActionBatchUpdateID3    = "batch_update_id3"
+	ActionAutoScrape        = "auto_scrape"
+	ActionFilenameParse     = "filename_parse"
+	ActionTidyFolder        = "tidy_folder"
+	ActionPruneEmptyFolders = "prune_empty_folders"
+	ActionDownload          = "download"
+	ActionUploadCover       = "upload_cover"
 )
 
 // Status 常量定义操作结果状态。

@@ -154,6 +154,7 @@ export function OperationLogsTab() {
             <option value="auto_scrape">自动刮削</option>
             <option value="filename_parse">文件名解析</option>
             <option value="tidy_folder">目录整理</option>
+            <option value="prune_empty_folders">清理空目录</option>
             <option value="download">音乐下载</option>
             <option value="upload_cover">上传封面</option>
           </select>

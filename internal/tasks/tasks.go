@@ -20,6 +20,7 @@ const (
 	TypeUpdateScanFolder     = "scan:update"
 	TypeBatchAutoTag         = "tag:batch_auto"
 	TypeTidyFolder           = "folder:tidy"
+	TypePruneEmptyFolders    = "folder:prune_empty"
 	TypeDownloadGeneric      = "download:generic" // unified download type — payload.Source dispatches to the matching DownloadSource
 	TypeClearMusic           = "db:clear"
 	TypeApplyParsedFilenames = "tag:apply_parsed_filenames" // C.2 bulk-apply worker; payload = ApplyParsedFilenamesPayload
@@ -172,6 +173,18 @@ func NewTidyFolderMux(mux *asynq.ServeMux, h Handler) {
 	mux.HandleFunc(TypeTidyFolder, (&asynqAdapter{
 		decode: func(data []byte) (interface{}, error) {
 			var p TidyFolderPayload
+			err := Decode(data, &p)
+			return &p, err
+		},
+		h: h,
+	}).ProcessTask)
+}
+
+// NewPruneEmptyFoldersMux registers the TypePruneEmptyFolders handler.
+func NewPruneEmptyFoldersMux(mux *asynq.ServeMux, h Handler) {
+	mux.HandleFunc(TypePruneEmptyFolders, (&asynqAdapter{
+		decode: func(data []byte) (interface{}, error) {
+			var p PruneEmptyFoldersPayload
 			err := Decode(data, &p)
 			return &p, err
 		},

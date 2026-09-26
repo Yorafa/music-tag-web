@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   Sparkles,
   FolderTree,
+  FolderX,
   FileText,
   Trash2,
   FolderPlus,
@@ -33,6 +34,7 @@ import {
   tidyFolder,
   fetchId3ByTitle,
   batchUpdateId3,
+  pruneEmptyFolders,
 } from '@/api/client';
 import {
   scrapedMusicInfo,
@@ -101,6 +103,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
     second_dir: 'album',
   });
   const [tidyRunning, setTidyRunning] = useState(false);
+  const [pruning, setPruning] = useState(false);
 
   const hasSelection = selectedIds.length > 0;
   const isAllSelected = rows.length > 0 && selectedIds.length === rows.length;
@@ -297,6 +300,27 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
     }
     };
 
+  // Delete the directories 整理目录 leaves behind. Deliberately a separate
+  // button from tidy rather than a step inside it: tidy moves files and the
+  // user may want to check the result before anything is deleted, and a tidy
+  // that silently removed directories would be doing two destructive things
+  // behind one confirmation.
+  const handlePruneEmpty = async () => {
+    setPruning(true);
+    try {
+      const res = await pruneEmptyFolders();
+      if (res?.result) {
+        useNoticeStore.getState().push('已提交空目录清理任务，结果见操作审计', 'info');
+      } else {
+        useNoticeStore.getState().push('空目录清理提交失败', 'warn');
+      }
+    } catch {
+      useNoticeStore.getState().push('空目录清理提交失败', 'error');
+    } finally {
+      setPruning(false);
+    }
+  };
+
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-border bg-surface-2/60 shrink-0">
       {/* Left Operations: Add, Batch Scrape, Parse, Tidy */}
@@ -474,6 +498,19 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         >
           <FolderTree className="w-3.5 h-3.5 text-muted-foreground" />
           <span>整理目录</span>
+        </Button>
+
+        {/* Prune Empty Folders */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handlePruneEmpty}
+          disabled={pruning}
+          className="h-8 gap-1 text-xs"
+          title="删除库内空目录（只删真正空的目录；残留封面或 .lrc 的目录会保留）"
+        >
+          <FolderX className="w-3.5 h-3.5 text-muted-foreground" />
+          <span>{pruning ? '提交中…' : '清理空目录'}</span>
         </Button>
 
         <Separator orientation="vertical" className="mx-0.5 h-4" />

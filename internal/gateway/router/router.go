@@ -135,6 +135,9 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// HTTP — a complete double failure (REVIEW.md P2-4). POST for the
 		// same reason as the routes above.
 		authed.POST("/update_scan_folder/", handler.UpdateScanFolder)
+		// 空目录清理: what TidyFolder leaves behind. POST for the same
+		// reason as its neighbours — it mutates the filesystem.
+		authed.POST("/prune_empty_folders/", handler.PruneEmptyFolders)
 		// Task record list
 		authed.GET("/record/", handler.ListTaskRecords)
 		// Operation history audit log endpoints

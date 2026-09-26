@@ -127,6 +127,25 @@ func BatchAutoUpdateID3(c *gin.Context) {
 	})
 }
 
+// PruneEmptyFolders handles POST /api/prune_empty_folders/ — enqueue a task
+// that deletes directories left empty by a tidy, a rename or a delete.
+//
+// Body: { sub_paths?: [[parent_uid, path], ...] } — omit for the whole
+// library, which is what the UI sends. Kept as a task rather than done
+// inline because it is filesystem mutation over an unbounded tree, and every
+// other mutation in this codebase goes through asynq for the same reason.
+func PruneEmptyFolders(c *gin.Context) {
+	var req struct {
+		SubPaths [][2]string `json:"sub_paths"`
+	}
+	// A body is optional here: an empty object and no body at all both mean
+	// "the whole library", so a bind failure is not worth rejecting.
+	_ = c.ShouldBindJSON(&req)
+	enqueueTypedTask(c, tasks.TypePruneEmptyFolders, &tasks.PruneEmptyFoldersPayload{
+		SubPaths: req.SubPaths,
+	})
+}
+
 // UpdateScanFolder handles POST /api/update_scan_folder/ — enqueue the
 // update scan task (incremental vs full).
 func UpdateScanFolder(c *gin.Context) {

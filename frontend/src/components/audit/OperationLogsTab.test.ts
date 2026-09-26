@@ -9,6 +9,7 @@ describe('OperationLogsTab configs', () => {
       'auto_scrape',
       'filename_parse',
       'tidy_folder',
+      'prune_empty_folders',
       'download',
       'upload_cover',
     ];
