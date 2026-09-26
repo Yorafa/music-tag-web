@@ -52,6 +52,7 @@ import {
   RENAME_PRESETS,
   TRY_EXAMPLE,
   buildTemplate,
+  canRequestPreview,
   describeTemplate,
   fieldsFromTemplate,
   hasWorkToDo,
@@ -109,7 +110,7 @@ export function RenameFromTagsDialog({
       setPlannedTemplate('');
       return;
     }
-    if (selectedPaths.length === 0) return;
+    if (!canRequestPreview(template, problem, selectedPaths.length)) return;
     let cancelled = false;
     (async () => {
       setLoading('preview');
@@ -144,6 +145,14 @@ export function RenameFromTagsDialog({
     // button goes dead until they re-preview, which is the point.
     setPlannedTemplate('');
     setPlan([]);
+  };
+
+  /** Choosing a rule is a discrete, deliberate act — unlike typing — so
+   *  it previews on the spot. Otherwise the operator picks the obvious
+   *  preset and then has to find a second button to see what it did. */
+  const chooseRule = (t: string) => {
+    setTemplateAndPlan(t);
+    if (t.trim() !== '') setPreviewNonce((n) => n + 1);
   };
 
   const handleApply = async () => {
@@ -208,7 +217,7 @@ export function RenameFromTagsDialog({
                     key={f}
                     type="button"
                     onClick={() =>
-                      setTemplateAndPlan(
+                      chooseRule(
                         buildTemplate(
                           on ? chosen.filter((x) => x !== f) : [...chosen, f],
                         ),
@@ -244,7 +253,7 @@ export function RenameFromTagsDialog({
                   key={p.id}
                   type="button"
                   title={p.hint}
-                  onClick={() => setTemplateAndPlan(buildTemplate(p.fields))}
+                  onClick={() => chooseRule(buildTemplate(p.fields))}
                   className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent"
                   data-testid={`rename-preset-${p.id}`}
                 >
@@ -269,7 +278,7 @@ export function RenameFromTagsDialog({
               size="sm"
               className="shrink-0 h-8"
               onClick={() => setPreviewNonce((n) => n + 1)}
-              disabled={loading !== null || selectedPaths.length === 0 || problem !== null}
+              disabled={loading !== null || !canRequestPreview(template, problem, selectedPaths.length)}
               data-testid="rename-repreview"
             >
               重新预览
@@ -314,7 +323,11 @@ export function RenameFromTagsDialog({
               ? '模板已改，点「重新预览」查看新的方案'
               : selectedPaths.length === 0
                 ? '请至少选择一个文件'
-                : ''}
+                : template.trim() === ''
+                  ? '先选一条规则（点上面的预设，或点字段自己拼）'
+                  : problem !== null
+                    ? '模板有问题，改好后再预览'
+                    : ''}
           </span>
           <Button
             onClick={handleApply}

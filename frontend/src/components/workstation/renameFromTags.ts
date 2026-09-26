@@ -261,3 +261,26 @@ export function rowReason(r: RenamePlanRow): string {
   if (r.status === 'ok') return '';
   return r.detail || r.status;
 }
+
+/** Whether a preview request is worth sending.
+ *
+ *  Exists because an empty template and a default rule are the same
+ *  thing in 解析文件名 and not the same thing here: there, empty means
+ *  "split on separators", which is a real rule the server accepts; here,
+ *  empty means "no rule", and `template` carries `binding:"required"` so
+ *  the server answers 400 with a raw Go validation dump. The dialog used
+ *  to open by firing exactly that request — a request that could only
+ *  fail, toasted at the user before they had typed anything.
+ *
+ *  The effect and the 重新预览 button both ask this, so "the button is
+ *  enabled" and "a request would be sent" cannot drift apart into a
+ *  button that does nothing. */
+export function canRequestPreview(
+  template: string,
+  problem: string | null,
+  pathCount: number,
+): boolean {
+  if (pathCount === 0) return false;
+  if (template.trim() === '') return false;
+  return problem === null;
+}

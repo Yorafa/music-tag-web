@@ -5,6 +5,7 @@ import {
   RENAME_PRESETS,
   TRY_EXAMPLE,
   buildTemplate,
+  canRequestPreview,
   describeTemplate,
   fieldsFromTemplate,
   hasWorkToDo,
@@ -293,5 +294,40 @@ describe('RENAME_PRESETS', () => {
     // 解析文件名 splits on the first separator into artist + title, so
     // this preset must round-trip it or the two dialogs contradict.
     expect(RENAME_PRESETS[0].fields).toEqual(['artist', 'title']);
+  });
+});
+
+describe('canRequestPreview', () => {
+  // The bug: the dialog opened by POSTing `template: ""`, which the
+  // server rejects with a raw Go validation dump (`renameRequest.Template
+  // Error:Field validation for 'Template' failed on the 'required' tag`).
+  // An empty template is NOT a default rule here the way it is in
+  // 解析文件名 — it means "no rule", and nothing is worth previewing.
+
+  it('refuses an empty template', () => {
+    expect(canRequestPreview('', null, 5)).toBe(false);
+  });
+
+  it('refuses a whitespace-only template', () => {
+    expect(canRequestPreview('   ', null, 5)).toBe(false);
+  });
+
+  it('refuses when nothing is selected', () => {
+    expect(canRequestPreview('${artist} - ${title}', null, 0)).toBe(false);
+  });
+
+  it('refuses a template the checker already rejected', () => {
+    expect(canRequestPreview('${nope}', '未知字段 nope', 5)).toBe(false);
+  });
+
+  it('allows a real template over a real selection', () => {
+    expect(canRequestPreview('${artist} - ${title}', null, 5)).toBe(true);
+  });
+
+  it('agrees with templateProblem on every preset', () => {
+    for (const p of RENAME_PRESETS) {
+      const t = buildTemplate(p.fields);
+      expect(canRequestPreview(t, templateProblem(t), 3), p.id).toBe(true);
+    }
   });
 });
