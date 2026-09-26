@@ -21,340 +21,90 @@
 
 支持 [FLAC / APE / WAV / AIFF / WV / TTA / MP3 / M4A / OGG / MPC / OPUS / WMA / DSF / MP4] 全部主流有损/无损格式；**所有音乐文件本地处理，不上传第三方**；适配群晖、威联通、unRAID、Linux 小主机、amd64 / arm64 架构。
 
-后端 HTTP gateway 与后台 worker 拆为两个独立容器；7 个音乐源（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）**每个都是独立 gRPC 微服务进程**，独立部署、独立失败隔离。Tag I/O 走原生 Go 库（`bogem/id3v2` + `dhowden/tag`），无 FFI / 无 virtualenv / 无外部 binary 调用链。前端是 React SPA，状态走客户端 Zustand + `localStorage` 持久化。整套镜像约 560 MB（其中 fpcalc 的 88 MB ffmpeg 库由三个镜像共用，只存一份）。
+后端 HTTP gateway 与后台 worker 拆为两个独立容器；7 个音乐源（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）**每个都是独立 gRPC 微服务进程**，独立部署、独立失败隔离。Tag I/O 走原生 Go 库（`bogem/id3v2` + `dhowden/tag`），无 FFI / 无 virtualenv / 无外部 binary 调用链。前端是 React SPA，状态走客户端 Zustand + `localStorage` 持久化。整套镜像约 560 MB。
 
----
-
-## 当前架构
+## 架构速览
 
 | 层 | 实现 |
 |---|---|
-| HTTP 服务 | Go 1.25 + gin (gateway：API + React SPA 静态 + `/media/*` Range 流) |
-| 异步任务 | asynq + Redis (worker) |
-| 音乐源 | **gRPC 微服务**：7 个元数据源（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）+ 1 个下载源（youtube）— 各自独立进程 |
+| HTTP 服务 | Go 1.25 + gin（gateway：API + React SPA 静态 + `/media/*` Range 流） |
+| 异步任务 | asynq + Redis（worker） |
+| 音乐源 | **gRPC 微服务**：7 个元数据源 + 1 个下载源（youtube）——各自独立进程 |
 | Tag I/O | `bogem/id3v2` + `dhowden/tag`（纯 Go 库，无 Python FFI） |
 | 前端 | React 19 + Vite 7 + TypeScript + Tailwind 4 + shadcn/ui + Zustand |
 | 鉴权 | JWT in-memory + bcrypt；fail-closed 默认值检测 |
-| 加密 | gRPC TLS 可选（env `GRPC_USE_TLS=1` + 可选 `GRPC_TLS_CA_FILE`） |
-| 部署 | 单条 `docker compose up -d --build` 拉起 gateway + worker + 8 gRPC plugin + redis，共 11 个容器（nginx 已合并进 gateway，不再有独立服务；React SPA 已烘进 gateway 镜像，不需要 host 侧先 build）。另有 `fpcalc-base` 是 `scale: 0` 的构建用服务：镜像会构建，但不创建容器 |
-| Docker image | gateway 131 MB、worker 126 MB、6 个按曲名搜索的插件各 21.5 MB、acoustid 插件 115 MB、youtube 插件 199 MB（yt-dlp + ffmpeg）。gateway / worker / acoustid / youtube 四个镜像共用一个 `fpcalc-base` 基础镜像（102 MB，其中 88 MB 是 chromaprint 拉进来的 ffmpeg 解码库），那 88 MB 在磁盘上只存一份。youtube 比其它三个大的那 ~30 MB 并不是 ffmpeg 程序（只有 294 KB），而是 `apk add ffmpeg` 额外拉进来的 42 个包：`libavfilter`、`libavformat`、`libpostproc`、`libswscale` / `libswresample` / `libavdevice`，以及一整条视频/滤镜/硬件加速依赖（sdl2、vulkan-loader、libplacebo、shaderc、spirv-tools、glslang、harfbuzz、fontconfig、vidstab、alsa-lib、libpulse）。yt-dlp 的 `--extract-audio` 只用到其中的音频解复用 + 重编码部分，video 侧的库用不上，但 Alpine 没有拆得更细的 ffmpeg 包 |
+| 部署 | 单条 `docker compose up -d --build` 拉起 gateway + worker + 8 gRPC plugin + redis，共 11 个容器 |
 
-完整 operator 视角的安全默认值见 [`SECURITY.md`](SECURITY.md)；plugable plugin 设计草图见 [`docs/plugable-plugins.md`](docs/plugable-plugins.md)。
+镜像体积为什么是 560 MB（88 MB ffmpeg 库如何在四个镜像间共用一次）、容器拓扑、插件进程模型 → **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**。
 
----
+## 核心功能
 
-## 🎉 核心功能 Feature（self-hosted · 浏览器管理本地 NAS 曲库）
+> 标记：`✅` 已实现 · `🚧` 部分实现（已知 gap）· `❌` 暂未实现。
+> **完整 status 表、每个 feature 的 `path` 引用与取舍理由见 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md)**——那是单一来源，本文只是速览。
 
-> 标记：`✅` 已实现 · `🚧` 部分实现（已知 gap）· `❌` 暂未实现（在当前 roadmap 之外）。完整 status 表与 `path` 引用见 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md)。
+| 领域 | 状态 | 一句话 |
+|---|---|---|
+| 标签编辑 | ✅ | 全格式 ID3 / Vorbis / APE 读写；批量 + 单条实时编辑；歌词与封面 sidecar 自动落盘 |
+| 列编辑（per-row inline） | 🚧 | 只支持 selection + apply，单行 live-edit UI 未接线 |
+| 元数据刮削 | ✅ | 7 个源 fan-out 聚合 + 去重 + 按匹配度排序；搜索源可动态开关；per-source YAML override 热重载 |
+| 候选可信度 | ✅ | 声纹置信度标「声纹匹配 xx%」；纯文本来源只陈述事实（标题完全/部分匹配），没有分数就写「未按音频校验」——**不编数字** |
+| 曲库查重 | ✅ | 只读跑四层漏斗（文件名 / SHA-256 / 声纹 / 元数据），标「重复 / 疑似 / 唯一」；只有内容级证据才算重复 |
+| 一键删除重复文件 | ✅ | 仅内容级重复开放，互相指认时两边都不删；删除是移入 `DATA_DIR/.trash/<时间戳>/`，不是真删 |
+| 歌词 | ✅ | 多源拉取，写回 lyrics tag + 同名 `.lrc` sidecar；双语歌词 ❌（不引入第三方翻译 API） |
+| 封面 | ✅ | 远端拉取（带 SSRF 防护）+ 自定义上传；批量打包 zip 🚧 |
+| 曲库 / 文件管理 | ✅ | 递归扫描、多维度排序状态已在 store（UI 未接线 🚧）、按艺术家/专辑分组 |
+| 声纹索引与缓存 | ✅ | 索引自维护（有进展就排下一次，30s + `Unique` 去重）；子指纹带 duration 存进索引，重复查重零解码（400ms → 24ms），失效判据是 size **和** mtime |
+| 「清理残留」 | ✅ | 逐行问内核文件在不在，只删确定的 ENOENT；刻意不做 `WHERE path NOT IN` 集合差集 |
+| 文件名解析 | ✅ | preview 返回 token + 逐行 `{artist,title,status}`（10 分钟 TTL），apply 走 asynq 批量写；Go + TS 双引擎在 200+ NFC fixture 上 deep-equal |
+| 下载 / 抓取 | ✅ | YouTube / B 站走 yt-dlp，参数 sanitize 防 `--exec=` 注入；5 个音乐源 download plugin |
+| 操作日志 | ✅ | GORM `OperationLog` 持久化 + 侧边栏「操作审计」面板（多维过滤 / 模糊检索 / 变动详情 / 清空） |
+| 文本清洗 / 编码 | ❌ | 无 bulk text-replace endpoint；未引入 opencc / zhconv（理由见 `docs/plans/Unfinished-Features.md`） |
+| 整轨切割 / ffmpeg 转换 | ❌ | 无 CUE 解析 / 切轨代码；缺的是转换 task 与 UI，不是 binary（youtube 镜像已装 ffmpeg） |
+| 播放统计 | ❌ | DB `AccessedDate` 列已 reserved 但未消费；无 Subsonic `/rest/` 上报 |
+| 手机 UI | 🚧 | 响应式布局已做，设备专项适配未完成 |
 
-### 标签编辑 ✅
-- 全格式音频 ID3 / Vorbis / APE tag 读写 ✅
-- 批量编辑（多文件统一字段）+ 单条编辑（实时表单） ✅
-- 歌词 + 封面 sidecar 自动落盘 ✅
-- 列编辑（per-row inline） 🚧 — 只支持 selection+apply，单行 live-edit UI 还在做
+## 快速开始
 
-### 元数据刮削与查找 ✅
-- **7 个音乐源** 自动 fan-out 聚合：网易云 / 酷狗 / 酷我 / 咪咕 / QQ 音乐 / MusicBrainz / AcoustID 指纹 ✅
-- 搜索结果去重 + 按匹配度排序 ✅
-- **候选可信度分开陈述** ✅ — 声纹置信度（AcoustID 的 0..1，来自 API）标为「声纹匹配 xx%」；只有文本来源时改为陈述事实（标题完全匹配 / 部分匹配），没有分数就写「未按音频校验」。原先这里只有一个 `匹配度: 40%`：`scoreMatch` 的三维（标题/歌手/专辑各 0/1/2）之和被前端 `×20` 当成百分比，而刮削时歌手与专辑通常是空的（用户手里只有一个文件名），三项里恒只有标题一项有值，于是**每个候选都是 40%**，连 `(Live)`、`(Remix)` 版本和正片都分不出来；后端没打分的候选则落到一个写死的 **85%**。两个都是编出来的数字，比说「不知道」更糟
-- **曲库查重** ✅ — 智能刮削页选中若干行 → 「查重」按钮，只读跑一遍四层漏斗（文件名 / SHA-256 / 声纹 / 元数据），行上显示「重复 / 疑似 / 唯一」徽章，侧栏可「只看重复」。只有内容级证据（SHA-256 / 声纹）才算重复；同名或元数据相似只标「疑似」，不参与删除。后端 `POST /api/check_duplicate/`，与写入路径共用同一个 checker，判定不会自相矛盾
-- **一键删除重复文件** ✅ — 仅对内容级重复开放，且两侧互相指认时（都在同一批次里被查过）两边都不删：那种情况下「哪份是原件」无法判定，与其猜错不如让用户自己看。删除是**移入 `DATA_DIR/.trash/<时间戳>/`**（保留相对 MUSIC_DIR 的路径），不是真删；确认框逐条列出「删哪个 / 留哪个」并说明可恢复。拒绝目录、符号链接与越界路径，删除后同步清掉 `music_folder` 索引行并记一条 `delete_files` 审计
-- AcoustID：没有元数据 / 文件名混乱的歌曲自动指纹识别匹配 ✅
-- 搜索源动态启用 / 关闭（`localStorage` per-user 持久化，设置页中切换） ✅
-- per-source YAML config override (C.4 Stage B) ✅ — 编辑 `data/sources/<name>.yaml` 改 `api_base` + `secrets.<plugin>Secret`，gateway 启动期加载 + `POST /api/sources/refresh/` 热重载（不需重启）；设置页 “Sources” tab (`settings/SourcesTabContent.tsx`) 查看当前生效 + 重载按钮，secret 不暴露明文（仅 `hasSecret` 布尔）。Plugin server.go 各自 `SetSecret` / `SetAPIBase` method（const→var demote）。
-
-### 歌词 ✅
-- 多源歌词拉取（网易云 / 酷我 / 咪咕 / QQ） ✅
-- 写回 lyrics tag + 同名 `.lrc` sidecar ✅
-- 内嵌双语歌词（中文-英文混排 + 翻译） ❌ — 当前不引入第三方翻译 API（成本 + 隐私）
-
-### 封面 ✅
-- 远端封面拉取（带 SSRF 防护） ✅
-- 上传自定义封面 ✅
-- 批量导出/打包封面 zip 🚧 — 单条上传 ✅，批量 zip 工作流未实现
-
-### 曲库 / 文件管理 ✅
-- 目录递归扫描（symlink-aware） ✅
-- 多维度排序：文件名 / 大小 / 修改时间 🚧 — 排序**状态**已在 `useBrowserStore` 里（`sortField` / `setSort` / `setSortDir`，含旧 localStorage key 迁移），但还没有任何组件订阅它，排序 UI 未接线
-- 按艺术家 / 专辑 分组 UI ✅ — `useWorklistStore.grouping` (持久化 `worklist.grouping.v1` localStorage) + chip row `[无] [专辑] [歌手]` (`WorkstationToolbar.tsx`) + 分组行渲染 (`WorkstationTable.tsx`) + 跨 group 多选 + collapse state session-only
-- 声纹索引自维护 ✅ — `index:fp_duration` 跑完若**有进展**就排下一次（延迟 30s + `Unique` 去重），索引会追上曲库然后自己停下。原本只在 worker 启动时跑一次，新下载的文件永远拿不到 duration，于是查重静默降级成按大小选候选 —— 而按大小恰恰命中不了跨编码。新增/扫描入库的文件会自动进索引，不用手工触发
-- 声纹缓存 ✅ — 一次 `fpcalc` 解码 120 秒音频要 ~0.4s，而一次查重要解码**被测文件 + 时长窗口内每个候选**。子指纹连同 `duration` 一起存进索引，重复查重零解码（实测 400ms → 24ms）。失效判据是 size **和** mtime：原地转码路径和行都不变，没有失效判据的缓存不是变陈旧，而是**永远报旧歌的重复**
-- 「清理残留」清索引垃圾 ✅ — 文件从外部消失（文件管理器、宿主机改挂载卷、rsync）时扫描器和 tidy 都不会删它的行，于是残留行累积，**每次查重都要先 stat 再逐个驳回**（曲库页面读的是盘不是表，所以用户看不见它们）。清理时**逐行问内核文件在不在**，只有确定的 ENOENT 才删；权限/IO 错误一律保留。**刻意不做集合差集**（`WHERE path NOT IN`）—— 扫描器明文禁止过那条路：子扫描失败会把整个没访问到的库一起删掉
-- 文件名解析前后端 round-trip ✅ — Server preview `POST /api/tag/preview_parse_filenames/` 返回 token + 每行 `{artist,title,status}` (10 分钟 TTL cache)；modal 可覆盖；apply `POST /api/tag/apply_parsed_filenames/` 走 asynq `TypeApplyParsedFilenames` worker 批量写 tag。双向 contract test: Go + TS 双引擎在 200+ shared NFC fixture 上 deep-equal (SHA-256 fixture 一致校验)
-- 整轨 APE / FLAC + CUE 自动切割分轨 ❌ — 仓库内没有 CUE 解析 / 切轨代码（镜像也未装 `shntool` / `cuebreakpoints`）
-- ffmpeg 任意格式批量转换 ❌ — youtube 插件镜像**已装** ffmpeg（yt-dlp `--extract-audio` 转码需要，worker 委托该插件执行下载），缺的是转换 task 与 UI，不是 binary
-
-### 文本清洗 / 编码 ❌
-- 批量 tag 文本替换（脏标签、乱码清理） ❌ — 前端没有这个模态框，后端也没有 bulk text-replace endpoint（`/api/batch_update_id3/` 是按字段整体覆盖，不做文本变换）
-- 繁简 / 简繁 metadata 转换（zhconv） ❌ — 未引入 opencc / zhconv / HanziConvert。原先记在 `internal/tasks/matchscore.go` 的那条 defer TODO 已随该文件一同消失，所以现在代码里**没有任何**显式 defer 标记；取舍理由（Go port 维护成本、opencc-wasm bundle ≥2MB）保留在 `docs/plans/Unfinished-Features.md`
-
-### 下载 / 抓取 ✅
-- YouTube / B 站等下载走 yt-dlp ✅
-- yt-dlp 参数 sanitize（防止 `--exec=` 注入） ✅
-- 5 个音乐源 download plugin：网易云 / 酷狗 / 酷我 / 咪咕 / QQ ✅
-
-### UI / 设备 🚧
-- 全响应式手机 UI（Tailwind sm/md/lg 触发） ✅
-
-### 播放统计 ❌
-- 播放数据柱形图 / 折线图 ❌ — DB `AccessedDate` 列已 reserved 但未消费；前端无 chart 组件
-- 外部播放端统计上报（Subsonic-compatible `/rest/` endpoints） ❌
-
-### 操作日志 ✅
-- 完整 changelog（每次编辑可追溯） ✅ — GORM `OperationLog` 模型与持久化 + 自动记录单曲/批量标签编辑、自动刮削、文件名解析应用、目录整理、音频下载与封面上传 + 侧边栏「操作审计」管理面板（支持操作类型/状态多维过滤、模糊检索、查看变动详情与一键清空日志）
-
-➡️ 完整 status 表 + 每个 feature 的 `path` 引用见 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md)。
-
----
-
-## 💯 部署指南（docker compose · 单条命令拉起全栈）
-
-> ⚠️ **新增懒人模式 (v2.1)**：谁不想编辑 `.env`、不想自己生成 JWT，谁可以只看下面 “🎯 一键部署 (懒人模式)” 一节；全新部署 + 注册 admin 只需 5 条 bash 命令。需要明确控制 secrets / CORS / gRPC TLS / mysql 等高级选项才看下面 Pre-flight。
-
-> **新部署**直接走下方 Clone → env → compose 三步。从其他来源（V1 老镜像 / 旧 fork）升级请先参考下方的 `Pre-flight · boilerplate 检查` 段（包含 `.env` / `data` / `music` 路径迁移的 `mv -n` 步骤）。
->
-> ℹ️ **不需要在 host 上先构建前端。** React SPA 由 `Dockerfile.gateway` 的 `frontend` stage 在镜像内构建（`npm run build` → 产物 `COPY` 进 `/app/static/dist`），compose 里**故意没有** `./static` 卷挂载 —— 挂上去反而会用 host 的空目录遮住镜像里那份。所以 `docker compose up -d --build` 一步就够，host 上残留的 `./static/dist` 不参与运行。**修改前端后**重跑 `docker compose up -d --build gateway`（或 `docker compose build gateway`）即可；只有在**不用 Docker** 直接跑二进制时，才需要手动 `npm run build` 并把 `STATIC_DIR` 指向仓库根 `./static`。
-
-### 🎯 一键部署（懒人模式 · 适合评估 / 家庭自用）
-
-> 适合第一次部署 / NAS 评测 / “我不想手生 config” 场景。仅 5 条 bash，所有 secret 在 gateway 首次启动时由 crypto/rand 生成、bcrypt-hash 后写到 `./data/.bootstrap-creds`（host 路径），重启后保持。
+**不需要在 host 上构建前端**——React SPA 在 `Dockerfile.gateway` 的 frontend stage 里构建好并烘进镜像，compose 里故意没有 `./static` 挂载。
 
 ```bash
-# ① clone & cd（替换为你的 fork URL）
-git clone https://github.com/[your-org]/go-music-tag-web.git
-cd go-music-tag-web
-
-# ②首次运行必要：创建 ./music ./data
-#   前端不需要在 host 上构建 —— 镜像内已经带上了（见上方说明）
+git clone https://github.com/Yorafa/music-tag-web.git
+cd music-tag-web
 mkdir -p ./music ./data
-
-# ③拉起全栈（自动生成 admin 账号、JWT secret、webhook token）
 docker compose up -d --build
 
-# ④等约 30 s 后查看首启口令
+# 等约 30 s，取首启口令（明文密码只出现这一次）
 docker compose logs gateway | grep -A 6 FIRST-BOOT
-#   admin user:                  admin
-#   admin password (PLAINTEXT):  ← 记录这一行 ←
-#   JWT_SECRET (base64, 48B):    ...
-#   WEBHOOK_INTERNAL_TOKEN:      ...
-#   persisted to:                /app/data/.bootstrap-creds
-
-# ⑤打开浏览器
-xdg-open http://localhost:9150/admin     # macOS 用 open；Windows 用 start
 ```
 
-**首次启动的工作流程：**
-- `docker-compose.yml` 把 `JWT_SECRET` / `ADMIN_USERS` / `WEBHOOK_INTERNAL_TOKEN` 默认设成空 → gateway 看到空 → `ensureBootstrap()` 读取 `/app/data/.bootstrap-creds`，文件不存在则用 crypto/rand 生成三个 secret + bcrypt 一个 admin 密码，FATAL 返回如未写出来。
-- 明文 admin 密码只出现一次：位于 gateway startup log 的 `FIRST-BOOT auto-bootstrap` banner；之后仅 `.bootstrap-creds` 里的 bcrypt hash 用于身份验证。
-- 转发丢给同一个 `./music` 和 `./data` bind mount，静默重启后密钥保持。
+打开 `http://localhost:9150/admin`。所有 secret 由 gateway 首启时用 crypto/rand 生成并写进 `./data/.bootstrap-creds`。
 
-**退出懒人模式 / 显式控制 secrets：** cp `.env.example .env` 后填入明确值（可参考下面 Pre-flight），gateway 检测到任何 non-empty / non-sentinel 的 env 后跳过 auto-bootstrap 对应项；其余仍是 auto-filling。
+容器以 uid/gid **10001** 非 root 运行，bind mount 的属主来自宿主机，所以首次部署要 `sudo chown -R 10001:10001 ./music ./data`。
 
-### Pre-flight · boilerplate 检查
+要显式控制 secrets / CORS / gRPC TLS、从旧版本升级、或者遇到 `volume source not found` / `SPA not built` / AcoustID 无结果 → **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)**。
 
-进入 deploy 之前**必须**读完 `.env.example` 顶部的 `⛔ PRE-FLIGHT CHECKLIST ⛔`。三项 `__REPLACE_ME__` 占位符（`JWT_SECRET`、`ADMIN_USERS`、`WEBHOOK_INTERNAL_TOKEN`）未替换会被 gateway `config.Load()` 在启动时 `log.Fatalf` 拒掉（除非显式设置 `ALLOW_INSECURE_DEFAULTS=1`，**仅 dev 可用**）。`docker-compose.yml`、`.env.example`、所有 Dockerfile 在仓库根，不需要再 cd 进子目录。
+## 安全默认值（摘要）
 
-> ⚠️ **从更早版本升级再看本节**（全新部署跳过）。新 compose 默认路径改到仓库根，裸 `git pull && docker compose up -d` 会让 sqlite 重建、`./music` / `./data` 目录不存在而启动失败。这 4 行 `mv -n` 在任何时机都会成功——`{.env,data,music}` 即使 git 已不再跟踪，仍写在 NAS 上。
->
-> 若你的曲库实际并不在仓库根 `./music` 下（例如 Synology `/volume1/music`、SMB `/mnt/nas/music`、NFS 等外部 mount，或你此前的旧 fork 用过宿主机 bind），**不要**靠 `mv` 把海量文件搬到 `./music`；直接在仓库根 `ln -s /volume1/music ./music` 软链即可，`docker compose up` 仍能用 over the symlink。
->
-> 下面 bash 块用 `mv -n`（POSIX no-clobber）：拒绝覆盖已有 backup；re-run 时两次 mv 都 no-op，状态可观察而不是静默覆盖。
-> ```bash
-> # 旧 fork 里如果你之前手动迁出过 `.env` / `data` / `music`，现在这些文件已经直接放在仓库根下了。
-> # 升级只需：把任何之前手动建过的 `.env.bak` 拷回根 `.env`。全新部署直接 `cp .env.example .env` 即可。
-> [ -f ./.env.bak ] && cp ./.env.bak ./.env  # 仅当你此前手动建过 `.env.bak` 时
-> ```
-> 之后 `docker compose up -d --build`。仓库根 `./music` / `./data` 即被 bind 进容器（不再走 `${MUSIC_DIR}` / `${DATA_DIR}` env 值插值），搬完后语义不变。
+6 项 hardening 全部落地且各有测试兜底：SSRF 拒 loopback / 私有网段、路径遍历 containment、yt-dlp 参数 sanitize 三层防线、JWT / admin 默认值 fail-closed、CORS 白名单无反射、容器非 root。
 
-### 1. 克隆 + env
-
-```bash
-git clone https://github.com/[your-org]/go-music-tag-web.git   # 替换为你的新 repo URL
-cd go-music-tag-web
-cp .env.example .env           # 与 docker-compose.yml 同目录，Compose 才能读到
-# 编辑 .env，填入必填项
-```
-
-`JWT_SECRET` 和 `ADMIN_USERS` 是必填（不设 / 占位 → gateway 启动 Fail-closed 或登录拒绝）；强烈建议同时配置 `CORS_ALLOWED_ORIGINS`、`GRPC_USE_TLS`、`GATEWAY_PORT`。`MUSIC_DIR` / `DATA_DIR` 不再从 `.env` 注入（已硬编码到 `docker-compose.yml` 的 `./music` / `./data` host bind mount），若需指向外部 mount 直接 `ln -s` 进仓库根即可。模板里每项都有详细注释。
-
-### 2. Volume pre-flight + 构建 + 启动全栈
-
-`docker-compose.yml` 的默认值 `./music`、`./data` 都是**相对 compose 文件路径**，首次运行必须存在；否则 `docker compose up` 会报 `volume source not found`。NAS 用户使用 SMB / NFS 挂载，先在宿主机准备好路径。
-
-**React SPA 不需要手动构建。** 镜像内已包含前端：`Dockerfile.gateway` 的 `frontend` stage 会跑 `npm run build` 并把产物 `COPY` 进 `/app/static/dist`。因此 compose 里**没有** `./static` 挂载 —— 手动加一个反而会用空目录遮蔽镜像内的 bundle，让 `/` 返回 "SPA not built"。仓库根的 `./static/` 只是本地 `go run` gateway 时的开发目录（git 不跟踪）。
-
-```bash
-mkdir -p ./music ./data         # 首次需要（相对仓库根路径）
-# 容器以 uid/gid 10001 非 root 运行（REVIEW.md P3-2）；bind mount 的属主
-# 来自宿主机，镜像里改不了，所以这两个目录必须交给 10001。
-# 从旧版本（root 运行）升级时这一步是必须的，否则 gateway 会 FATAL。
-sudo chown -R 10001:10001 ./music ./data
-docker compose up -d --build    # 后续只要不加 plugin / 不改 .env，重启即可跳过 --build
-```
-
-> 不想改宿主机目录属主？也可以在 compose 里给 `gateway` / `worker` 加 `user: "${UID}:${GID}"`（用你自己在宿主机上的 uid），但那样容器内就是你的 uid 而不是 10001 了。
-> `audio-cache` 是 named volume，首次创建时 Docker 会从镜像里的 `/tmp/audio_cache` 目录（含属主）拷贝内容，不需要任何额外操作。
-
-不用 Docker 时才需要手动构建前端：`cd frontend && npm install && npm run build`，产物落盘到仓库根 `./static/dist/`，再把 `STATIC_DIR` 指向仓库根 `./static`。
-
-首次启动会自动构建：gateway（含 API + 静态 SPA + `/media/*` 音乐流）+ worker + 8 个 gRPC 插件 + redis，共 11 个容器。插件里 7 个是**音乐元数据源**（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid），第 8 个是 **youtube 下载插件**（yt-dlp，走 `DownloadSource` 而非 tag source，所以不在上面那个列表里）。**原 nginx 反向代理已合并进 gateway；不再需要独立的 `nginx` 服务或 `nginx.conf`。**
-
-### 3. 浏览器访问
-
-`http://localhost:9150/admin`（gateway 直接对外服务 `${GATEWAY_PORT:-9150}`，容器内监听 8001；同时还提供 `/api/*` 接口、`/media/*` 音乐流式、以及 `/` 的 React SPA 静态产物）。
-
-> 默认账号由 `ADMIN_USERS` 决定。**懒人模式下**首次启劄后 admin 账号是 auto-bootstrap 生成的强随机口令（见 `docker compose logs gateway`）；**手动部署**下，未指定 `ADMIN_USERS` 会导致 login 拒绝 (`ALLOW_INSECURE_DEFAULTS=1` 仅作为 dev 模式下 `admin/admin` 退路).
-
----
-
-## 🔒 安全默认值（v2 · 摘要）
-
-本项目在 P1 完成后做过一轮集中 hardening，全部 6 项修复均已落地、对应测试就位。完整 operator 视角见 [`SECURITY.md`](SECURITY.md)。
-
-- **CORS 白名单（无反射）**：`internal/gateway/middleware/cors.go` 读 `CORS_ALLOWED_ORIGINS`，空列表 = 拒绝全部跨域。
-- **SSRF 拒 169.254 / RFC1918**：远端封面拉取走 `internal/netguard/ssrf.go`，解析后拒绝 loopback / 私有网段 / link-local / multicast。
-- **路径遍历 `SafeJoin`**：所有用户传入路径强制 containment 在 `MUSIC_DIR` 下。
-- **yt-dlp 参数 sanitize**：`internal/ytdlp` 阻止 `--exec=` 注入，format / quality / output 走 enum；三层防线（gateway 预校验 → worker 重放校验 → youtube 插件拼 argv 前再校验）。
-- **admin / JWT 默认值 Fail-closed**：`config.Load()` 看到占位 `JWT_SECRET` 会 `log.Fatalf`；`ADMIN_USERS` 未设且无 dev flag → `loadUsers()` 返回空。
-- **gRPC TLS 可选**：插件间互联走 plaintext 或 TLS，env 控制 `GRPC_USE_TLS=1` + 可选 `GRPC_TLS_CA_FILE`。
-- **容器非 root**：gateway / worker / plugin 镜像均以 uid/gid 10001 运行（REVIEW.md P3-2），不再以 root 挂载整个曲库。升级时需 `chown -R 10001:10001 ./music ./data`。
-
-这些项的测试分别落在 `internal/utils/pathjoin_test.go`、`internal/netguard/ssrf_test.go`、`internal/ytdlp/sanitize_test.go`、`internal/gateway/middleware/cors_test.go`。
-
----
-
-## 🛠️ 本地开发测试
-
-> 面向 contributor：本地改完代码后如何快速验证、如何跑 pre-flight gate、再走 docker compose 全栈热部署。下面的命令以**仓库当前**盘上文件为准——若有标 ⚠️ 的项表示暂缺 / 行为受限。
-
-### 0. 一次性环境准备
-
-```bash
-# 本地 toolchain 验证
-node -v                                    # Node ≥ 22（与 frontend/package.json engines 一致）
-go version                                 # Go 1.25+
-docker compose version                     # compose v2
-
-# 拉依赖（前端一次性；后端用 go modules，缓存后不必重拉）
-( cd frontend && npm install )
-go mod download  # go.mod 在仓库根，不需要 cd 子目录
-```
-
-> ⚠️ 当前没有 Makefile 入口。本节直接走裸 `go` 命令，不依赖任何 build-script。
-
-### 1. 后端（Go）
-
-```bash
-# go.mod 在仓库根；不需要 cd 子目录
-# 静态检查（与 CI 等价）
-go vet ./...
-
-# 编译所有 binary：gateway + worker + 7 个 plugin
-go build ./cmd/gateway/ ./cmd/worker/
-for p in netease kugou kuwo migu qmusic musicbrainz acoustid; do
-  go build -o /tmp/music-tag-plugin-"$p" "./cmd/plugins/$p/"   # 临时放置，让 vendor 错开
-done
-
-# 单独跑某个 plugin（开发期常用，便于把 log 隔离到 host）
-NETEASE_PORT=50051 go run ./cmd/plugins/netease
-```
-
-> ⚠️ 当前仓库 `internal/**` 下没有 `_test.go` 入库。`go test ./...` 会直接报 `no test files`。质量 gate 落在 `go vet` + `go build` 上；如果要把测试补回来，可参考 [`docs/FEATURE-COVERAGE.md § 8`](docs/FEATURE-COVERAGE.md) 列出的安全项逐项拆出来写。
-
-### 2. 前端（React + Vite）
-
-```bash
-cd frontend
-
-# typecheck（不触发 vite build，最快）
-# ⚠️ 不要用 `npx tsc --noEmit`：本目录的 tsconfig.json 是 solution 配置
-#    （"files": [] + references），直接对它跑 tsc 会检查 0 个文件并静默
-#    返回 0。必须走 `tsc -b` 才会跟随 references 覆盖
-#    app / node / test 三个 project（含 *.test.ts）。
-npm run typecheck
-
-# dev server，HMR；默认 http://localhost:5173
-npm run dev
-
-# production build（内部跑 tsc -b && vite build）
-npm run build
-
-# lint
-npm run lint
-npm run lint:fix          # eslint --fix 自动修
-```
-
-### 3. 一键 pre-flight gate（与 CI 等价）
-
-```bash
-# 五道 gate，全部 exit 0 才算绿灯
-docker compose config --quiet
-go vet ./...
-go build ./cmd/gateway/ ./cmd/worker/  # go.mod 在仓库根
-( cd frontend && npm run typecheck )   # = tsc -b；别用 tsc --noEmit，见上
-( cd frontend && npm run lint --silent )
-```
-
-### 4. 全栈热部署（改完任一 service 后）
-
-```bash
-# 仅改某一 service 时，定向 rebuild（其他容器不停）
-docker compose up -d --build gateway
-docker compose up -d --build worker
-docker compose up -d --build netease      # 任意 plugin 同理
-
-# 改 Dockerfile / `.env`：全栈 rebuild
-docker compose up -d --build
-
-# 实时 log
-docker compose logs -f gateway
-docker compose logs -f worker
-docker compose logs -f netease
-```
-
-### 5. host 跑 gateway + plugin（不走容器，便于 in-process 调试）
-
-```bash
-# 终端 1：host 跑 gateway，方向 localhost 上 plugin
-GATEWAY_PORT=8001 \
-  PLUGIN_NETEASE_ADDR=localhost:50051 \
-  JWT_SECRET="$(openssl rand -base64 48)" \
-  ADMIN_USERS=test:test \
-  CORS_ALLOWED_ORIGINS=http://localhost:5173 \
-  go run ./cmd/gateway
-
-# 终端 2：host 跑 plugin
-NETEASE_PORT=50051 go run ./cmd/plugins/netease
-
-# 终端 3：curl 验证
-curl http://localhost:8001/api/sources/           # 列表里应该有 netease
-curl 'http://localhost:8001/api/search_music/?q=test'
-```
-
-### 6. 故障排查速查
-
-| 现象 | 第一步 |
-|---|---|
-| gateway `FATAL: JWT_SECRET is unset or equal to the placeholder` | 仓库根目录 `.env` 补 `JWT_SECRET=$(openssl rand -base64 48)`（如果走懒人模式变体：检查 `./data/.bootstrap-creds` 是否存在且可写） |
-| gateway `FATAL: cannot persist bootstrap creds to /app/data/.bootstrap-creds` | `./data` 不存在或不可写；`mkdir -p ./data` 并确保 host 上 777 权限 / 非 root 用户。也可以绕开：`cp .env.example .env` 然后填真值。 |
-| 看不到 `FIRST-BOOT auto-bootstrap` banner | 大约需要 25–40 s：gateway 在做 DB init、dial 所有 plugin、bbolt 加载。不要 grep `docker compose logs gateway`，改用 `docker compose logs -f gateway` 跟随。重启后该 banner 不会再出现，仅明文 admin 密码被回收（首启后清零）。|
-| `docker compose up` 报 `volume source not found` | 先 `mkdir -p ./music ./data` |
-| `npm run typecheck` 类型错 | 先看 `frontend/src/types/index.ts` 是否漏类型定义。注意这个命令必须用 `tsc -b`；`npx tsc --noEmit` 对本仓库的 solution 配置不检查任何文件，会假绿 |
-| `npm run lint` 报 `react-hooks/exhaustive-deps` 等 | `npm run lint:fix` 自动修，或手动补依赖项 |
-| gateway healthcheck 一直 unhealthy | `docker compose logs gateway` + `docker compose logs redis` 看联通 |
-| AcoustID 搜索没结果 | 先看 `docker compose logs acoustid`：fpcalc 缺失、文件打不开、API key 失效都会打日志。fpcalc 缺 → acoustid 容器需 `docker compose build acoustid`（`Dockerfile.plugin` 只为 `PLUGIN=acoustid` 装 `chromaprint`）；文件打不开 → 检查 `docker-compose.yml` 里 acoustid 的 `./music:/app/media:ro` 挂载；key 失效 → 在 `.env` 设 `ACOUSTID_API_KEY`（[acoustid.org/login](https://acoustid.org/login) 注册）。未设时用官方公共测试 key，官方声明会在数日后过期 |
-
-完整 operator 安全默认值见 [`SECURITY.md`](SECURITY.md)；功能 status 表见 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md)；架构设计与 future stages 见 [`docs/plugable-plugins.md`](docs/plugable-plugins.md)。
+完整威胁模型与 runbook → **[`SECURITY.md`](SECURITY.md)**。
 
 ---
 
 ## 📚 相关文档
 
-- [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md) — Feature status 单一来源；本 README Features list 的所有 ✅/🚧/❌ 都对应这条 matrix 的 row 编号
-- [`SECURITY.md`](SECURITY.md) — 完整运维安全默认值 / 威胁模型 / runbook
-- [`docs/plugable-plugins.md`](docs/plugable-plugins.md) — 插件架构设计草图（Stage A 已落地 / B–D 暂未排期）
-- [`frontend/README.md`](frontend/README.md) — 前端 dev 启动 / Vitest / React Compiler 配置
-- [`AGENTS.md`](AGENTS.md) — 仓库内协作工具相关说明
+| 文档 | 内容 |
+|---|---|
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | 部署：懒人模式 / 显式 `.env` / volume 与属主 / 旧版本升级 / 故障排查表 |
+| [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 本地开发：环境准备、`Makefile`、pre-flight gate（全套命令）、热部署、host 调试、开发期易踩的坑 |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 架构：分层表、容器拓扑、镜像体积与共享层、插件进程模型 |
+| [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md) | **功能覆盖矩阵（单一来源）**：每个 feature 的 status、`path` 引用、未实现项的取舍理由 |
+| [`SECURITY.md`](SECURITY.md) | 运维安全默认值 / 威胁模型 / runbook |
+| [`docs/plugable-plugins.md`](docs/plugable-plugins.md) | 插件架构设计草图（Stage A 已落地 / B–D 未排期） |
+| [`docs/plans/Unfinished-Features.md`](docs/plans/Unfinished-Features.md) | 未实现功能的取舍记录 |
+| [`frontend/README.md`](frontend/README.md) | 前端 dev 启动 / Vitest / React Compiler 配置 |
+| [`AGENTS.md`](AGENTS.md) | 仓库内协作工具相关说明（issue tracker / triage labels / domain docs） |
+| [`REVIEW.md`](REVIEW.md) | 审计报告（本地，不入 git） |
 
 ---
 
@@ -384,13 +134,13 @@ golang music library manager, self-hosted docker music tagger,
 | 音乐源 | 同进程 python module | 独立 gRPC 服务进程 |
 | Tag I/O | `mutagen` (Python 库) | `bogem/id3v2` + `dhowden/tag`（纯 Go） |
 | 前端 | Django template + Bootstrap jQuery | React 19 + Vite 7 + TypeScript + Tailwind 4 + shadcn/ui + Zustand |
-| 部署 | 单 Python 容器 (~600 MB) | 多 service compose（gateway + worker + 8 gRPC plugin + redis），总 image 约 560 MB（nginx 已合并进 gateway，v2 不再携带独立 nginx service；其中 88 MB ffmpeg 库由四个镜像共用，只存一份） |
+| 部署 | 单 Python 容器 (~600 MB) | 多 service compose（gateway + worker + 8 gRPC plugin + redis），总 image 约 560 MB |
 | 鉴权 | Django session | JWT in-memory + bcrypt |
 | 默认配置保护 | 软默认值 | Fail-closed（占位 JWT_SECRET / 默认 admin 都被拒） |
 
 **本仓库沿用 GPL V3 协议**——[`LICENSE`](LICENSE) 内容未做任何修改，上游著作权声明与许可证全文完整保留。任何对本仓库的使用、再分发、修改，都必须遵守 GPL V3 条款（即：同等开源 + 保留版权声明 + 注明修改）。
 
-本仓库的修改记录以 git commit 历史为准；上游提供的功能（`docs/FEATURE-COVERAGE.md` 中带 ✅/🚧/❌ 标记的 22 个 claim，其中 11 个已完整迁移 + 5 个部分迁移 + 6 个未迁移）保留溯源痕迹，README 内的功能列表与 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md) row 一一对应。
+本仓库的修改记录以 git commit 历史为准；上游提供的功能 claim 保留溯源痕迹，README 的功能速览表与 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md) 的 row 一一对应。
 
 **侵权投诉 / 版权诉求**：如收到版权方对歌词、封面、专辑元数据的诉求，将在 24 小时内按上游 LICENSE 与 GPL V3 条款要求清理数据。本仓库仅编辑本地已有音乐文件元数据，**不下载、不存储、不分发任何受版权保护的音频本体**。欲联系维护者请用 GitHub Issues / Pull Requests 公开流程，或邮件 [maintainer@your-domain.example]（占位，按需替换）。
 

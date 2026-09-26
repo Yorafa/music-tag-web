@@ -1,6 +1,6 @@
 # Feature Coverage Matrix（功能覆盖矩阵）
 
-> 单一真实来源：本表标注 README 中宣称的功能在代码里的实现状态（已落地 / 部分落地 / 未展开）。与 `README.md` 「核心功能 / Features」段双向耦合。
+> 单一真实来源：本表标注 README 中宣称的功能在代码里的实现状态（已落地 / 部分落地 / 未展开）。README 的「核心功能」只是一张一句话速览表，每一行都对应本表的一行；**理由、取舍、`path` 引用只写在这里**。
 >
 > 交叉引用：
 > - [`plugable-plugins.md`](plugable-plugins.md) — 设计文档。它的 Stage A / B **已 ship**（见 §2 的 `per-source config override`），Stage C（goja 沙箱 JS plugin）/ D（runtime admin UI）仍是 future pitch；本表与该文档的"aspirational"项是协调关系。
@@ -120,11 +120,11 @@
 当某个之前未实现的项被实现时：
 
 1. 把该 row 的 Status 标为 ✅，并在 Where 列补一个具体的文件 / section 引用（**不要**用行号——目录锚定经得起 commit 间的微小漂移）。
-2. 同步更新 `README.md` Features 列表（每个 bullet 配一个 emoji 标，❌/🚧 项可加一句理由）。在列表末尾让用户回流到本文档。
+2. 同步更新 `README.md` 「核心功能」速览表（每个 row 配一个 emoji 标，❌/🚧 项可加一句理由）。README 只留一句话摘要，**理由与细节写在这里**，不要搬回 README —— 那会让它重新长回几百行。
 3. 在 status 表里加一行（如果关闭了一个被跟踪的 gap），或在 § H aspirational 段扩写（如果仍然挂着）。
 
 当有意弱化或删除一个功能时：
 
 1. 把对应 row 移到"Removed"区（删除 row，加一行 `Removed YYYY-MM`）。
-2. 把 README 中的对应 bullet 删除。
+2. 把 README 速览表中的对应 row 删除。
 3. 在 CHANGELOG 风格说明里引用这次 deprecation。
