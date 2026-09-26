@@ -316,22 +316,23 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
     }
     };
 
-  // Delete the directories 整理目录 leaves behind. Deliberately a separate
-  // button from tidy rather than a step inside it: tidy moves files and the
-  // user may want to check the result before anything is deleted, and a tidy
-  // that silently removed directories would be doing two destructive things
-  // behind one confirmation.
+  // Delete the directories 整理目录 leaves behind, and drop index rows for
+  // files that are gone. Deliberately a separate button from tidy rather than
+  // a step inside it: tidy moves files and the user may want to check the
+  // result before anything is deleted, and a tidy that silently removed
+  // directories would be doing two destructive things behind one
+  // confirmation.
   const handlePruneEmpty = async () => {
     setPruning(true);
     try {
       const res = await pruneEmptyFolders();
       if (res?.result) {
-        useNoticeStore.getState().push('已提交空目录清理任务，结果见操作审计', 'info');
+        useNoticeStore.getState().push('已提交清理任务，结果见操作审计', 'info');
       } else {
-        useNoticeStore.getState().push('空目录清理提交失败', 'warn');
+        useNoticeStore.getState().push('清理任务提交失败', 'warn');
       }
     } catch {
-      useNoticeStore.getState().push('空目录清理提交失败', 'error');
+      useNoticeStore.getState().push('清理任务提交失败', 'error');
     } finally {
       setPruning(false);
     }
@@ -603,10 +604,10 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           onClick={handlePruneEmpty}
           disabled={pruning}
           className="h-8 gap-1 text-xs"
-          title="删除库内空目录（只删真正空的目录；残留封面或 .lrc 的目录会保留）"
+          title="删除库内空目录（只删真正空的目录；残留封面或 .lrc 的目录会保留），并清理文件已不在但索引行还在的记录"
         >
           <FolderX className="w-3.5 h-3.5 text-muted-foreground" />
-          <span>{pruning ? '提交中…' : '清理空目录'}</span>
+          <span>{pruning ? '提交中…' : '清理残留'}</span>
         </Button>
 
         <Separator orientation="vertical" className="mx-0.5 h-4" />

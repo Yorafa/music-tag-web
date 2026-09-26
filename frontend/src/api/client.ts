@@ -114,13 +114,23 @@ export async function fullScanFolder() {
  *  called `axios.get('/api/active_queue/')` directly, which sent no
  *  Authorization header and authenticated purely on the cookie mirror. */
 /** POST /api/prune_empty_folders/ — enqueue a task that deletes directories
- *  left empty by a tidy, a rename or a delete.
+ *  left empty by a tidy, a rename or a delete, and drops index rows whose
+ *  files are no longer on disk.
  *
  *  Runs as an asynq task rather than inline: it is filesystem mutation over
  *  an unbounded tree, like every other mutation here. Only literally empty
  *  directories go — a directory still holding a cover.jpg or a .lrc is left
  *  alone, because tidying can strand those and they are not disposable.
- *  The removed list lands in 操作审计 as `prune_empty_folders`.
+ *
+ *  The row cleanup is not a set difference against what the scan saw — that
+ *  is the operation the scanner refuses to do, since a failed sub-scan would
+ *  take the whole unseen library with it. Each row is judged by asking the
+ *  kernel whether its file exists, and only a definite "no such file" counts;
+ *  a permission or I/O error keeps the row. Folder rows are kept, because
+ *  their children's parent_id points at them.
+ *
+ *  Both lists land in 操作审计 as `prune_empty_folders`, under `removed` and
+ *  `vanished_rows`.
  *
  *  `sub_paths` restricts the sweep; omit it for the whole library. */
 export async function pruneEmptyFolders(subPaths?: Array<[string, string]>) {

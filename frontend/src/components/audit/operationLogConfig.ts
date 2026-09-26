@@ -48,7 +48,7 @@ export const ACTION_CONFIG: Record<string, ActionConfigItem> = {
     color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
   },
   prune_empty_folders: {
-    label: '清理空目录',
+    label: '清理残留',
     icon: FolderX,
     color: 'bg-stone-500/10 text-stone-400 border-stone-500/30',
   },
