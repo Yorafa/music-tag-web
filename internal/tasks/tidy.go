@@ -39,20 +39,109 @@ func (h *TidyFolderHandler) ProcessTask(ctx context.Context, t Task) error {
 	if len(p.MusicPaths) == 0 || p.RootPath == "" || p.FirstDir == "" {
 		return fmt.Errorf("invalid tidy payload")
 	}
+	// Contain the destination before anything moves.
+	//
+	// p.RootPath used to go straight into utils.SafeJoin as its TRUSTED
+	// root, which is the one thing SafeJoin assumes it can trust. It came
+	// from the request body, so a caller could name any directory and have
+	// the worker create the tree under it and then os.Rename library files
+	// into it. sanitizeTidySeg defends the tag-derived path segments
+	// (first_dir / second_dir) against exactly this, which is what makes
+	// the gap easy to miss: the segments were checked, the root was not.
+	//
+	// The dialog's own placeholder is "/app/media/", so this is reachable
+	// by typing the wrong thing as well as by crafting a request.
+	root, err := h.tidyRoot(p.RootPath)
+	if err != nil {
+		// Logged here as well as returned. The gateway has already told
+		// the user "已提交目录整理异步任务" by the time this runs, and
+		// asynq's own failure line does not carry the payload — so a
+		// refused root would otherwise be a tidy that silently did
+		// nothing. That is the shape of bug the toolbar comment about
+		// MusicPaths arriving empty already describes once.
+		log.Printf("[tidy] refusing the whole batch: %v", err)
+		return err
+	}
+	p.RootPath = root
+
 	for _, musicPath := range p.MusicPaths {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
-		if err := h.tidyOne(ctx, musicPath, p); err != nil {
+		// The source is contained too, and per-file rather than per-task:
+		// one bad row in a 500-track batch should cost that row, not the
+		// other 499. tidyOne moves a file, so "it is not in the library"
+		// has to be a refusal rather than a best-effort attempt.
+		src, sErr := h.tidySource(musicPath)
+		if sErr != nil {
+			log.Printf("[tidy] %s: %v", musicPath, sErr)
+			continue
+		}
+		if err := h.tidyOne(ctx, src, p); err != nil {
 			log.Printf("[tidy] %s: %v", musicPath, err)
 		}
 	}
 	return nil
 }
 
+// tidyRoot resolves a payload's root_path against the configured music root,
+// refusing anything outside it.
+//
+// An unconfigured root refuses everything rather than admitting everything.
+// The read-only consumers (dedup, the pruners) treat an empty root as "no
+// scope configured" so they degrade to a narrower answer, but this one moves
+// files, and without a root there is no way to know what is in bounds — so
+// the answer has to be "no".
+// An unconfigured root refuses everything rather than admitting everything.
+// The read-only consumers (dedup, the pruners) treat an empty root as "no
+// scope configured" so they degrade to a narrower answer, but this one moves
+// files, and without a root there is no way to know what is in bounds — so
+// the answer has to be "no". The explicit check exists for the message;
+// SafeAbs would refuse the empty root too, less clearly.
+func (h *TidyFolderHandler) tidyRoot(rootPath string) (string, error) {
+	if h.MusicRoot == "" {
+		return "", fmt.Errorf("tidy: no music root configured, refusing to move anything")
+	}
+	abs, err := utils.SafeAbs(h.MusicRoot, rootPath)
+	if err != nil {
+		return "", fmt.Errorf("tidy: root_path %q is outside the library: %w", rootPath, err)
+	}
+	return abs, nil
+}
+
+// tidySource resolves one payload path against the music root.
+//
+// SafeAbs rather than SafeJoin, for the same reason as everywhere else: a
+// path in a payload is absolute, so an absolute path outside the library is
+// something the caller has no business naming and is refused outright. A
+// relative path is refused too, rather than joined onto the root — in a
+// payload that moves files, "which directory did you mean" is not a question
+// worth guessing at.
+//
+// No explicit empty-root check, because there is no case left for it to
+// handle: tidyRoot runs first and fails the whole task when MusicRoot is
+// unset, and SafeAbs refuses an empty root anyway. An earlier version had
+// the branch, and mutation testing showed it was unreachable — tidyRoot had
+// already returned, so the branch could only ever be dead code pretending to
+// be a decision.
+func (h *TidyFolderHandler) tidySource(musicPath string) (string, error) {
+	abs, err := utils.SafeAbs(h.MusicRoot, musicPath)
+	if err != nil {
+		return "", fmt.Errorf("not in the library: %w", err)
+	}
+	return abs, nil
+}
+
 // tidyOne 重组单个文件并在 os.Rename 成功后同步更新 db.Folder / db.Track
+//
+// p is expected to be ALREADY VALIDATED: ProcessTask resolves RootPath and
+// MusicPaths against the music root before calling this. The check is not
+// repeated here on purpose — it belongs at the payload boundary, once, where
+// it can reject the whole task rather than one file — but that also means
+// tidyOne is unsafe to call with a raw payload, and its test does exactly
+// that. See TestTidyOne_RequiresAValidatedPayload.
 // 中的 path 字段（带 WithContext(ctx) 让 asynq 取消可以中断 GORM），
 // 然后发布 FileMoved 事件让 webhook handler 失效缓存。
 func (h *TidyFolderHandler) tidyOne(ctx context.Context, musicPath string, p TidyFolderPayload) error {
