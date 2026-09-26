@@ -1,6 +1,6 @@
 ---
 name: music-tag-web-dev
-description: Architecture, conventions, and patterns for the Go Music Tag Web project — Go 1.23+gRPC backend, React 19+Vite+shadcn-ui frontend, music metadata editor with multi-source scraping.
+description: Architecture, conventions, and patterns for the Go Music Tag Web project — Go 1.25+gRPC backend, React 19+Vite+shadcn-ui frontend, music metadata editor with multi-source scraping.
 version: 2.0.0
 author: Hermes Agent
 license: MIT
@@ -17,7 +17,7 @@ metadata:
 Self-hosted Docker 化音乐元数据批量编辑工具。支持 FLAC/APE/WAV/AIFF/WV/TTA/MP3/M4A/OGG/MPC/OPUS/WMA/DSF/MP4
 全部主流有损/无损格式。所有音乐文件本地处理，不上传第三方。作为 Navidrome/Jellyfin/Funkwhale 的 sidecar 服务。
 
-**fork 自** `xhongc/music-tag-web`，从原 Python/Django 单体完整重构为 Go 1.23 + gRPC 微服务 + React 19 SPA 架构。
+**fork 自** `xhongc/music-tag-web`，从原 Python/Django 单体完整重构为 Go 1.25 + gRPC 微服务 + React 19 SPA 架构。
 
 ## When to Use
 
@@ -30,13 +30,14 @@ Self-hosted Docker 化音乐元数据批量编辑工具。支持 FLAC/APE/WAV/AI
 
 ## Architecture
 
-### Backend (root — Go 1.23)
+### Backend (root — Go 1.25)
 
 | Layer | Implementation |
 |---|---|
-| HTTP service | Go 1.23 + gin (gateway: API + React SPA static + `/media/*` Range streaming) |
+| HTTP service | Go 1.25 + gin (gateway: API + React SPA static + `/media/*` Range streaming) |
 | Async tasks | asynq + Redis (worker) |
 | Music sources | **gRPC microservices**: netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid — independent processes |
+| Downloads | 8th plugin: `youtube` (yt-dlp). Implements **DownloadSource**, not the tag-source interface, so it is deliberately absent from the row above. It is also the only plugin that needs ffmpeg, which is why it hangs off `fpcalc-base` |
 | Tag I/O | `bogem/id3v2` + `dhowden/tag` (pure Go, no FFI) |
 | Auth | JWT in-memory + bcrypt; fail-closed defaults |
 | Encryption | gRPC TLS optional (`GRPC_USE_TLS=1` + `GRPC_TLS_CA_FILE`) |
@@ -49,20 +50,26 @@ Self-hosted Docker 化音乐元数据批量编辑工具。支持 FLAC/APE/WAV/AI
 - **UI primitives**: Components in `src/components/ui/` use `@base-ui/react` (Switch, Dialog, Tabs, Select)
 - **API client**: `src/api/client.ts` — axios instance with JWT interceptors
 - **Types**: `src/types/index.ts` — all shared TypeScript interfaces
-- **Utils**: `src/utils/` — `persist.ts` (localStorage helpers), `cover.ts` (cover image handling), `string.ts` (string helpers), `path.ts` (path helpers)
+- **Utils**: `src/utils/` — `persist.ts` (localStorage helpers), `cover.ts` (cover image handling), `path.ts` (path helpers), `id.ts`, `dedupe.ts`, `duration.ts`, `expandDirs.ts`, `skippedNotes.ts`
 
 ### Zustand Stores
 
-Each concern has its own store (NO single global store):
+Each concern has its own store (NO single global store). There is no
+`useAppStore.ts` and no `useToastStore.ts` any more: the old monolith was
+split, and several doc references to it are historical comments inside the
+stores themselves.
 
 | Store | File | Purpose |
 |---|---|---|
-| `useAppStore` | `src/store/useAppStore.ts` | File browser, tag editor, search results, sort, id3 cache |
+| `useBrowserStore` | `src/store/useBrowserStore.ts` | Directory-browsing state (the file tree), sort prefs, per-file id3 cache |
+| `useWorklistStore` | `src/store/useWorklistStore.ts` | Scrape worklist: one row per file-to-scrape, selection, grouping, filters |
+| `useDetailStore` | `src/store/useDetailStore.ts` | The shared song-detail surface used by every section that lists local audio |
+| `useLibraryStore` | `src/store/useLibraryStore.ts` | Local play mode's persistent "trial-listen" library |
 | `useAuthStore` | `src/store/useAuthStore.ts` | JWT token, login/logout, persisted to `auth.accessToken` |
 | `usePlayerStore` | `src/store/usePlayerStore.ts` | Audio playback (track, queue, volume, seek), volume persisted |
 | `useThemeStore` | `src/store/useThemeStore.ts` | Dark/light theme toggle |
 | `useSourceStore` | `src/store/useSourceStore.ts` | Dynamic source list from `GET /api/sources/`, enabled sources |
-| `useToastStore` | `src/store/useToastStore.ts` | Toast notification queue |
+| `useNoticeStore` | `src/store/useNoticeStore.ts` | Notification queue (was `useToastStore`; semantics widened past toasts) |
 
 ### Backend Directory Structure
 
@@ -70,25 +77,46 @@ Each concern has its own store (NO single global store):
 cmd/
 ├── gateway/            # HTTP server entry point (gin)
 ├── worker/             # Asynq worker entry point
-└── plugins/            # gRPC plugin servers
-    ├── netease/ ├── kugou/ ├── kuwo/ ├── migu/
-    ├── qmusic/ ├── musicbrainz/ └── acoustid/
+└── plugins/            # gRPC plugin server entry points, one main.go each
+    ├── netease/ ├── kugou/ ├── kuwo/ ├── migu/ ├── qmusic/
+    ├── musicbrainz/ ├── acoustid/ └── youtube/   # youtube = DownloadSource, not a tag source
 internal/
 ├── config/             # Env-based config, fail-closed defaults
 ├── gateway/
-│   ├── handler/        # Gin HTTP handlers (auth, file, update, tag, source...)
+│   ├── handler/        # Gin HTTP handlers (auth, file, update, tag, source, duplicate...)
 │   ├── middleware/      # CORS, JWT auth, webhook auth, body limit
 │   └── router/         # Route setup (router.go)
 ├── plugin/
 │   ├── interface.go    # TagSource + DownloadSource interfaces, Song type
 │   ├── grpc_adapter.go # gRPC client dial + keepalive
 │   ├── registry.go     # In-process plugin registry
-│   └── <name>/         # Per-source server.go (gRPC implementations)
-├── tasks/              # Asynq tasks (tidy, scanner, prune, yt_dl...)
+│   ├── serveropts.go   # Shared gRPC server options (keepalive)
+│   ├── duration.go     # Shared duration parsing across plugins
+│   └── <name>/         # Per-source server.go. Dir is `kg`, service is `kugou`
+├── tasks/              # Asynq tasks: scanner, tidy, prune, fpindex, yt_dl, clear_music
+├── dedup/              # Duplicate detection: dedup.go (4-layer funnel),
+│                       # fingerprint.go (threshold), fpcache.go (subfingerprint
+│                       # cache + size/mtime invalidation), audiotable.go
+│                       # (which rows are library audio — by ext, not file_type)
+├── fingerprint/        # The ONLY place that reads fpcalc output and compares
+│                       # subfingerprints; shared by dedup, acoustid, fpindex
+├── audioext/           # Single extension whitelist + MIME→ext map
 ├── tag/                # Tag I/O (reader.go, writer.go)
+├── tagreader/          # Lower-level tag reading helpers
 ├── db/                 # GORM models + DB init
+├── models/             # Wire/DTO structs
+├── scanner/            # Directory walking primitives
+├── search/             # Search fan-out helpers
+├── download/           # Download plumbing shared by the download plugins
+├── ytdlp/              # yt-dlp argv construction + sanitisation
+├── queue/              # asynq task types + enqueue helpers
+├── taskclient/         # In-process asynq client wrapper
+├── events/             # Event emission
+├── audit/              # Operation audit log (action constants + Log)
+├── cache/              # Cover/asset cache
 ├── netguard/           # SSRF protection (ssrf.go)
-└── utils/              # SafeJoin, path helpers
+├── testaudio/          # Deterministic audio fixtures for tests
+└── utils/              # SafeJoin, path helpers, MusicRoot/DataDir
 ```
 
 ### Plugin Interface (`internal/plugin/interface.go`)
@@ -271,7 +299,7 @@ When a shadcn component is missing:
 
 4. **Plugin silent-fail**: kuwo and qmusic return 0 results + nil error on dirty upstream. Fan-out does NOT block other sources. First diagnostic: `grep '[SearchMusic] plugin'`.
 
-5. **Frontend stores**: Each concern gets its own Zustand store. Do NOT merge into useAppStore. Add new stores for new features.
+5. **Frontend stores**: Each concern gets its own Zustand store. The old `useAppStore` monolith was split into `useBrowserStore` / `useWorklistStore` / `useDetailStore` / `useLibraryStore`; do not merge them back. Add new stores for new features.
 
 6. **Dialog nesting**: Never nest `<Dialog>` inside another `<Dialog>` — base-ui's DialogPrimitive.Root provider chain will silently unmount the inner React tree.
 
@@ -283,24 +311,39 @@ When a shadcn component is missing:
 
 10. **SSRF guard**: `internal/netguard.Guard` rejects private IPs / 169.254 / loopback / multicast. All remote cover fetches pass through this.
 
-11. **yt-dlp sanitize**: `internal/tasks/yt_dlp_validate.go` double-validates format/output_format/quality — once in gateway, once in worker (defense in depth).
+11. **yt-dlp sanitize**: `internal/ytdlp/sanitize.go` validates format/output_format/quality — once in the gateway, once in the worker (defense in depth).
 
 12. **Player source types**: `PlayerTrack.source` uses a discriminated union — `{kind: 'local', fileName, filePath} | {kind: 'plugin', source, songId}`.
 
-13. **cover data consistency**: `useAppStore.musicInfo.album_img` can be embedded art, remote URL, or base64. Always call `resolveCoverSrc()` before rendering.
+13. **cover data consistency**: `musicInfo.album_img` can be embedded art, remote URL, or base64. Always call `resolveCoverSrc()` before rendering.
 
-14. **Pre-built frontend required**: First deploy MUST build frontend first (`cd frontend && npm install && npm run build`). Without `static/dist/`, gateway's `/` returns 404.
+14. **The SPA is baked into the image**: `Dockerfile.gateway` runs `npm run build` in its `frontend` stage and `COPY`s the result into `/app/static/dist`. There is deliberately **no** `./static` volume in compose — mounting one would shadow the baked copy with an empty host directory and `/` would 404. Do not tell operators to build the frontend on the host; only a non-Docker binary run needs `STATIC_DIR` pointed at `./static`.
 
 15. **First-boot bootstrap**: Lazymode generates secrets via `crypto/rand` on first start. Admin password appears ONCE in gateway startup log. Backup `.env` with explicit secrets to skip bootstrap.
 
 ## Verification Checklist
 
+Go (needs `CGO_ENABLED=1` for go-sqlite3, and `fpcalc` on PATH or the
+fingerprint/cache tests skip themselves):
+
+- [ ] `gofmt -l internal/ cmd/` is empty
+- [ ] `go build ./...` succeeds
 - [ ] `go vet ./...` passes
-- [ ] `go build ./cmd/gateway/ ./cmd/worker/` succeeds
+- [ ] `go test -count=1 ./...` passes
+
+Frontend:
+
 - [ ] `npm run typecheck` passes (frontend typecheck; `= tsc -b`)
 - [ ] `npm run lint` passes
+- [ ] `npx vitest run` passes
+
+Deploy / runtime:
+
 - [ ] `docker compose config --quiet` validates compose file
-- [ ] `GET /api/sources/` returns 7+ entries
+- [ ] `docker compose ps` shows all 11 containers healthy
+- [ ] `GET /api/sources/` returns 8 entries (7 tag sources + `youtube`)
 - [ ] JWT login works at `POST /api/token/`
 - [ ] File listing works at `POST /api/file_list/`
 - [ ] Search fan-out works at `POST /api/search_music/`
+- [ ] Dedup check works at `POST /api/check_duplicate/`
+- [ ] Cleanup works at `POST /api/prune_empty_folders/` (reports `removed` and `vanished_rows` separately)

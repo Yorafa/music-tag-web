@@ -1,5 +1,20 @@
 # Plan — Unfinished Features (Filename Parse + Grouping UI + Source YAML)
 
+> ⚠️ **文件名索引已过期（2026-09-26 核对）。** 本文件是 **point-in-time 的计划记录**（Status: shipped，round-10 / 2026-07-24），正文里的路径是当时的写法，保留是为了留住决策过程，**不是**当前代码位置。随后的 frontend 重构拆掉了这些路径，照着正文找会找不到：
+>
+> | 本文件里的旧路径 | 现在的实际位置 |
+> |---|---|
+> | `scraper/Worklist.tsx` | `workstation/WorkstationView.tsx` |
+> | `scraper/WorklistHeaderBar.tsx` | `workstation/WorkstationToolbar.tsx` |
+> | `scraper/GroupHeaderRow.tsx` | `workstation/WorkstationTable.tsx`（分组行渲染就在这个文件里） |
+> | `scraper/ScrapeTopBar.tsx` | `workstation/WorkstationToolbar.tsx` |
+> | `settings/SettingsModal.tsx` | `settings/SettingsView.tsx` + `settings/SourcesTabContent.tsx` |
+> | `frontend/src/utils/parseFilename.ts` | 只剩共享 fixture `utils/parseFilename.testdata.json`；解析逻辑在后端 `internal/utils/filenames.go`，前端不再有 TS 镜像 |
+> | `internal/tasks/matchscore.go` | 已删除（连同它上面那条 zhconv defer TODO） |
+> | `internal/utils/find_audio.go` | 已删除 |
+>
+> 功能层面的当前状态以 [`../FEATURE-COVERAGE.md`](../FEATURE-COVERAGE.md) 为准；本文件只作历史参考。
+
 > **Status:** `[shipped]` — Tracks C.2, C.3, C.4 已在 round-10 (2026-07-24) 完整 ship。Frontend `npx tsc --noEmit` + `npx eslint --max-warnings 0 .` + `npm test` (130 vitest) 全绿。Backend `go build`/`vet`/tests 待非-snap Go install 才能跑完整 (本机 `/snap/go/11227/` stdlib 损坏,环境问题,非代码)。
 > **Owner:** You
 > **Source of truth:** [`../FEATURE-COVERAGE.md`](../FEATURE-COVERAGE.md) — 表里的 🚧 Partial 与 ❌ Aspirational 是本 plan 的候选清单(本轮 ship 后已大幅收窄)。
@@ -90,7 +105,7 @@ depends-on 互不相干:任何一件失败都不会 block 另外两件。
 | 播放统计 + 图表 | 本工具是 librarian,非 media server;无 listen source-of-truth |
 | Subsonic webhook | P2.0 已显式退役 |
 | Stage C `dop251/goja` JS plugin runtime | 用户 plugin sandbox 复杂度高;且需要 C.4 Stage B 已先 ship |
-| **Bulk Text Replace (原 C.1)** | round-9 用户决定从 plan 移除;在 FEATURE-COVERAGE.md 中仍保留 🚧 row,后续可单独立 PR |
+| **Bulk Text Replace (原 C.1)** | round-9 用户决定从 plan 移除。FEATURE-COVERAGE.md 里那行现已从 🚧 降为 ❌：复核发现仓库内根本没有 Replace 模态框（非 shadcn 模态框只有 `TrackDetailDialog` / `ParseFilenamesModal` / `SourcePickerModal`），旧文案「前端 Replace 模态框已实现」一直是假的。后续可单独立 PR |
 | **OperationLog (原 C.1 step 1)** | round-9 一并退;audit 不入本 plan |
 
 ---
@@ -433,7 +448,7 @@ C.2–C.4 三个 track ship 后,`FEATURE-COVERAGE.md` 同步更新以下 row (�
 - 「按艺术家 / 专辑 分组 UI 🚧 → ✅」
 - 新增 bullet「per-source config override (C.4 Stage B) ✅」
 
-- `internal/tasks/matchscore.go` 主 TODO 「zhconv 暂不引入」 仍 inflated deferable;不动。
+- zhconv 仍不引入。原先记在 `internal/tasks/matchscore.go` 的主 TODO 已随该文件一同消失，代码里不再有显式 defer 标记；取舍理由只保留在本文件（Go port 维护成本、opencc-wasm bundle ≥2MB）。引用该文件的两处文档已更正。
 - 下一轮 follow-up candidates:cross-track 「notice-poll」通道(进度 反馈 infra;原 4-track C.1 Step 0 现 有需求,后 应三 track 合资起 sung drive);Stage C JS plugin runtime (需要 C.4 Stage B 已先 ship,现已 ship,Stage C 可起);inline row-edit UI;bilingual lyrics;zhconv wasm bundle (预算上调时再 考虑);Bulk Text Replace (原 C.1;可起独立 PR) + OperationLog (随 C.1 一起 应 后 后期复振)。
 
 ---

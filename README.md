@@ -4,14 +4,14 @@
 [简体中文](README.md) | [English](#)
 
 <div class="column" align="middle">
-    <a href="https://go.dev/dl/"><img src="https://img.shields.io/badge/Go-1.23-00ADD8.svg" alt="Go"></a>
+    <a href="https://go.dev/dl/"><img src="https://img.shields.io/badge/Go-1.25-00ADD8.svg" alt="Go"></a>
     <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-19-149eca.svg" alt="React"></a>
     <a href="https://grpc.io/"><img src="https://img.shields.io/badge/gRPC-8%20plugins-blueviolet?style=plastic" alt="gRPC plugins"></a>
     <img src="https://img.shields.io/badge/self--hosted-Docker-orange?style=plastic" alt="self-hosted">
     <img src="https://img.shields.io/badge/platform-amd64/arm64-pink?style=plastic" alt="docker-platform">
 </div>
 
-> ⚠️ **本项目 fork 自 [`xhongc/music-tag-web`](https://github.com/xhongc/music-tag-web)**——原 Python/Django 单体代码已**完整重构**为 Go 1.23 + gRPC 微服务插件 + React 19 SPA 架构。本仓库以 GPL V3 协议 fork-publish 独立维护；上游著作权与许可证全文保留在根目录 [`LICENSE`](LICENSE)。重构过程的 rationale 详见底部 [Acknowledgements](#acknowledgements)。
+> ⚠️ **本项目 fork 自 [`xhongc/music-tag-web`](https://github.com/xhongc/music-tag-web)**——原 Python/Django 单体代码已**完整重构**为 Go 1.25 + gRPC 微服务插件 + React 19 SPA 架构。本仓库以 GPL V3 协议 fork-publish 独立维护；上游著作权与许可证全文保留在根目录 [`LICENSE`](LICENSE)。重构过程的 rationale 详见底部 [Acknowledgements](#acknowledgements)。
 
 ---
 
@@ -29,7 +29,7 @@
 
 | 层 | 实现 |
 |---|---|
-| HTTP 服务 | Go 1.23 + gin (gateway：API + React SPA 静态 + `/media/*` Range 流) |
+| HTTP 服务 | Go 1.25 + gin (gateway：API + React SPA 静态 + `/media/*` Range 流) |
 | 异步任务 | asynq + Redis (worker) |
 | 音乐源 | **gRPC 微服务**：7 个元数据源（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）+ 1 个下载源（youtube）— 各自独立进程 |
 | Tag I/O | `bogem/id3v2` + `dhowden/tag`（纯 Go 库，无 Python FFI） |
@@ -59,8 +59,8 @@
 - **曲库查重** ✅ — 智能刮削页选中若干行 → 「查重」按钮，只读跑一遍四层漏斗（文件名 / SHA-256 / 声纹 / 元数据），行上显示「重复 / 疑似 / 唯一」徽章，侧栏可「只看重复」。只有内容级证据（SHA-256 / 声纹）才算重复；同名或元数据相似只标「疑似」，不参与删除。后端 `POST /api/check_duplicate/`，与写入路径共用同一个 checker，判定不会自相矛盾
 - **一键删除重复文件** ✅ — 仅对内容级重复开放，且两侧互相指认时（都在同一批次里被查过）两边都不删：那种情况下「哪份是原件」无法判定，与其猜错不如让用户自己看。删除是**移入 `DATA_DIR/.trash/<时间戳>/`**（保留相对 MUSIC_DIR 的路径），不是真删；确认框逐条列出「删哪个 / 留哪个」并说明可恢复。拒绝目录、符号链接与越界路径，删除后同步清掉 `music_folder` 索引行并记一条 `delete_files` 审计
 - AcoustID：没有元数据 / 文件名混乱的歌曲自动指纹识别匹配 ✅
-- 搜索源动态启用 / 关闭（`localStorage` per-user 持久化，SettingsModal 中切换） ✅
-- per-source YAML config override (C.4 Stage B) ✅ — 编辑 `data/sources/<name>.yaml` 改 `api_base` + `secrets.<plugin>Secret`，gateway 启动期加载 + `POST /api/sources/refresh/` 热重载（不需重启）；SettingsModal “Sources” tab 查看当前生效 + 重载按钮，secret 不暴露明文（仅 `hasSecret` 布尔）。Plugin server.go 各自 `SetSecret` / `SetAPIBase` method（const→var demote）。
+- 搜索源动态启用 / 关闭（`localStorage` per-user 持久化，设置页中切换） ✅
+- per-source YAML config override (C.4 Stage B) ✅ — 编辑 `data/sources/<name>.yaml` 改 `api_base` + `secrets.<plugin>Secret`，gateway 启动期加载 + `POST /api/sources/refresh/` 热重载（不需重启）；设置页 “Sources” tab (`settings/SourcesTabContent.tsx`) 查看当前生效 + 重载按钮，secret 不暴露明文（仅 `hasSecret` 布尔）。Plugin server.go 各自 `SetSecret` / `SetAPIBase` method（const→var demote）。
 
 ### 歌词 ✅
 - 多源歌词拉取（网易云 / 酷我 / 咪咕 / QQ） ✅
@@ -74,14 +74,18 @@
 
 ### 曲库 / 文件管理 ✅
 - 目录递归扫描（symlink-aware） ✅
-- 多维度排序：文件名 / 大小 / 修改时间 ✅- 按艺术家 / 专辑 分组 UI ✅ — `useWorklistStore.grouping` (持久化 `worklist.grouping.v1` localStorage) + chip row `[无] [专辑] [歌手]` + `GroupHeaderRow.tsx` (`var(--surface-2)` 背景 + chevron toggle + count badge) + 跨 group 多选 + collapse state session-only
+- 多维度排序：文件名 / 大小 / 修改时间 🚧 — 排序**状态**已在 `useBrowserStore` 里（`sortField` / `setSort` / `setSortDir`，含旧 localStorage key 迁移），但还没有任何组件订阅它，排序 UI 未接线
+- 按艺术家 / 专辑 分组 UI ✅ — `useWorklistStore.grouping` (持久化 `worklist.grouping.v1` localStorage) + chip row `[无] [专辑] [歌手]` (`WorkstationToolbar.tsx`) + 分组行渲染 (`WorkstationTable.tsx`) + 跨 group 多选 + collapse state session-only
+- 声纹索引自维护 ✅ — `index:fp_duration` 跑完若**有进展**就排下一次（延迟 30s + `Unique` 去重），索引会追上曲库然后自己停下。原本只在 worker 启动时跑一次，新下载的文件永远拿不到 duration，于是查重静默降级成按大小选候选 —— 而按大小恰恰命中不了跨编码。新增/扫描入库的文件会自动进索引，不用手工触发
+- 声纹缓存 ✅ — 一次 `fpcalc` 解码 120 秒音频要 ~0.4s，而一次查重要解码**被测文件 + 时长窗口内每个候选**。子指纹连同 `duration` 一起存进索引，重复查重零解码（实测 400ms → 24ms）。失效判据是 size **和** mtime：原地转码路径和行都不变，没有失效判据的缓存不是变陈旧，而是**永远报旧歌的重复**
+- 「清理残留」清索引垃圾 ✅ — 文件从外部消失（文件管理器、宿主机改挂载卷、rsync）时扫描器和 tidy 都不会删它的行，于是残留行累积，**每次查重都要先 stat 再逐个驳回**（曲库页面读的是盘不是表，所以用户看不见它们）。清理时**逐行问内核文件在不在**，只有确定的 ENOENT 才删；权限/IO 错误一律保留。**刻意不做集合差集**（`WHERE path NOT IN`）—— 扫描器明文禁止过那条路：子扫描失败会把整个没访问到的库一起删掉
 - 文件名解析前后端 round-trip ✅ — Server preview `POST /api/tag/preview_parse_filenames/` 返回 token + 每行 `{artist,title,status}` (10 分钟 TTL cache)；modal 可覆盖；apply `POST /api/tag/apply_parsed_filenames/` 走 asynq `TypeApplyParsedFilenames` worker 批量写 tag。双向 contract test: Go + TS 双引擎在 200+ shared NFC fixture 上 deep-equal (SHA-256 fixture 一致校验)
 - 整轨 APE / FLAC + CUE 自动切割分轨 ❌ — 仓库内没有 CUE 解析 / 切轨代码（镜像也未装 `shntool` / `cuebreakpoints`）
 - ffmpeg 任意格式批量转换 ❌ — youtube 插件镜像**已装** ffmpeg（yt-dlp `--extract-audio` 转码需要，worker 委托该插件执行下载），缺的是转换 task 与 UI，不是 binary
 
-### 文本清洗 / 编码 🚧
-- 批量 tag 文本替换（脏标签、乱码清理） 🚧 — 前端 Replace 模态框已实现，无后端 bulk endpoint
-- 繁简 / 简繁 metadata 转换（zhconv） ❌ — `internal/tasks/matchscore.go` 显式 defer；未引入 opencc / HanziConvert
+### 文本清洗 / 编码 ❌
+- 批量 tag 文本替换（脏标签、乱码清理） ❌ — 前端没有这个模态框，后端也没有 bulk text-replace endpoint（`/api/batch_update_id3/` 是按字段整体覆盖，不做文本变换）
+- 繁简 / 简繁 metadata 转换（zhconv） ❌ — 未引入 opencc / zhconv / HanziConvert。原先记在 `internal/tasks/matchscore.go` 的那条 defer TODO 已随该文件一同消失，所以现在代码里**没有任何**显式 defer 标记；取舍理由（Go port 维护成本、opencc-wasm bundle ≥2MB）保留在 `docs/plans/Unfinished-Features.md`
 
 ### 下载 / 抓取 ✅
 - YouTube / B 站等下载走 yt-dlp ✅
@@ -108,7 +112,7 @@
 
 > **新部署**直接走下方 Clone → env → compose 三步。从其他来源（V1 老镜像 / 旧 fork）升级请先参考下方的 `Pre-flight · boilerplate 检查` 段（包含 `.env` / `data` / `music` 路径迁移的 `mv -n` 步骤）。
 >
-> ⚠️ **首次部署务必先构建前端**：`cd frontend && npm install && npm run build && cd ..`——湖区 ⚠️ 省略这一步，gateway 的 `/` 会返回 404（`./static/dist/` 在 host 上还不存在）。原因：v2 起 nginx 反代被合并进 gateway，静态产物采用 host `./static/dist/` 卷装入容器，底层没有 fallback。**修改前端后**只需重跑 `npm run build`：http.ServeFile 每次请求重新读盘，Vite hashing 出新文件名让浏览器自动拉新；不需要 `docker compose restart` 或 `--build`。
+> ℹ️ **不需要在 host 上先构建前端。** React SPA 由 `Dockerfile.gateway` 的 `frontend` stage 在镜像内构建（`npm run build` → 产物 `COPY` 进 `/app/static/dist`），compose 里**故意没有** `./static` 卷挂载 —— 挂上去反而会用 host 的空目录遮住镜像里那份。所以 `docker compose up -d --build` 一步就够，host 上残留的 `./static/dist` 不参与运行。**修改前端后**重跑 `docker compose up -d --build gateway`（或 `docker compose build gateway`）即可；只有在**不用 Docker** 直接跑二进制时，才需要手动 `npm run build` 并把 `STATIC_DIR` 指向仓库根 `./static`。
 
 ### 🎯 一键部署（懒人模式 · 适合评估 / 家庭自用）
 
@@ -119,9 +123,9 @@
 git clone https://github.com/[your-org]/go-music-tag-web.git
 cd go-music-tag-web
 
-# ②首次运行必要：创建 ./music ./data ；构建前端 → ./static/dist
+# ②首次运行必要：创建 ./music ./data
+#   前端不需要在 host 上构建 —— 镜像内已经带上了（见上方说明）
 mkdir -p ./music ./data
-( cd frontend && npm install && npm run build && cd .. )
 
 # ③拉起全栈（自动生成 admin 账号、JWT secret、webhook token）
 docker compose up -d --build
@@ -192,7 +196,7 @@ docker compose up -d --build    # 后续只要不加 plugin / 不改 .env，重�
 
 不用 Docker 时才需要手动构建前端：`cd frontend && npm install && npm run build`，产物落盘到仓库根 `./static/dist/`，再把 `STATIC_DIR` 指向仓库根 `./static`。
 
-首次启动会自动构建：gateway（含 API + 静态 SPA + `/media/*` 音乐流）+ worker + 7 个 gRPC 音乐源插件（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid）+ redis。**原 nginx 反向代理已合并进 gateway；不再需要独立的 `nginx` 服务或 `nginx.conf`。**
+首次启动会自动构建：gateway（含 API + 静态 SPA + `/media/*` 音乐流）+ worker + 8 个 gRPC 插件 + redis，共 11 个容器。插件里 7 个是**音乐元数据源**（netease / kugou / kuwo / migu / qmusic / musicbrainz / acoustid），第 8 个是 **youtube 下载插件**（yt-dlp，走 `DownloadSource` 而非 tag source，所以不在上面那个列表里）。**原 nginx 反向代理已合并进 gateway；不再需要独立的 `nginx` 服务或 `nginx.conf`。**
 
 ### 3. 浏览器访问
 
@@ -227,7 +231,7 @@ docker compose up -d --build    # 后续只要不加 plugin / 不改 .env，重�
 ```bash
 # 本地 toolchain 验证
 node -v                                    # Node ≥ 22（与 frontend/package.json engines 一致）
-go version                                 # Go 1.23+
+go version                                 # Go 1.25+
 docker compose version                     # compose v2
 
 # 拉依赖（前端一次性；后端用 go modules，缓存后不必重拉）
@@ -375,7 +379,7 @@ golang music library manager, self-hosted docker music tagger,
 
 | | upstream | 本仓库 |
 |---|---|---|
-| 后端 | Python 3 + Django + gunicorn + celery | Go 1.23 + gin + asynq + Redis |
+| 后端 | Python 3 + Django + gunicorn + celery | Go 1.25 + gin + asynq + Redis |
 | 音乐源 | 同进程 python module | 独立 gRPC 服务进程 |
 | Tag I/O | `mutagen` (Python 库) | `bogem/id3v2` + `dhowden/tag`（纯 Go） |
 | 前端 | Django template + Bootstrap jQuery | React 19 + Vite 7 + TypeScript + Tailwind 4 + shadcn/ui + Zustand |

@@ -1,10 +1,12 @@
 # Pluggable Plugin Architecture — 设计文档
 
-**Status**：Design（Stage A 待实施）
+**Status**：Design —— **Stage A 与 Stage B 已 ship**（A: `GET /api/sources/` + `useSourceStore` + `SettingsModal` Sources tab + 插件注册表 fan-out；B: per-source YAML 覆写）。Stage C（`goja` 沙箱 JS plugin）与 Stage D（runtime admin UI）仍是 future-feature pitch，不在 roadmap 内。落地状态以 [`FEATURE-COVERAGE.md`](FEATURE-COVERAGE.md) §2 为准。
+
+> ⚠️ **正文里的前端路径已过期（2026-09-26 核对）。** 本文是 2025-06-29 的设计文档，正文保留是为了留住设计动机。随后的 frontend 重构拆掉了这些路径：`SearchPanel.tsx` 已不存在（云端搜索现在是 `search/CloudSearchView.tsx`），`SettingsModal.tsx` 变成 `settings/SettingsView.tsx` + `settings/SourcesTabContent.tsx`。`SourcePickerModal.tsx` 仍在（现位于 `search/`）。
 **Audience**：self-hosted 家庭影音中心用例，单一可信用户
 **Date**：2025-06-29
 
-> **Cross-ref**：本文评估的是**整张 L × P 矩阵**；目前真正落地的只有 Stage A（其 plumbing——`GET /api/sources/`、`useSourceStore`、`SettingsModal`、插件注册表 fan-out——在 [`docs/FEATURE-COVERAGE.md`](docs/FEATURE-COVERAGE.md) §2 中标为 ✅）。Stage B（per-source YAML 覆写）、Stage C（通过 `dop251/goja` 跑沙箱 JS plugin）、Stage D（runtime admin UI）属于 **future-feature pitches**——不在任何当前 README claim 集合内。`FEATURE-COVERAGE.md` 里 ❌ 的集合是另一份列表（README 今日宣称但代码里没做的项），与本表的 aspirational 项**概念上相邻**但**集合上不同**：本表讲"插件粒度未来长什么样"，矩阵讲"README 今天的宣称哪些没做"。按你问的问题选对应的文档，不要把两者混在一起 filing issue。§ Deferred/aspirational 列出的是**今天** README 已宣称但没实现的项。两者都 aspirational、都脱离当前 roadmap，但**集合层面是不同的**：
+> **Cross-ref**：本文评估的是**整张 L × P 矩阵**；目前真正落地的只有 Stage A（其 plumbing——`GET /api/sources/`、`useSourceStore`、`SettingsModal`、插件注册表 fan-out——在 [`FEATURE-COVERAGE.md`](FEATURE-COVERAGE.md) §2 中标为 ✅）。Stage B（per-source YAML 覆写）、Stage C（通过 `dop251/goja` 跑沙箱 JS plugin）、Stage D（runtime admin UI）属于 **future-feature pitches**——不在任何当前 README claim 集合内。`FEATURE-COVERAGE.md` 里 ❌ 的集合是另一份列表（README 今日宣称但代码里没做的项），与本表的 aspirational 项**概念上相邻**但**集合上不同**：本表讲"插件粒度未来长什么样"，矩阵讲"README 今天的宣称哪些没做"。按你问的问题选对应的文档，不要把两者混在一起 filing issue。§ Deferred/aspirational 列出的是**今天** README 已宣称但没实现的项。两者都 aspirational、都脱离当前 roadmap，但**集合层面是不同的**：
 
 ---
 
