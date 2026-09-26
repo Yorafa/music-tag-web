@@ -43,11 +43,32 @@ var ErrTokenExpired = errors.New("cache: parsed_preview token expired or unknown
 // ParsedResult is one row's preview (carried forward to the worker).
 // Status is "ok"/"ambiguous"/"unparsable" — mirror utils.Status*
 // string values so JSON wire-shapes round-trip byte-identically.
+//
+// Every tag field the parser can fill is here, and this struct is the
+// server's own copy: the apply step writes from the cached bundle, with the
+// client's overrides merged on top, so a field that is not carried simply
+// cannot be written. That is why adding a field means adding it in three
+// places (parser, this, the worker's TagUpdate) — the cache is the trust
+// boundary, and a missing field fails closed.
 type ParsedResult struct {
-	Path   string `json:"path"`
-	Artist string `json:"artist,omitempty"`
-	Title  string `json:"title,omitempty"`
-	Status string `json:"status"`
+	Path        string `json:"path"`
+	Title       string `json:"title,omitempty"`
+	Artist      string `json:"artist,omitempty"`
+	Album       string `json:"album,omitempty"`
+	AlbumArtist string `json:"albumartist,omitempty"`
+	Genre       string `json:"genre,omitempty"`
+	Year        string `json:"year,omitempty"`
+	TrackNumber string `json:"tracknumber,omitempty"`
+	DiscNumber  string `json:"discnumber,omitempty"`
+	Status      string `json:"status"`
+}
+
+// Empty reports whether the row carries nothing to write. The apply step
+// skips these rather than calling tag.Write with an empty update.
+func (r ParsedResult) Empty() bool {
+	return r.Title == "" && r.Artist == "" && r.Album == "" &&
+		r.AlbumArtist == "" && r.Genre == "" && r.Year == "" &&
+		r.TrackNumber == "" && r.DiscNumber == ""
 }
 
 // ParsedBundle is what Save accepts and Load returns.

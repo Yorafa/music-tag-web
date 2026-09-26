@@ -89,6 +89,10 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   const clearDuplicates = useWorklistStore((s) => s.clearDuplicates);
 
   const [parseOpen, setParseOpen] = useState(false);
+  // Kept here, not in the modal, so re-opening does not start from an
+  // empty pattern: one downloader's naming convention does not change
+  // between batches.
+  const [parsePattern, setParsePattern] = useState('');
   const [batchEditOpen, setBatchEditOpen] = useState(false);
   const [tidyOpen, setTidyOpen] = useState(false);
   const [scrapePopoverOpen, setScrapePopoverOpen] = useState(false);
@@ -608,7 +612,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
             setParseOpen(true);
           }}
           className="h-8 gap-1 text-xs"
-          title="从文件名规则提取艺术家与标题"
+          title="按你下载时的命名预填标签，供后续刮削比对"
         >
           <FileText className="w-3.5 h-3.5 text-muted-foreground" />
           <span>解析文件名</span>
@@ -781,6 +785,8 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         open={parseOpen}
         onOpenChange={setParseOpen}
         selectedPaths={selectedIds.length > 0 ? selectedIds : rows.map((r) => r.fullPath)}
+        initialPattern={parsePattern}
+        onPatternChange={setParsePattern}
       />
 
       {/* Duplicate result panel — the same verdicts now shown as row badges,

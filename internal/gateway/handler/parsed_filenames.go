@@ -42,13 +42,26 @@ const MaxPreviewRows = 5000
 // PreviewParseFilenames handles POST /api/tag/preview_parse_filenames/.
 //
 //	{
-//	  "paths":   ["album/Artist - Title.flac", ...],   // relative to MUSIC_DIR
-//	  "options": {"separator": "\\s*-\\s*", "fallback_regex": "..."} // optional
+//	  "paths":   ["album/Artist - Album - 01 - Title.flac", ...], // relative to MUSIC_DIR
+//	  "options": {
+//	    "separator": "\\s*-\\s*",                                  // optional
+//	    "pattern":   "^(?P<artist>.+?) - (?P<album>.+?) - ...$"       // optional
+//	  }
 //	}
 //
 //	→ 200 OK { token, results: [...same shape as cache.ParsedResult...] }
-//	→ 400 Bad  if paths is missing / empty / over MaxPreviewRows.
+//	→ 400 Bad  if paths is missing / empty / over MaxPreviewRows, or the
+//	           pattern does not compile / names a field that does not exist.
 //	→ 422 Unprocessable if any path fails SafeJoin (suspicious payload).
+//
+// # Why a bad pattern is a 400 and not a per-row unparsable
+//
+// The pattern used to be compiled inside the per-file loop, so a typo
+// turned every row unparsable and the response said nothing about why —
+// 5000 files, one silent mistake. It is now compiled once, here, and the
+// error names the offending group and lists the fields that exist. The
+// preview is worthless with a broken pattern, so failing the request is
+// more useful than returning a table of blanks.
 func PreviewParseFilenames(c *gin.Context) {
 	var req struct {
 		Paths   []string           `json:"paths" binding:"required"`
@@ -67,6 +80,15 @@ func PreviewParseFilenames(c *gin.Context) {
 		return
 	}
 
+	// Compile before touching any path: the pattern is the one input a
+	// typo can ruin silently, and the error is worth reporting on its own
+	// rather than as 5000 unparsable rows.
+	pattern, err := utils.CompilePattern(req.Options.Pattern)
+	if err != nil {
+		Failure(c, err.Error())
+		return
+	}
+
 	root := utils.MusicRoot()
 	results := make([]cache.ParsedResult, 0, len(req.Paths))
 	for _, rel := range req.Paths {
@@ -80,16 +102,22 @@ func PreviewParseFilenames(c *gin.Context) {
 			})
 			return
 		}
-		parsed := utils.PortParseFilename(stripDir(abs), req.Options)
+		parsed := utils.PortParseFilenameCompiled(stripDir(abs), req.Options, pattern)
 		status := parsed.Status
 		if status == "" {
 			status = utils.StatusUnparsable
 		}
 		results = append(results, cache.ParsedResult{
-			Path:   abs,
-			Artist: parsed.Artist,
-			Title:  parsed.Title,
-			Status: status,
+			Path:        abs,
+			Title:       parsed.Title,
+			Artist:      parsed.Artist,
+			Album:       parsed.Album,
+			AlbumArtist: parsed.AlbumArtist,
+			Genre:       parsed.Genre,
+			Year:        parsed.Year,
+			TrackNumber: parsed.TrackNumber,
+			DiscNumber:  parsed.DiscNumber,
+			Status:      status,
 		})
 	}
 
@@ -109,9 +137,15 @@ func PreviewParseFilenames(c *gin.Context) {
 // ambiguity resolution — if the user typed a new artist in the modal
 // for a row, that override wins over the parsed value).
 type ApplyOverwrite struct {
-	Path   string `json:"path"`
-	Artist string `json:"artist,omitempty"`
-	Title  string `json:"title,omitempty"`
+	Path        string `json:"path"`
+	Title       string `json:"title,omitempty"`
+	Artist      string `json:"artist,omitempty"`
+	Album       string `json:"album,omitempty"`
+	AlbumArtist string `json:"albumartist,omitempty"`
+	Genre       string `json:"genre,omitempty"`
+	Year        string `json:"year,omitempty"`
+	TrackNumber string `json:"tracknumber,omitempty"`
+	DiscNumber  string `json:"discnumber,omitempty"`
 }
 
 // ApplyParsedFilenames handles POST /api/tag/apply_parsed_filenames/.
@@ -177,17 +211,37 @@ func ApplyParsedFilenames(c *gin.Context) {
 		}
 		row.Path = safe
 		if ov, ok := ovrByPath[safe]; ok {
-			if ov.Artist != "" {
-				row.Artist = ov.Artist
+			// A non-empty override replaces the parsed value; an empty one
+			// leaves it alone. That is the whole semantic, and it is why
+			// this path cannot delete a tag: there is no way to say "clear
+			// it" here, by design. Clearing is the batch editor's job
+			// (see handler.tagIntent for the wire shape it uses).
+			overrode := false
+			for _, f := range []struct {
+				dst *string
+				val string
+			}{
+				{&row.Title, ov.Title},
+				{&row.Artist, ov.Artist},
+				{&row.Album, ov.Album},
+				{&row.AlbumArtist, ov.AlbumArtist},
+				{&row.Genre, ov.Genre},
+				{&row.Year, ov.Year},
+				{&row.TrackNumber, ov.TrackNumber},
+				{&row.DiscNumber, ov.DiscNumber},
+			} {
+				if f.val != "" {
+					*f.dst = f.val
+					overrode = true
+				}
 			}
-			if ov.Title != "" {
-				row.Title = ov.Title
-			}
-			// Overrides do not flip an "unparsable" to "ok" — the worker
-			// still skips it. This is intentional: if the file wasn't
-			// parsed at preview, the user is overriding blindly.
-			// Future: surface "override applied to unparsable" badge.
-			if row.Status == utils.StatusUnparsable && (ov.Artist != "" || ov.Title != "") {
+			// A row the pattern could not read becomes writable once the
+			// user supplies a value by hand — the override IS the parse at
+			// that point, and the worker skips unparsable rows. The comment
+			// that used to sit here claimed the opposite of what the code
+			// did, which is worse than either behaviour: it would have
+			// stopped the next reader from fixing the bug.
+			if overrode && row.Status == utils.StatusUnparsable {
 				row.Status = utils.StatusOK
 			}
 		}

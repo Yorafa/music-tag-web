@@ -27,13 +27,26 @@ func TestParseFilenameContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fixture %s: %v (run from repo root, not inside the package dir)", path, err)
 	}
+	// Expected carries every field the parser can fill. A field absent from
+	// the fixture decodes as "", which is also what "the pattern did not
+	// capture it" produces — so an expectation that is accidentally spelled
+	// wrong shows up as a mismatch rather than passing silently.
 	type Expected struct {
-		Artist string `json:"artist"`
-		Title  string `json:"title"`
-		Status string `json:"status"`
+		Title       string `json:"title"`
+		Artist      string `json:"artist"`
+		Album       string `json:"album"`
+		AlbumArtist string `json:"albumartist"`
+		Genre       string `json:"genre"`
+		Year        string `json:"year"`
+		TrackNumber string `json:"tracknumber"`
+		DiscNumber  string `json:"discnumber"`
+		Status      string `json:"status"`
 	}
 	type Case struct {
-		Input    string   `json:"input"`
+		Input string `json:"input"`
+		// Pattern is optional: absent means the default positional split,
+		// which is what the pre-pattern entries all exercise.
+		Pattern  string   `json:"pattern"`
 		Expected Expected `json:"expected"`
 	}
 	var cases []Case
@@ -44,14 +57,23 @@ func TestParseFilenameContract(t *testing.T) {
 		t.Errorf("fixture has only %d entries — plan § C.2 calls for 200+; expand before commit", len(cases))
 	}
 	for i, c := range cases {
-		got := PortParseFilename(c.Input, ParseOptions{})
-		if got.Artist != c.Expected.Artist || got.Title != c.Expected.Title || got.Status != c.Expected.Status {
+		// Compile once per case rather than per field: the pattern is
+		// validated here so a fixture entry with a bad group name fails
+		// loudly instead of quietly parsing nothing.
+		re, err := CompilePattern(c.Pattern)
+		if err != nil {
+			t.Errorf("case[%d] %q: pattern does not compile: %v", i, c.Input, err)
+			continue
+		}
+		got := PortParseFilenameCompiled(c.Input, ParseOptions{}, re)
+		want := c.Expected
+		if got.Title != want.Title || got.Artist != want.Artist ||
+			got.Album != want.Album || got.AlbumArtist != want.AlbumArtist ||
+			got.Genre != want.Genre || got.Year != want.Year ||
+			got.TrackNumber != want.TrackNumber || got.DiscNumber != want.DiscNumber ||
+			got.Status != want.Status {
 			t.Errorf(
-				"case[%d] %q\ngot  artist=%q title=%q status=%q\nwant artist=%q title=%q status=%q",
-				i, c.Input,
-				got.Artist, got.Title, got.Status,
-				c.Expected.Artist, c.Expected.Title, c.Expected.Status,
-			)
+				"case[%d] %q\ngot  %+v\nwant %+v", i, c.Input, got, want)
 		}
 	}
 }

@@ -73,7 +73,7 @@
 | 目录递归扫描 | ✅ | `internal/tasks/scanner.go`（递归，symlink-aware） |
 | 多维度排序（文件名 / 大小 / 更新时间） | 🚧 | `frontend/src/store/useBrowserStore.ts` 定义了 `sortField: 'name'\|'size'\|'update_time'` + `setSort` / `setSortDir` + 旧 key 迁移，但**没有任何组件订阅它**（该 store 目前只被 `HomePage` / `DirPickerDrawer` 用来读 `filePath`）。排序状态在，排序 UI 不在 |
 | 文件按 艺术家 / 专辑 分组 | ✅ | `frontend/src/store/useWorklistStore.ts` (grouping + `worklist.grouping.v1`) + `workstation/WorkstationTable.tsx` (分组渲染) + `workstation/WorkstationToolbar.tsx` (chip row). 详见 `docs/plans/Unfinished-Features.md § C.3` |
-| 文件名解析（从 `Artist - Title.flac` 自动提取） | ✅ | `internal/utils/filenames.go` (regex source-of-truth) + `internal/cache/parsed_preview.go` (10-min TTL cache) + `internal/tasks/parsedfilenames.go` (asynq worker) + `frontend/src/utils/parseFilename.testdata.json` (共享 fixture) + `scraper/ParseFilenamesModal.tsx`. 详见 `docs/plans/Unfinished-Features.md § C.2` |
+| 文件名解析预填（`Artist - Title.flac` → 8 个 tag；可自定义 `(?P<field>...)` 命名模板） | ✅ | `internal/utils/filenames.go` (regex source-of-truth) + `internal/cache/parsed_preview.go` (10-min TTL cache) + `internal/tasks/parsedfilenames.go` (asynq worker) + `frontend/src/utils/parseFilename.testdata.json` (共享 fixture) + `scraper/ParseFilenamesModal.tsx` + `scraper/parseOverride.ts` (override 构造). 只填不删：清除是「批量编辑标签」的 `null` 契约 |
 
 ## 6. 文本清洗 / 编码
 

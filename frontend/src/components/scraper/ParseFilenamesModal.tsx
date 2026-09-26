@@ -6,22 +6,29 @@
  * initialisation) collapses cleanly.
  */
 
-// C.2 Filename Parse round-trip modal. Triggered from the worklist's
-// "解析文件名" button. The flow:
+// 解析文件名 round-trip modal. Triggered from the worklist's
+// 「解析文件名」 button. The flow:
 //
 //   1. Mount → POST /api/tag/preview_parse_filenames/ for every
 //      selected row's path → token + per-row ParsedPreviewRow[].
-//   2. Render scrollable table: file basename + parsed Artist (editable
-//      override) + parsed Title (editable override) + status badge.
-//   3. User types into override inputs → override state updates.
+//   2. Render scrollable table: file basename + one editable cell per
+//      field the parser read something into + status badge.
+//   3. User types into override cells → override state updates.
 //   4. Click "Apply" → POST /api/tag/apply_parsed_filenames/ with the
 //      token + per-row overrides. Backend enqueues the async worker,
 //      returns the task_id which we surface as a toast.
 //
-// Override semantics: an empty override field inherits the parsed value
-// (so the user only types rows they want to change). A non-empty
-// override REPLACES the parsed value on the backend. Overriding an
-// "unparsable" row's artist OR title flips status to "ok" server-side.
+// The modal is mounted with an optional starting pattern and reports
+// one back up so the toolbar can re-open it with whatever the user
+// last typed (see WorkstationToolbar's `parsePattern` state) — a
+// downloader's naming convention does not change between batches, and
+// re-typing a regex per batch is the kind of friction that makes
+// people stop using the feature.
+//
+// Override semantics live in parseOverride.ts and are tested there. The
+// short version: an empty cell inherits the parsed value, a filled one
+// replaces it, and there is no way to clear a tag from here — the batch
+// editor owns deleting.
 //
 // Token expiry (401 "preview_expired") is caught here and re-prompts
 // the user with a fresh preview by re-calling the parent's onReapply
@@ -46,8 +53,21 @@ import {
   previewParseFilenames,
   applyParsedFilenames,
   type ParsedPreviewRow,
-  type ParseApplyOverride,
 } from '@/api/client';
+import {
+  PARSE_TAG_LABELS,
+  PATTERN_PLACEHOLDER,
+  activeFields,
+  buildOverrides,
+  changedCellCount,
+  changedRowCount,
+  draftFor,
+  hasUnreadable,
+  patternProblem,
+  seedDrafts,
+  type OverrideDrafts,
+  type ParseTagField,
+} from './parseOverride';
 import { cn } from '@/lib/utils';
 
 interface ParseFilenamesModalProps {
@@ -55,21 +75,23 @@ interface ParseFilenamesModalProps {
   onOpenChange: (open: boolean) => void;
   /** Selected row IDs (== fullPath under MUSIC_DIR). */
   selectedPaths: string[];
-}
-
-interface RowOverrideDraft {
-  artist: string;
-  title: string;
+  /** Starting pattern. Kept by the caller so a re-open keeps it. */
+  initialPattern?: string;
+  /** Called whenever the pattern changes, so the caller can re-open with it. */
+  onPatternChange?: (pattern: string) => void;
 }
 
 export function ParseFilenamesModal({
   open,
   onOpenChange,
   selectedPaths,
+  initialPattern = '',
+  onPatternChange,
 }: ParseFilenamesModalProps) {
   const [token, setToken] = useState<string | null>(null);
   const [results, setResults] = useState<ParsedPreviewRow[]>([]);
-  const [overrides, setOverrides] = useState<Record<string, RowOverrideDraft>>({});
+  const [overrides, setOverrides] = useState<OverrideDrafts>({});
+  const [pattern, setPattern] = useState(initialPattern);
   const [loading, setLoading] = useState<'preview' | 'apply' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -77,6 +99,10 @@ export function ParseFilenamesModal({
   // for this batch, POST the preview path. Re-running on every open
   // would re-consume 10-min TTL slots on the server; we keep a
   // sticky token until the modal closes or the user clicks Apply.
+  //
+  // The preview is keyed on the pattern too, so editing it and hitting
+  // "重新解析" invalidates the token rather than applying overrides that
+  // were typed against a table the user can no longer see.
   useEffect(() => {
     if (!open) {
       // Drop state on close so a re-open forces a fresh preview.
@@ -95,17 +121,12 @@ export function ParseFilenamesModal({
       try {
         const { token: t, results: rs } = await previewParseFilenames(
           selectedPaths,
+          { pattern: pattern.trim() || undefined },
         );
         if (cancelled) return;
         setToken(t);
         setResults(rs);
-        // Pre-seed overrides with empty values so React keys stay stable
-        // even before the user types anything.
-        const seed: Record<string, RowOverrideDraft> = {};
-        for (const r of rs) {
-          seed[r.path] = { artist: '', title: '' };
-        }
-        setOverrides(seed);
+        setOverrides(seedDrafts(rs));
       } catch (e: unknown) {
         if (cancelled) return;
         const msg = e instanceof Error ? e.message : String(e);
@@ -118,24 +139,24 @@ export function ParseFilenamesModal({
     return () => {
       cancelled = true;
     };
+    // `pattern` is intentionally absent: including it would re-preview
+    // on every keystroke, burning a TTL slot per character. The re-parse
+    // button is the explicit trigger (it clears the token first).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, token, selectedPaths]);
 
-  const overridesForApply = useMemo<ParseApplyOverride[]>(() => {
-    const list: ParseApplyOverride[] = [];
-    for (const r of results) {
-      const draft = overrides[r.path];
-      if (!draft) continue;
-      const trimmedArtist = draft.artist.trim();
-      const trimmedTitle = draft.title.trim();
-      if (trimmedArtist === '' && trimmedTitle === '') continue;
-      list.push({
-        path: r.path,
-        ...(trimmedArtist ? { artist: trimmedArtist } : {}),
-        ...(trimmedTitle ? { title: trimmedTitle } : {}),
-      });
-    }
-    return list;
-  }, [overrides, results]);
+  const overridesForApply = useMemo(
+    () => buildOverrides(results, overrides),
+    [overrides, results],
+  );
+  const changedRows = useMemo(
+    () => changedRowCount(results, overrides),
+    [overrides, results],
+  );
+  const changedCells = useMemo(() => changedCellCount(overrides), [overrides]);
+  const fields = useMemo(() => activeFields(results), [results]);
+  const unreadable = useMemo(() => hasUnreadable(results), [results]);
+  const patternErr = useMemo(() => patternProblem(pattern), [pattern]);
 
   const handleApply = async () => {
     if (!token) return;
@@ -164,21 +185,33 @@ export function ParseFilenamesModal({
 
   const setOverrideField = (
     path: string,
-    field: 'artist' | 'title',
+    field: ParseTagField,
     value: string,
   ) => {
     setOverrides((prev) => ({
       ...prev,
-      [path]: {
-        ...(prev[path] ?? { artist: '', title: '' }),
-        [field]: value,
-      },
+      [path]: { ...draftFor(prev, path), [field]: value },
     }));
+  };
+
+  // Dropping the token is what makes the effect above re-run, so this is
+  // also what discards the table the old pattern produced.
+  const handleReparse = () => {
+    onPatternChange?.(pattern);
+    setToken(null);
+    setResults([]);
+    setOverrides({});
+    setError(null);
+  };
+
+  const handlePatternEdit = (v: string) => {
+    setPattern(v);
+    onPatternChange?.(v);
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-w-5xl">
         <DialogHeader>
           <DialogTitle>
             <span className="inline-flex items-center gap-2">
@@ -187,11 +220,46 @@ export function ParseFilenamesModal({
             </span>
           </DialogTitle>
           <DialogDescription>
-            对当前选中的 {selectedPaths.length} 个文件执行 C.2 解析预览;任何字段都可手动覆盖,再点击「应用」写入 Artist + Title 标签。
+            下载来的文件常常还没有标签，刮削也就无从比对。点「预览」先看解析结果，
+            任何一格都能手动改；确认后点「应用」写入，刮削就有东西可匹配了。
+            解析只填，不删——要清空标签请用「批量编辑标签」。
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3 py-2">
+          <div className="flex items-start gap-2">
+            <Input
+              className="h-8 text-sm font-mono"
+              value={pattern}
+              placeholder={PATTERN_PLACEHOLDER}
+              onChange={(e) => handlePatternEdit(e.target.value)}
+              aria-label="命名模板"
+              spellCheck={false}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0 h-8"
+              onClick={handleReparse}
+              disabled={loading !== null || selectedPaths.length === 0 || patternErr !== null}
+              data-testid="parse-filenames-reparse"
+            >
+              重新解析
+            </Button>
+          </div>
+          {patternErr && (
+            <div className="text-xs text-destructive" data-testid="parse-filenames-pattern-error">
+              {patternErr}
+            </div>
+          )}
+          {pattern.trim() === '' && (
+            <div className="text-xs text-muted-foreground">
+              留空则按 <code className="font-mono">艺术家 - 标题</code> 拆两段。
+              命名更规整时可以填一条正则，用 <code className="font-mono">{'(?P<album>...)'}</code>{' '}
+              这样的命名分组指定每段对应哪个字段。
+            </div>
+          )}
+
           {loading === 'preview' && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -210,51 +278,55 @@ export function ParseFilenamesModal({
           )}
 
           {results.length > 0 && (
-            <div
-              className="max-h-[60vh] overflow-y-auto rounded border border-border"
-              data-testid="parse-filenames-table"
-            >
+            <>
               <div
-                className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto] gap-2 px-3 py-2 text-xs font-medium text-muted-foreground border-b border-border sticky top-0 bg-surface-1"
+                className="max-h-[55vh] overflow-y-auto rounded border border-border"
+                data-testid="parse-filenames-table"
               >
-                <div>文件名</div>
-                <div>Artist (覆盖)</div>
-                <div>Title (覆盖)</div>
-                <div>状态</div>
-              </div>
-              {results.map((r) => (
                 <div
-                  key={r.path}
-                  className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto] gap-2 px-3 py-2 items-center text-sm border-b border-border last:border-b-0"
+                  className="grid gap-2 px-3 py-2 text-xs font-medium text-muted-foreground border-b border-border sticky top-0 bg-surface-1"
+                  style={{ gridTemplateColumns: gridTemplate(fields.length) }}
                 >
-                  <div
-                    className="truncate font-mono text-xs"
-                    title={r.path}
-                  >
-                    {basename(r.path)}
-                  </div>
-                  <Input
-                    className="h-8 text-sm"
-                    value={overrides[r.path]?.artist ?? ''}
-                    placeholder={r.artist ?? ''}
-                    onChange={(e) =>
-                      setOverrideField(r.path, 'artist', e.target.value)
-                    }
-                    aria-label={`Artist 覆盖 for ${basename(r.path)}`}
-                  />
-                  <Input
-                    className="h-8 text-sm"
-                    value={overrides[r.path]?.title ?? ''}
-                    placeholder={r.title ?? ''}
-                    onChange={(e) =>
-                      setOverrideField(r.path, 'title', e.target.value)
-                    }
-                    aria-label={`Title 覆盖 for ${basename(r.path)}`}
-                  />
-                  <StatusBadge status={r.status} />
+                  <div>文件名</div>
+                  {fields.map((f) => (
+                    <div key={f}>{fieldLabel(f)}</div>
+                  ))}
+                  <div>状态</div>
                 </div>
-              ))}
-            </div>
+                {results.map((r) => (
+                  <div
+                    key={r.path}
+                    className="grid gap-2 px-3 py-2 items-center text-sm border-b border-border last:border-b-0"
+                    style={{ gridTemplateColumns: gridTemplate(fields.length) }}
+                  >
+                    <div className="truncate font-mono text-xs" title={r.path}>
+                      {basename(r.path)}
+                    </div>
+                    {fields.map((f) => (
+                      <Input
+                        key={f}
+                        className="h-8 text-sm"
+                        value={draftFor(overrides, r.path)[f]}
+                        placeholder={r[f] ?? ''}
+                        onChange={(e) => setOverrideField(r.path, f, e.target.value)}
+                        aria-label={`${fieldLabel(f)} 覆盖 for ${basename(r.path)}`}
+                      />
+                    ))}
+                    <StatusBadge status={r.status} />
+                  </div>
+                ))}
+              </div>
+              {unreadable && (
+                <div className="text-xs text-muted-foreground">
+                  标为 ambiguous / unparsable 的行解析不出结果，直接在上表里手填即可照常写入。
+                </div>
+              )}
+              {changedCells > 0 && (
+                <div className="text-xs text-muted-foreground">
+                  已手动改动 {changedCells} 格（{changedRows} 行），留空的格子沿用解析值。
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -271,7 +343,7 @@ export function ParseFilenamesModal({
               </>
             ) : (
               <>
-                应用 ({overridesForApply.length} 个覆盖 / {results.length} 行)
+                应用 ({changedRows} 个覆盖 / {results.length} 行)
               </>
             )}
           </Button>
@@ -279,6 +351,19 @@ export function ParseFilenamesModal({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** One flexible column per active field, plus the file name, the status
+ *  badge, and their gaps. Kept as a template string so the header and
+ *  every row are guaranteed to line up. */
+function gridTemplate(fieldCount: number): string {
+  return ['minmax(0,1.4fr)', ...Array(fieldCount).fill('minmax(0,1fr)'), 'auto'].join(
+    ' ',
+  );
+}
+
+function fieldLabel(f: ParseTagField): string {
+  return PARSE_TAG_LABELS[f];
 }
 
 function basename(p: string): string {

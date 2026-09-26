@@ -319,34 +319,68 @@ export async function downloadToLibrary(params: {
 // a deploy problem; the client just stops asking. Overrides belong in
 // `data/sources/*.yaml` and take effect on plugin-container restart.
 
-// ─── C.2 Filename Parse: preview → apply round-trip ────────────────
+// ─── 解析文件名: preview → apply round-trip ─────────────────────────
 
-/** Mirrors `internal/utils.ParseOptions` + `status: 'ok'|'ambiguous'|'unparsable'`.
+/** The tag fields the parser can fill, in the order the modal shows them.
+ *
+ *  Mirrors `internal/utils.PatternFieldNames`, which is the server's
+ *  allow-list. A pattern naming anything else is rejected there, so this
+ *  list and that one have to move together. */
+export const PARSE_TAG_FIELDS = [
+  'title',
+  'artist',
+  'album',
+  'albumartist',
+  'genre',
+  'year',
+  'tracknumber',
+  'discnumber',
+] as const;
+
+export type ParseTagField = (typeof PARSE_TAG_FIELDS)[number];
+
+/** Chinese labels for the fields, for the modal's column headers. */
+export const PARSE_TAG_LABELS: Record<ParseTagField, string> = {
+  title: '标题',
+  artist: '艺术家',
+  album: '专辑',
+  albumartist: '专辑艺术家',
+  genre: '流派',
+  year: '年份',
+  tracknumber: '音轨',
+  discnumber: '碟片',
+};
+
+/** Mirrors `internal/utils.ParseOptions`.
+ *
  *  `paths` are RELATIVE to MUSIC_DIR on the server (server-side rejects
- *  `'..'` escapes via SafeJoin). */
+ *  `'..'` escapes via SafeJoin).
+ *
+ *  `pattern` names its capture groups with Go's `(?P<field>...)` syntax
+ *  and each name must be one of PARSE_TAG_FIELDS; anything else is a 400
+ *  that names the offender. Without a pattern the server splits on the
+ *  separator and reads positionally: first part artist, rest title. */
 export interface ParseOptions {
   separator?: string;
-  fallbackRegex?: string;
+  pattern?: string;
 }
 
 /** Mirrors `internal/cache.ParsedResult`. `path` is the ABSOLUTE
  *  server-side path returned by preview (used as the key for overrides
  *  in apply). The frontend never constructs paths itself. */
-export interface ParsedPreviewRow {
+export interface ParsedPreviewRow extends Partial<Record<ParseTagField, string>> {
   path: string;
-  artist?: string;
-  title?: string;
   status: 'ok' | 'ambiguous' | 'unparsable';
 }
 
-/** One override entry keyed by path (returned by preview). Empty
- *  artist/title fields fall back to the parsed values; a non-empty
- *  override REPLACES (not merges) the parsed value. */
-export interface ParseApplyOverride {
-  path: string;
-  artist?: string;
-  title?: string;
-}
+/** One override entry keyed by path (returned by preview). An empty
+ *  field falls back to the parsed value; a non-empty override REPLACES
+ *  (not merges) it. There is deliberately no way to CLEAR a tag from
+ *  here — an override that says nothing is not a request to delete
+ *  something, and the batch editor owns that. */
+export type ParseApplyOverride = { path: string } & Partial<
+  Record<ParseTagField, string>
+>;
 
 /** POST /api/tag/preview_parse_filenames/ — runs the filename parser
  *  server-side and returns a one-shot preview token. Frontend stores
@@ -385,11 +419,12 @@ export async function previewParseFilenames(
 
 /** POST /api/tag/apply_parsed_filenames/ — consumes the token, applies
  *  per-row overrides, enqueues `TypeApplyParsedFilenames` worker, and
- *  returns the asynq task_id. The worker writes Artist + Title to
- *  each row's tag (no rename, no cover, no sidecar — C.2 stays scoped.
- *  Override an "unparsable" row's artist OR title; the backend will
- *  flip status to "ok" (the user's manual override is treated as
- *  authoritative even when the filename couldn't be parsed). */
+ *  returns the asynq task_id. The worker writes every field the row
+ *  carries — no rename, no cover, no sidecar — and a field the row does
+ *  not carry is left alone, so this can fill in what a file is missing
+ *  but never delete a tag. Override any field of an "unparsable" row;
+ *  the backend flips status to "ok" (the typed-in value is
+ *  authoritative even when the name could not be read). */
 export async function applyParsedFilenames(
   token: string,
   overrides: ParseApplyOverride[] = [],

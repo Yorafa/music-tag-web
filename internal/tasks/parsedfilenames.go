@@ -2,13 +2,17 @@
 // worker. Triggered asynchronously by handler.ApplyParsedFilenames.
 //
 // Scope (deliberately narrow):
-//   - Writes ONLY Artist (single) + Title to each file's tag.
+//   - Writes the tag fields the parser produced, and nothing else.
+//   - A field the parser left empty is not written, so this can fill in
+//     what a file is missing but can never delete a tag. Clearing is the
+//     batch editor's job and goes through a different endpoint on purpose:
+//     "the name said nothing about an album" and "delete the album" must
+//     not be the same request.
 //   - Skips "unparsable" rows silently.
 //   - NO rename, NO sidecar lyrics/cover, NO template substitution.
 //     The handler-level applyFileUpdate covers those; the worker is
-//     scoped to bulk filename-application of the two core tagging
-//     fields so a 5000-row batch finishes in seconds rather than
-//     seconds-per-row with cover fetches.
+//     scoped to bulk application of parsed fields so a 5000-row batch
+//     finishes in seconds rather than seconds-per-row with cover fetches.
 //
 // Defence-in-depth: every path is re-SafeJoined under MUSIC_DIR
 // before tag.Write even though the handler already did it. A future
@@ -54,8 +58,8 @@ func HandleApplyParsedFilenames(ctx context.Context, t Task) error {
 			failed++
 			continue
 		}
-		if row.Artist == "" && row.Title == "" {
-			// Frontend may legitimately clear fields; treat as no-op.
+		if row.Empty() {
+			// Nothing was parsed and nothing was typed in: a no-op row.
 			skipped++
 			continue
 		}
@@ -78,9 +82,27 @@ func HandleApplyParsedFilenames(ctx context.Context, t Task) error {
 			}
 			upd.Artist = cleaned
 		}
-		if row.Title != "" {
-			t := row.Title
-			upd.Title = &t
+		// Every remaining field is "write it if the row carries a value".
+		// Each is a pointer into a local, which is fine: tag.Write reads
+		// the values before returning, and each iteration of this loop
+		// gets its own.
+		for _, f := range []struct {
+			val string
+			dst **string
+		}{
+			{row.Title, &upd.Title},
+			{row.Album, &upd.Album},
+			{row.AlbumArtist, &upd.AlbumArtist},
+			{row.Genre, &upd.Genre},
+			{row.Year, &upd.Year},
+			{row.TrackNumber, &upd.TrackNumber},
+			{row.DiscNumber, &upd.DiscNumber},
+		} {
+			if f.val == "" {
+				continue
+			}
+			v := f.val
+			*f.dst = &v
 		}
 		if err := tag.Write(safe, upd); err != nil {
 			log.Printf("apply_parsed_filenames: write %s: %v", safe, err)
