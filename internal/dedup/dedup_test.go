@@ -171,7 +171,17 @@ func TestCheck_RecordsWhichStagesRan(t *testing.T) {
 		if got.Verdict != VerdictUnique {
 			t.Fatalf("Verdict = %q, want unique so every stage runs", got.Verdict)
 		}
-		want := []string{stageFilename, stageHash, stageMeta}
+		// The fingerprint stage is conditional on fpcalc being installed, so
+		// the expected list is built from what this host can actually run.
+		// Hardcoding it either way made this test pass only on hosts where
+		// the stage was switched off — which is every host it was written
+		// on, and so the assertion that the stage never appeared was never
+		// actually evidence of anything.
+		want := []string{stageFilename, stageHash}
+		if newChecker(t, root).fpcalcAvailable() {
+			want = append(want, stageFingerprint)
+		}
+		want = append(want, stageMeta)
 		if strings.Join(got.Run, ",") != strings.Join(want, ",") {
 			t.Errorf("Run = %v, want %v", got.Run, want)
 		}
@@ -192,6 +202,12 @@ func TestCheck_RecordsWhichStagesRan(t *testing.T) {
 		}
 	})
 	t.Run("DisableFingerprint drops the fingerprint stage", func(t *testing.T) {
+		// Only meaningful where the stage could have run at all; on a host
+		// without fpcalc the option is a no-op and this would pass
+		// vacuously.
+		if !newChecker(t, root).fpcalcAvailable() {
+			t.Skip("fpcalc not installed; DisableFingerprint has nothing to disable")
+		}
 		got := newChecker(t, root).Check(context.Background(), mine, Options{DisableFingerprint: true})
 		if contains(got.Run, stageFingerprint) {
 			t.Errorf("Run = %v, want no %q", got.Run, stageFingerprint)

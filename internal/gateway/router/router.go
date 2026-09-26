@@ -64,7 +64,6 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		authed.POST("/music_id3/", handler.MusicID3)
 		authed.POST("/update_id3/", handler.UpdateID3)
 		authed.POST("/batch_update_id3/", handler.BatchUpdateID3)
-		authed.POST("/batch_auto_update_id3/", handler.BatchAutoUpdateID3)
 		authed.POST("/fetch_id3_by_title/", handler.FetchID3ByTitle)
 		authed.POST("/fetch_lyric/", handler.FetchLyric)
 		authed.POST("/tidy_folder/", handler.TidyFolder)
@@ -126,8 +125,6 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// these three; /task2/ has no in-app caller and is POST-only now.
 		authed.POST("/clear_celery/", handler.ClearAsyncTasks)
 		authed.GET("/active_queue/", handler.ActiveQueue) // read-only
-		authed.POST("/task1/", handler.TaskScan)
-		authed.POST("/task2/", handler.TaskClear)
 		authed.POST("/full_scan_folder/", handler.FullScanFolder)
 		// Incremental scan. The handler and the worker-side registration
 		// (tasks.NewUpdateScanMux → TypeUpdateScanFolder) both existed, but
@@ -139,7 +136,6 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// reason as its neighbours — it mutates the filesystem.
 		authed.POST("/prune_empty_folders/", handler.PruneEmptyFolders)
 		// Task record list
-		authed.GET("/record/", handler.ListTaskRecords)
 		// Operation history audit log endpoints
 		authed.GET("/operation_logs/", handler.ListOperationLogs)
 		authed.POST("/operation_logs/clear/", handler.ClearOperationLogs)

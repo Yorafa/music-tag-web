@@ -186,8 +186,14 @@ type ScrapeStatus = 'pending' | 'scraped' | 'failed';
 Filter UI: «全部 / 待刮 / 已刮 / 失败» — `已刮` covers `scraped`; `失败` shown explicitly so failures can be reviewed and retried.
 
 Status transition triggers:
-- Batch `POST /api/batch_auto_update_id3/` success → set `scraped`.
-- Batch `POST /api/batch_auto_update_id3/` failure → set `failed`.
+- Batch `POST /api/batch_update_id3/` (grouped per directory) success → set `scraped`.
+- Batch `POST /api/batch_update_id3/` failure → set `failed`.
+
+The design originally named `POST /api/batch_auto_update_id3/` (an asynq
+worker task) for these two transitions. That endpoint was removed: the worker
+read its worklist from `task_taskrecord`, but nothing ever wrote rows there, so
+it processed 0 files per batch, and the frontend never called it. The
+synchronous per-directory `batch_update_id3/` is what actually runs.
 - Manual candidate apply from detail Dialog's `ScrapeResults` → set `scraped` regardless of source (any successful write marks `scraped`, so the user's mental model "已刮 = 写成功了" always holds).
 
 If the Worklist later moves to fully asynchronous scrape via the asynq worker, an intermediate `'scraping'` value can be appended (non-breaking, additive).

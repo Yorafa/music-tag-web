@@ -79,11 +79,6 @@ export async function batchUpdateId3(params: Record<string, unknown>) {
   return data;
 }
 
-export async function batchAutoUpdateId3(params: Record<string, unknown>) {
-  const { data } = await api.post('batch_auto_update_id3/', params);
-  return data;
-}
-
 export async function tidyFolder(params: Record<string, unknown>) {
   const { data } = await api.post('tidy_folder/', params);
   return data;

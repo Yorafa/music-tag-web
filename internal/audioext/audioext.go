@@ -37,7 +37,9 @@
 package audioext
 
 import (
+	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -107,6 +109,28 @@ func IsStreamableExt(dotted string) bool {
 		e = "." + e
 	}
 	return streamableExts[e]
+}
+
+// LibraryExtsHint renders the accepted library extensions as a stable,
+// comma-separated, dot-prefixed list, for user-facing messages.
+//
+// The set is derived from libraryExts rather than spelled out again so the
+// two cannot drift, and sorted so the output is deterministic — an error
+// message that reordered itself between runs reads as a different bug.
+// Kept short on purpose: this goes in an API response the UI shows verbatim,
+// so it names a few representatives and counts the rest.
+func LibraryExtsHint() string {
+	all := make([]string, 0, len(libraryExts))
+	for ext := range libraryExts {
+		all = append(all, "."+ext)
+	}
+	sort.Strings(all)
+	const shown = 8
+	if len(all) <= shown {
+		return strings.Join(all, " ")
+	}
+	return strings.Join(all[:shown], " ") +
+		fmt.Sprintf(" 等共 %d 种", len(all))
 }
 
 // IsStreamablePath reports whether path's extension is cache-servable.

@@ -7,7 +7,7 @@
 //     on its first line. The four-stage funnel in internal/dedup had never run
 //     against a real library.
 //
-//   - The index the funnel queries (music_track / music_folder) was only
+//   - The index the funnel queries (music_folder) was only
 //     populated by a 全盘扫描 button. With the button gone, the gateway has to
 //     maintain it itself, or the meta stage finds nothing and the hash stage
 //     falls back to walking the whole library per check.
@@ -75,9 +75,10 @@ var dedupDB *gorm.DB
 // cmd/gateway after db.Open, and deliberately optional.
 func SetDedupDB(d *gorm.DB) { dedupDB = d }
 
-// refreshIndexForDir scans dir's subtree into the music_track index, at most
-// once per directory per process. Errors are logged and swallowed: an
-// unwritten index costs dedup some speed, never a verdict.
+// refreshIndexForDir scans dir's subtree into the music_folder index, at
+// most once per directory per process. Errors are logged and swallowed: an
+// unwritten index costs dedup some speed, never a verdict — every dedup stage
+// falls back to a bounded filesystem walk.
 func refreshIndexForDir(ctx context.Context, filePath string) {
 	_, scanner := ensureDedupWire()
 	if scanner == nil || scanner.DB == nil {

@@ -6,8 +6,8 @@
 // tag.Read is used both over HTTP (POST /api/music_id3/ for frontend
 // hydrate / openEditor) and internally by:
 //
-//  1. internal/tasks/batchtag.go::batchAutoTag — worker batch scrape
-//  2. internal/tasks/tidy.go — folder tidy reads existing tags
+//  1. internal/tasks/tidy.go — folder tidy reads existing tags
+//  2. internal/dedup/dedup.go — the metadata stage reads the candidate
 //  3. internal/tag/writer.go::HandleSidecars — sidecar cover extraction
 //     when /api/update_id3/ arrives without AlbumImg
 //
@@ -84,8 +84,8 @@ const multiValueSep = "; "
 // {Title: "sample"}, the editor displayed "sample" as if it were the real
 // title, and a subsequent save wrote that fabrication over whatever the
 // file actually contained. A file we cannot read is a file we must not
-// pretend to know. Callers that need a display name already fall back to
-// the filename themselves (see internal/tasks/batchtag.go).
+// pretend to know. Callers that need a display name must fall back to
+// the filename themselves.
 func Read(path string) (*TagInfo, error) {
 	cfg, err := os.Stat(path)
 	if err != nil {

@@ -185,33 +185,3 @@ func sanitizeTidySeg(label, raw string) (string, error) {
 	}
 	return seg, nil
 }
-
-// ─── Cross-package helpers ─────────────────────────────────────────────────
-
-func baseName(p string) string { return filepath.Base(p) }
-
-func baseNameNoExt(p string) string {
-	b := filepath.Base(p)
-	if i := strings.LastIndex(b, "."); i > 0 {
-		return b[:i]
-	}
-	return b
-}
-
-func parentDir(p string) string {
-	d := filepath.Dir(p)
-	if d == "." {
-		return ""
-	}
-	return d
-}
-
-func asString(v interface{}) string {
-	if v == nil {
-		return ""
-	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return fmt.Sprintf("%v", v)
-}

@@ -84,7 +84,7 @@ internal/
 │   ├── grpc_adapter.go # gRPC client dial + keepalive
 │   ├── registry.go     # In-process plugin registry
 │   └── <name>/         # Per-source server.go (gRPC implementations)
-├── tasks/              # Asynq tasks (batchtag, tidy, scanner, yt_dl...)
+├── tasks/              # Asynq tasks (tidy, scanner, prune, yt_dl...)
 ├── tag/                # Tag I/O (reader.go, writer.go)
 ├── db/                 # GORM models + DB init
 ├── netguard/           # SSRF protection (ssrf.go)
@@ -125,7 +125,7 @@ Route groups:
 - `POST /api/music_id3/` — read tag
 - `POST /api/update_id3/` — write tag
 - `POST /api/batch_update_id3/` — batch write
-- `POST /api/batch_auto_update_id3/` — auto-scrape + batch write
+- `POST /api/batch_update_id3/` — auto-scrape + batch write（前端按目录分组提交）
 - `POST /api/fetch_id3_by_title/` — scrape single song
 - `POST /api/fetch_lyric/` — fetch lyrics
 - `POST /api/tidy_folder/` — folder organize

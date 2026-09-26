@@ -22,7 +22,7 @@
 |---|---|---|
 | 全格式音频 ID3 / Vorbis / APE tag 读 | ✅ | `internal/tag/reader.go`（通过 `bogem/id3v2` + `dhowden/tag` 做格式分发） |
 | 全格式 ID3 写 / 侧车歌词/封面 | ✅ | `internal/tag/writer.go`（lyric write + `HandleSidecars` 的 `is_save_lyrics_file` / `is_save_album_cover`） |
-| 批量编辑 | ✅ | `internal/gateway/handler/update.go` 中 `BatchUpdateID3` + `internal/tasks/batchtag.go`（asynq batch 状态机） |
+| 批量编辑 | ✅ | `internal/gateway/handler/update.go` 中 `BatchUpdateID3`（前端按目录分组提交；worker 侧 `tag:batch_auto` 链路已删除——它从不写入 `task_taskrecord` 行，处理数恒为 0，且前端无调用方） |
 | 单条编辑 | ✅ | `frontend/src/components/editor/TagEditor.tsx`（MusicTagInfo 实时表单） |
 | 列编辑（行内 inline） | 🚧 | 通过 selection+apply 实现批量编辑；per-row live-edit UI 仅支持单行 |
 

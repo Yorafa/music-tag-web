@@ -6,8 +6,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
 
-	"go-music-tag/internal/audit"
-	"go-music-tag/internal/db"
 	"go-music-tag/internal/taskclient"
 	"go-music-tag/internal/tasks"
 )
@@ -57,30 +55,7 @@ func ActiveQueue(c *gin.Context) {
 	})
 }
 
-// TaskScan handles GET /api/task1/ — enqueue a full_scan_folder task.
-// Matches Django's task1 get-handler that kicks off `full_scan_folder_task`.
-func TaskScan(c *gin.Context) {
-	enqueueTypedTask(c, tasks.TypeFullScanFolder, &tasks.FullScanPayload{
-		SubPaths: [][2]string{},
-	})
-}
-
-// TaskClear handles GET /api/task2/ — enqueue a clear_music task.
-func TaskClear(c *gin.Context) {
-	taskclient.Init()
-	_, err := taskclient.Enqueue(
-		asynq.NewTask(tasks.TypeClearMusic, nil,
-			asynq.Queue("default"), asynq.MaxRetry(1),
-		),
-	)
-	if err != nil {
-		Failure(c, err.Error())
-		return
-	}
-	Success(c, "success", nil)
-}
-
-// FullScanFolder handles GET /api/full_scan_folder/ — enqueue a full scan.
+// FullScanFolder handles POST /api/full_scan_folder/ — enqueue a full scan.
 func FullScanFolder(c *gin.Context) {
 	enqueueTypedTask(c, tasks.TypeFullScanFolder, &tasks.FullScanPayload{
 		SubPaths: [][2]string{},
@@ -108,25 +83,6 @@ func TidyFolder(c *gin.Context) {
 	})
 }
 
-// BatchAutoUpdateID3 handles POST /api/batch_auto_update_id3/ — enqueue the
-// batch-auto-tag task. Body: { batch, source_list: [], select_mode? }
-func BatchAutoUpdateID3(c *gin.Context) {
-	var req struct {
-		Batch      string   `json:"batch" binding:"required"`
-		SourceList []string `json:"source_list" binding:"required"`
-		SelectMode string   `json:"select_mode"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Failure(c, "invalid request: "+err.Error())
-		return
-	}
-	enqueueTypedTask(c, tasks.TypeBatchAutoTag, &tasks.BatchAutoTagPayload{
-		Batch:      req.Batch,
-		SourceList: req.SourceList,
-		SelectMode: req.SelectMode,
-	})
-}
-
 // PruneEmptyFolders handles POST /api/prune_empty_folders/ — enqueue a task
 // that deletes directories left empty by a tidy, a rename or a delete.
 //
@@ -151,65 +107,6 @@ func PruneEmptyFolders(c *gin.Context) {
 func UpdateScanFolder(c *gin.Context) {
 	enqueueTypedTask(c, tasks.TypeUpdateScanFolder, &tasks.FullScanPayload{
 		SubPaths: [][2]string{},
-	})
-}
-
-// ListTaskRecords handles GET /api/record/ — paginated TaskRecord list.
-// Mirrors Django's `applications.task.views.TaskModelViewSets.list`.
-// Query params: ?batch=&state=&page=&page_size=
-//
-// Note: the actual DB query is left to the P1.5 followup (depends on
-// initializing the gateway's DB handle). For now we return an empty list so
-// the endpoint stays callable.
-func ListTaskRecords(c *gin.Context) {
-	page, pageSize := clampPaging(
-		atoiOr(c.Query("page"), 1),
-		atoiOr(c.Query("page_size"), defaultPageSize),
-		defaultPageSize,
-	)
-	batch := c.Query("batch")
-	state := c.Query("state")
-
-	d := audit.GetDB()
-	if d == nil {
-		SuccessData(c, gin.H{
-			"results":   []interface{}{},
-			"page":      page,
-			"page_size": pageSize,
-			"count":     0,
-		})
-		return
-	}
-
-	tx := d.WithContext(c.Request.Context()).Model(&db.TaskRecord{})
-	if batch != "" {
-		tx = tx.Where("batch = ?", batch)
-	}
-	if state != "" {
-		tx = tx.Where("state = ? OR status = ?", state, state)
-	}
-
-	var count int64
-	if err := tx.Count(&count).Error; err != nil {
-		Failure(c, "query records count failed: "+err.Error())
-		return
-	}
-
-	var records []db.TaskRecord
-	offset := (page - 1) * pageSize
-	if err := tx.Order("id DESC").Offset(offset).Limit(pageSize).Find(&records).Error; err != nil {
-		Failure(c, "query records failed: "+err.Error())
-		return
-	}
-	if records == nil {
-		records = []db.TaskRecord{}
-	}
-
-	SuccessData(c, gin.H{
-		"results":   records,
-		"page":      page,
-		"page_size": pageSize,
-		"count":     count,
 	})
 }
 

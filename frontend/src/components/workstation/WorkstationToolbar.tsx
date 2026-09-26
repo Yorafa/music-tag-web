@@ -28,6 +28,7 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { ParseFilenamesModal } from '@/components/scraper/ParseFilenamesModal';
+import { skippedNotesFromUpdate } from '@/utils/skippedNotes';
 import { useWorklistStore, type WorklistGrouping } from '@/store/useWorklistStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import {
@@ -216,18 +217,20 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         // A row the server refused to write comes back in `skipped`, not
         // `done`. Counting it as a success would report "成功 N 首" for tags
         // that never landed.
-        const rawSkipped = (res as { skipped?: unknown })?.skipped;
-        const refused = new Set(
-          (Array.isArray(rawSkipped) ? rawSkipped : []).map(
-            (e) => (e as { file_full_path?: string })?.file_full_path,
-          ),
-        );
+        //
+        // `skipped` is not one kind of refusal: a duplicate was compared and
+        // rejected, a not_audio row was never comparable at all (the name
+        // pointed at a cover, or at a file that does not exist). Each entry
+        // carries its own reason, so read that instead of asserting
+        // "duplicate" for all of them.
+        const refused = skippedNotesFromUpdate(res);
 
         for (const { fullPath } of rowsInGroup) {
-          if (refused.has(fullPath)) {
+          const skipNote = refused.get(fullPath);
+          if (skipNote !== undefined) {
             setStatus(fullPath, 'failed');
             failCount++;
-            dupNotes.push(`已跳过（内容与库内文件完全一致）: ${fullPath}`);
+            dupNotes.push(`已跳过（${skipNote}）: ${fullPath}`);
             continue;
           }
           const info = matched.get(fullPath);

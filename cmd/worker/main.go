@@ -23,11 +23,11 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"gorm.io/gorm"
 
 	"go-music-tag/internal/audit"
 	"go-music-tag/internal/config"
 	"go-music-tag/internal/db"
-	"go-music-tag/internal/dedup"
 	"go-music-tag/internal/events"
 	"go-music-tag/internal/plugin"
 	"go-music-tag/internal/queue"
@@ -120,42 +120,12 @@ func main() {
 
 	// 4) Wire handlers.
 	mux := asynq.NewServeMux()
-	tasks.NewFullScanMux(mux, &tasks.FullScanHandler{DB: gormDB, MusicRoot: cfg.MusicDir})
-	tasks.NewUpdateScanMux(mux, &tasks.UpdateScanHandler{DB: gormDB, MusicRoot: cfg.MusicDir})
-	// Dedup was left nil here, which is why batchtag.go carried a
-	// "dedup hook stubbed" TODO: the worker's auto-scrape had no duplicate
-	// checking at all. Wired now, so a scrape in the worker can skip a
-	// file whose content already exists in the library.
-	tasks.NewBatchAutoTagMux(mux, &tasks.BatchAutoTagHandler{
-		DB:    gormDB,
-		Dedup: dedup.New(gormDB, cfg.MusicDir),
-	})
-	tasks.NewTidyFolderMux(mux, &tasks.TidyFolderHandler{
+	wireTaskHandlers(mux, taskHandlerDeps{
 		DB:        gormDB,
+		DBDriver:  dbDriver,
 		MusicRoot: cfg.MusicDir,
 		Bus:       bus,
 	})
-	// Unified download handler — all download enqueues go through
-	// download:generic; payload.Source dispatches to the matching branch.
-	// The youtube/yt-dlp exec lives in the youtube plugin (reached over
-	// gRPC via plugin.GetDownloadSource); the worker only orchestrates
-	// the cache/library copy + DB records, so this image needs no
-	// python / yt-dlp / ffmpeg.
-	tasks.NewDownloadGenericMux(mux, tasks.NewDownloadHandler(gormDB, cfg.MusicDir))
-	tasks.NewClearMusicMux(mux, &tasks.ClearMusicHandler{DB: gormDB, DBDriver: dbDriver})
-	tasks.NewPruneEmptyFoldersMux(mux, &tasks.PruneEmptyFoldersHandler{
-		DB:        gormDB,
-		MusicRoot: cfg.MusicDir,
-	})
-	// C.2 filename-parse bulk-apply worker (tag:apply_parsed_filenames).
-	// HandleApplyParsedFilenames is a dependency-free function over the
-	// payload, so it wires as a HandlerFunc. This registration was missing
-	// until round-11: the gateway enqueued TypeApplyParsedFilenames but no
-	// consumer existed, so apply tasks retried (MaxRetry=3) and landed in
-	// asynq's archived dead-letter queue — the parsed names were never
-	// written to tags. See docs/plans/Unfinished-Features.md § C.2.
-	tasks.NewApplyParsedFilenamesMux(mux, tasks.HandlerFunc(tasks.HandleApplyParsedFilenames))
-	log.Printf("[worker] all 8 task handlers registered")
 
 	// 4) Start asynq server.
 	asynqCfg := queue.ServerConfig()
@@ -201,4 +171,82 @@ func parseQueues(s string) map[string]int {
 		}
 	}
 	return m
+}
+
+// taskHandlerDeps is everything the handler constructors need. Bundling it
+// keeps wireTaskHandlers callable from a test with nils, which is what lets
+// TestWireTaskHandlers resolve every type against a real ServeMux.
+type taskHandlerDeps struct {
+	DB        *gorm.DB
+	DBDriver  string
+	MusicRoot string
+	Bus       events.Bus
+}
+
+// wireTaskHandlers registers every task type this worker consumes.
+//
+// The registrations live in a slice rather than a run of bare calls so the
+// startup log can name the types it consumed. A hand-written "all N task
+// handlers" drifts the moment one is added or removed — and it had: the log
+// claimed 8 while 7 were wired. A claimed count also cannot answer the only
+// question that matters at boot, "is the type the gateway enqueues actually
+// consumed here?", which is the question this codebase got wrong twice
+// (TypeApplyParsedFilenames, and the tag:batch_auto chain).
+func wireTaskHandlers(mux *asynq.ServeMux, d taskHandlerDeps) {
+	gormDB, dbDriver, bus, musicRoot := d.DB, d.DBDriver, d.Bus, d.MusicRoot
+	registrations := []struct {
+		typename string
+		wire     func()
+	}{
+		{tasks.TypeFullScanFolder, func() {
+			tasks.NewFullScanMux(mux, &tasks.FullScanHandler{DB: gormDB, MusicRoot: musicRoot})
+		}},
+		{tasks.TypeUpdateScanFolder, func() {
+			tasks.NewUpdateScanMux(mux, &tasks.UpdateScanHandler{DB: gormDB, MusicRoot: musicRoot})
+		}},
+		{tasks.TypeTidyFolder, func() {
+			tasks.NewTidyFolderMux(mux, &tasks.TidyFolderHandler{
+				DB:        gormDB,
+				MusicRoot: musicRoot,
+				Bus:       bus,
+			})
+		}},
+		// Unified download handler — all download enqueues go through
+		// download:generic; payload.Source dispatches to the matching branch.
+		// The youtube/yt-dlp exec lives in the youtube plugin (reached over
+		// gRPC via plugin.GetDownloadSource); the worker only orchestrates
+		// the cache/library copy + DB records, so this image needs no
+		// python / yt-dlp / ffmpeg.
+		{tasks.TypeDownloadGeneric, func() {
+			tasks.NewDownloadGenericMux(mux, tasks.NewDownloadHandler(gormDB, musicRoot))
+		}},
+		{tasks.TypeClearMusic, func() {
+			tasks.NewClearMusicMux(mux, &tasks.ClearMusicHandler{DB: gormDB, DBDriver: dbDriver})
+		}},
+		{tasks.TypePruneEmptyFolders, func() {
+			tasks.NewPruneEmptyFoldersMux(mux, &tasks.PruneEmptyFoldersHandler{
+				DB:        gormDB,
+				MusicRoot: musicRoot,
+			})
+		}},
+		// C.2 filename-parse bulk-apply worker (tag:apply_parsed_filenames).
+		// HandleApplyParsedFilenames is a dependency-free function over the
+		// payload, so it wires as a HandlerFunc. This registration was missing
+		// until round-11: the gateway enqueued TypeApplyParsedFilenames but no
+		// consumer existed, so apply tasks retried (MaxRetry=3) and landed in
+		// asynq's archived dead-letter queue — the parsed names were never
+		// written to tags. See docs/plans/Unfinished-Features.md § C.2.
+		{tasks.TypeApplyParsedFilenames, func() {
+			tasks.NewApplyParsedFilenamesMux(mux, tasks.HandlerFunc(tasks.HandleApplyParsedFilenames))
+		}},
+	}
+	for _, r := range registrations {
+		r.wire()
+	}
+	names := make([]string, 0, len(registrations))
+	for _, r := range registrations {
+		names = append(names, r.typename)
+	}
+	log.Printf("[worker] all %d task handlers registered: %s",
+		len(registrations), strings.Join(names, ", "))
 }

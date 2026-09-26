@@ -118,16 +118,22 @@ func (h *FullScanHandler) fullScan(ctx context.Context, subPaths [][2]string) er
 					filePath := filepath.Join(dir, e.Name())
 					fileUID := uidForPath(uidByPath, filePath)
 					ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filePath), "."))
+					// Size is what internal/dedup selects hash and
+					// fingerprint candidates by, so an index row without
+					// it makes both of those stages fall through to a full
+					// disk walk. See TestScanRecordsFileSize.
 					if audioext.IsLibraryExt(ext) {
 						batch = append(batch, db.Folder{
 							Name: filepath.Base(filePath), Path: filePath,
-							FileType: "music", UID: fileUID, ParentID: myUID,
+							Size: fileSize(filePath), FileType: "music",
+							UID: fileUID, ParentID: myUID,
 							State: "none",
 						})
 					} else if coverExt[ext] {
 						batch = append(batch, db.Folder{
 							Name: filepath.Base(filePath), Path: filePath,
-							FileType: "image", UID: fileUID, ParentID: myUID,
+							Size: fileSize(filePath), FileType: "image",
+							UID: fileUID, ParentID: myUID,
 							State: "none",
 						})
 					}
@@ -140,13 +146,15 @@ func (h *FullScanHandler) fullScan(ctx context.Context, subPaths [][2]string) er
 			if audioext.IsLibraryExt(ext) {
 				batch = append(batch, db.Folder{
 					Name: filepath.Base(dir), Path: dir,
-					FileType: "music", UID: myUID, ParentID: parentUID,
+					Size: fileSize(dir), FileType: "music",
+					UID: myUID, ParentID: parentUID,
 					State: "none",
 				})
 			} else if coverExt[ext] {
 				batch = append(batch, db.Folder{
 					Name: filepath.Base(dir), Path: dir,
-					FileType: "image", UID: myUID, ParentID: parentUID,
+					Size: fileSize(dir), FileType: "image",
+					UID: myUID, ParentID: parentUID,
 					State: "none",
 				})
 			}
@@ -209,6 +217,22 @@ func uidForPath(m map[string]string, path string) string {
 // disk. `state` is absent for the same reason — it is owned by
 // updateScan ("updated"), and a full scan stamping "scanning" over it would
 // discard the more meaningful value.
+// fileSize returns the byte size of path, or 0 when it cannot be stat'ed.
+//
+// A missing size is not fatal: dedup treats a 0 candidate as "no index
+// entry" and falls back to walking the filesystem, which is the behaviour
+// that ran before the column was populated. It is only wrong in the other
+// direction — a real 0-byte file recorded as 0 would be indistinguishable
+// from an unindexed one, so the file is simply not a dedup candidate, which
+// is correct.
+func fileSize(path string) int64 {
+	fi, err := os.Stat(path)
+	if err != nil || fi.IsDir() {
+		return 0
+	}
+	return fi.Size()
+}
+
 func flushBatch(conn *gorm.DB, rows []db.Folder) {
 	if len(rows) == 0 || conn == nil {
 		return
@@ -303,6 +327,7 @@ func (h *UpdateScanHandler) updateScan(ctx context.Context, subPaths [][2]string
 					Where("path = ?", dir).
 					Updates(map[string]interface{}{
 						"name":           filepath.Base(dir),
+						"size":           fileSize(dir),
 						"file_type":      fileType,
 						"uid":            existing.UID,
 						"parent_id":      parentUID,
@@ -313,8 +338,10 @@ func (h *UpdateScanHandler) updateScan(ctx context.Context, subPaths [][2]string
 			} else {
 				h.DB.Create(&db.Folder{
 					Name: filepath.Base(dir), Path: dir, FileType: fileType,
-					UID: uuid.New().String(), ParentID: parentUID,
-					State: "updated", UpdatedAt: now, LastScanTime: now,
+					Size:     fileSize(dir),
+					UID:      uuid.New().String(),
+					ParentID: parentUID,
+					State:    "updated", UpdatedAt: now, LastScanTime: now,
 				})
 			}
 			continue
@@ -368,7 +395,7 @@ func (h *UpdateScanHandler) updateScan(ctx context.Context, subPaths [][2]string
 }
 
 // ScanPaths exposes the incremental scan to the gateway process, which needs
-// the music_track / music_folder index to be fresh before dedup consults it.
+// the music_folder index to be fresh before dedup consults it.
 //
 // The 全盘扫描 button that used to be the only trigger is gone: a user
 // should not have to click something whose effect is invisible. Instead the

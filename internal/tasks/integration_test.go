@@ -1,9 +1,8 @@
 // Integration tests for the P1 asynq worker.
 //
-// Covers producer → consumer end-to-end for three task types:
+// Covers producer → consumer end-to-end for two task types:
 //
 //   • TypeFullScanFolder  ("scan:full")
-//   • TypeBatchAutoTag    ("tag:batch_auto")
 //   • TypeDownloadGeneric ("download:generic") — youtube branch via fake yt-dlp
 //
 // Per test, a *testRig bootstraps:
@@ -46,7 +45,7 @@ import (
 	"go-music-tag/internal/testaudio"
 )
 
-// ─── TagSource mock for BatchAutoTag ────────────────────────────────────────
+// ─── TagSource mock ──────────────────────────────────────────────────────────
 
 type mockTagSource struct {
 	name        string
@@ -57,18 +56,15 @@ func (m *mockTagSource) Name() string           { return m.name }
 func (m *mockTagSource) DisplayName() string    { return "Mock " + m.name }
 func (m *mockTagSource) SupportsSearch() bool   { return false }
 func (m *mockTagSource) SupportsLyric() bool    { return false }
-func (m *mockTagSource) SupportsId3() bool      { return true }  // mock is used by BatchAutoTag, which writes ID3
+func (m *mockTagSource) SupportsId3() bool      { return true }
 func (m *mockTagSource) SupportsAudioURL() bool { return false } // mock is metadata-only; integration test doesn't exercise playback
 func (m *mockTagSource) Search(_ context.Context, _ string, _, _ int) (*plugin.SearchResult, error) {
 	return &plugin.SearchResult{}, nil
 }
-func (m *mockTagSource) FetchID3ByTitle(_ context.Context, title string) ([]plugin.Song, error) {
+func (m *mockTagSource) FetchID3ByTitle(_ context.Context, _ string) ([]plugin.Song, error) {
 	out := make([]plugin.Song, 0, len(m.fetchResult))
 	for _, s := range m.fetchResult {
-		// echo the requested title back as the song's name so matchScore
-		// produces exact match (t=2) when SelectMode=simple.
 		s := s
-		s.Name = title
 		s.Source = m.name
 		out = append(out, s)
 	}
@@ -278,8 +274,8 @@ func TestIntegration_FullScanFolder_ProducerToConsumer(t *testing.T) {
 	}
 	// A real decodable MP3. The old "ID3 header + FAKE-FRAMES" stub worked
 	// only because dhowden dispatched on the extension; tag.Read now
-	// requires a real audio stream, and BatchAutoTag would reject the
-	// fixture rather than exercise the state machine under test.
+	// requires a real audio stream; a synthetic blob would be rejected
+	// by the scanner rather than exercise the bookkeeping under test.
 	mp3Path := testaudio.SeedMP3(t, musicDir, "track1.mp3")
 
 	// Consumer (worker side)
@@ -340,81 +336,7 @@ func TestIntegration_FullScanFolder_ProducerToConsumer(t *testing.T) {
 	}
 }
 
-// ─── Test 2: BatchAutoTag ───────────────────────────────────────────────────
-
-func TestIntegration_BatchAutoTag_StateTransitions(t *testing.T) {
-	installMockSource(t)
-	rig := newTestRig(t)
-
-	// Music file
-	mp3Path := testaudio.SeedMP3(t, rig.MusicRoot, "song.mp3")
-
-	// Seed one TaskRecord in state=wait with batch id
-	const batch = "batch-int-001"
-	rec := db.TaskRecord{
-		SongName:  "",
-		FullPath:  mp3Path,
-		State:     "wait",
-		Batch:     batch,
-		CreatedAt: time.Now(),
-	}
-	if err := rig.DB.Create(&rec).Error; err != nil {
-		t.Fatalf("seed TaskRecord: %v", err)
-	}
-
-	// Consumer registers the BatchAutoTagHandler.
-	rig.Start(t, func(mux *asynq.ServeMux) {
-		tasks.NewBatchAutoTagMux(mux, &tasks.BatchAutoTagHandler{
-			DB: rig.DB,
-		})
-	})
-
-	// Producer enqueues the batch task.
-	srcName := mockSourceName(t)
-	rig.Enqueue(t, tasks.TypeBatchAutoTag, &tasks.BatchAutoTagPayload{
-		Batch:      batch,
-		SourceList: []string{srcName},
-		SelectMode: "simple",
-	})
-
-	rig.WaitForCompletion(t, 8*time.Second)
-
-	// Assert TaskRecord state transitioned wait → success.
-	var got db.TaskRecord
-	if err := rig.DB.First(&got, "id = ?", rec.ID).Error; err != nil {
-		t.Fatalf("Find TaskRecord: %v", err)
-	}
-	if got.State != "success" {
-		t.Errorf("TaskRecord.state=%q (want 'success')", got.State)
-	}
-	if got.TagSource != srcName {
-		t.Errorf("TaskRecord.tag_source=%q (want %q)", got.TagSource, srcName)
-	}
-	if got.SongName == "" {
-		t.Error("TaskRecord.song_name should be populated after a successful match")
-	}
-
-	// Assert task_task row got synced.
-	var syncTask db.Task
-	if err := rig.DB.Where("full_path = ?", mp3Path).First(&syncTask).Error; err != nil {
-		t.Fatalf("Find db.Task by full_path: %v", err)
-	}
-	if syncTask.State != "success" {
-		t.Errorf("db.Task.state=%q (want 'success')", syncTask.State)
-	}
-	if syncTask.SongName == "" {
-		t.Error("db.Task.song_name should be populated")
-	}
-
-	// Note: we don't read back the file's tags here; that would require
-	// parsing a fake ID3v2 blob, which bogem/id3v2 doesn't accept unless
-	// frames are valid UTF-8 strings. The end-to-end proof is db-side:
-	// TaskRecord.state='success' (proves handler ran to completion),
-	// db.Task.song_name populated (proves tag.Write emitted TIT2), and
-	// TaskRecord.tag_source (proves plugin → candidate → write path).
-}
-
-// ─── Test 3: DownloadGeneric (youtube branch, plugin delegation) ────────────
+// ─── Test 2: DownloadGeneric (youtube branch, plugin delegation) ────────────
 
 func TestIntegration_DownloadGeneric_YouTube_MockPlugin(t *testing.T) {
 	rig := newTestRig(t)

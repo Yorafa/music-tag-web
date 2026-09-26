@@ -18,7 +18,6 @@ import (
 const (
 	TypeFullScanFolder       = "scan:full"
 	TypeUpdateScanFolder     = "scan:update"
-	TypeBatchAutoTag         = "tag:batch_auto"
 	TypeTidyFolder           = "folder:tidy"
 	TypePruneEmptyFolders    = "folder:prune_empty"
 	TypeDownloadGeneric      = "download:generic" // unified download type — payload.Source dispatches to the matching DownloadSource
@@ -30,13 +29,6 @@ const (
 
 type FullScanPayload struct {
 	SubPaths [][2]string `json:"sub_paths"` // [(parentUID, path), ...]
-}
-
-type BatchAutoTagPayload struct {
-	Batch          string   `json:"batch"`
-	SourceList     []string `json:"source_list"`
-	SelectMode     string   `json:"select_mode"`
-	CheckDuplicate bool     `json:"check_duplicate,omitempty"` // TODO: dedup hook stubbed (h.Dedup); not yet wired end-to-end
 }
 
 type TidyFolderPayload struct {
@@ -151,17 +143,6 @@ func NewUpdateScanMux(mux *asynq.ServeMux, h Handler) {
 	mux.HandleFunc(TypeUpdateScanFolder, (&asynqAdapter{
 		decode: func(data []byte) (interface{}, error) {
 			var p FullScanPayload
-			err := Decode(data, &p)
-			return &p, err
-		},
-		h: h,
-	}).ProcessTask)
-}
-
-func NewBatchAutoTagMux(mux *asynq.ServeMux, h Handler) {
-	mux.HandleFunc(TypeBatchAutoTag, (&asynqAdapter{
-		decode: func(data []byte) (interface{}, error) {
-			var p BatchAutoTagPayload
 			err := Decode(data, &p)
 			return &p, err
 		},

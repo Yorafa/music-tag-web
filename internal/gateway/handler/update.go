@@ -85,6 +85,13 @@ func UpdateID3(c *gin.Context) {
 				audit.Log(c.Request.Context(), audit.ActionUpdateID3, rawPath, "admin", audit.StatusSkipped, 1, dupErr.Dup, nil)
 				continue
 			}
+			if naErr, ok := err.(ErrNotAudioFile); ok {
+				// 同样不失败整批：这一行指向的东西根本不是音频。
+				report.addNotAudio(rawPath, naErr.Reason)
+				audit.Log(c.Request.Context(), audit.ActionUpdateID3, rawPath, "admin", audit.StatusSkipped, 1,
+					map[string]interface{}{"reason": naErr.Reason}, nil)
+				continue
+			}
 			audit.Log(c.Request.Context(), audit.ActionUpdateID3, rawPath, "admin", audit.StatusFailed, 1, info, err)
 			Failure(c, fmt.Sprintf("update %s: %v", filepath.Base(filePath), err))
 			return
@@ -153,6 +160,39 @@ func (r *updateBatchReport) addDone(path, newFileName string) {
 	}
 	r.done = append(r.done, entry)
 }
+
+// ErrNotAudioFile is applyFileUpdate's answer for a path the tag pipeline
+// cannot write: a cover, a .lrc, or any name without a library audio
+// extension.
+//
+// It used to return a nil error instead, and every caller reads a nil error
+// as "the write happened" — so such a row was reported as
+// {status: "updated"} while nothing was written, and the response carried
+// nothing that let a client tell the difference. It is a skip rather than a
+// failure because the batch is still a success for its other rows: one
+// unusable row should not fail the request.
+type ErrNotAudioFile struct {
+	Path   string
+	Reason string
+}
+
+func (e ErrNotAudioFile) Error() string {
+	return "not an audio file: " + e.Reason
+}
+
+// addNotAudio records a row that named something the tag pipeline does not
+// write. It goes in `skipped` rather than `duplicate_warnings` because
+// nothing was written at all, and it deliberately does not reuse
+// addSkipped's "duplicate" status: no comparison was performed, and the
+// frontend surfaces `reason` verbatim.
+func (r *updateBatchReport) addNotAudio(path, reason string) {
+	r.skipped = append(r.skipped, map[string]interface{}{
+		"file_full_path": path,
+		"status":         "not_audio",
+		"reason":         reason,
+	})
+}
+
 func (r *updateBatchReport) addSkipped(path string, dup dedup.Result) {
 	r.skipped = append(r.skipped, map[string]interface{}{
 		"file_full_path": path,
@@ -310,6 +350,10 @@ func BatchUpdateID3(c *gin.Context) {
 						report.addSkipped(relToMusicRoot(leaf), dupErr.Dup)
 						continue
 					}
+					if naErr, ok := err.(ErrNotAudioFile); ok {
+						report.addNotAudio(relToMusicRoot(leaf), naErr.Reason)
+						continue
+					}
 					Failure(c, err.Error())
 					return
 				}
@@ -337,6 +381,10 @@ func BatchUpdateID3(c *gin.Context) {
 		if err != nil {
 			if dupErr, ok := err.(ErrDuplicateSkipped); ok {
 				report.addSkipped(relToMusicRoot(leaf), dupErr.Dup)
+				continue
+			}
+			if naErr, ok := err.(ErrNotAudioFile); ok {
+				report.addNotAudio(relToMusicRoot(leaf), naErr.Reason)
 				continue
 			}
 			Failure(c, err.Error())
@@ -376,7 +424,6 @@ func BatchUpdateID3(c *gin.Context) {
 	SuccessData(c, report.toJSON())
 }
 
-// 注: BatchAutoUpdateID3 / TidyFolder 在 task.go 里已经接入 asynq，这里保持空。
 // UploadImage handles POST /api/upload_image/ — base64 returns (无 data URI 前缀)。
 // maxUploadImageBytes caps an uploaded cover. 20 MiB matches the cap
 // fetchRemoteBytes applies to a downloaded one, so both entry points into
@@ -557,7 +604,7 @@ func (r applyResult) FailedSidecars() []tag.SidecarMove {
 func applyFileUpdate(filePath string, info map[string]interface{}) (applyResult, error) {
 	var res applyResult
 	if !isAudioFile(filePath) {
-		return res, nil
+		return res, ErrNotAudioFile{Path: filePath, Reason: notAudioReason(filePath)}
 	}
 	// 去重前置检查。仅内容级证据（SHA-256 / 声纹）会跳过整张文件的写入；
 	// 同名或元数据相似只记为警告，继续写。
@@ -830,6 +877,18 @@ func stringValue(v interface{}) string {
 // the file browser's listing filter again (REVIEW.md P2-1).
 func isAudioFile(path string) bool {
 	return audioext.IsLibraryPath(path)
+}
+
+// notAudioReason explains, in the caller's language, why a path was refused.
+// "该文件不是音频" alone leaves the user guessing when the cause is usually
+// one of two very different things: they named a sidecar, or they named a
+// file that is not there.
+func notAudioReason(path string) string {
+	base := filepath.Base(path)
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Sprintf("找不到文件 %q（请确认该行的 name 是已存在的文件名，而非标题）", base)
+	}
+	return fmt.Sprintf("%q 不是音频文件，只有 %s 能写入标签", base, audioext.LibraryExtsHint())
 }
 
 func truthy(v interface{}) bool {

@@ -15,8 +15,8 @@
 //  4. 元数据对比 ── title/artist/album/duration 归一化后比对，弱信号 → 仅
 //     标记「疑似重复」（LikelyDuplicate result），不打断写入流程。
 //
-// 设计目标：让 applyFileUpdate 与 batchtag.tagOne 在调用 tag.Write 前可按需
-// 跳过整张文件而无需重复实现这套漏斗；服务端可选不阻塞前端 UX。
+// 设计目标：让 applyFileUpdate 在调用 tag.Write 前可按需跳过整张文件而无需
+// 重复实现这套漏斗；服务端可选不阻塞前端 UX。
 package dedup
 
 import (
@@ -144,8 +144,9 @@ func defaultRoot() string {
 // VerdictLikelyDuplicate（警告）；只有 hash / fingerprint 两级——内容
 // 本身相同——才返回 VerdictDuplicate，而那是唯一可以拒绝写入的判定。
 //
-// DB 不为 nil 会查 Task 表（含 /music_track 触及表）以避免磁盘扫描；
-// 为 nil 时 fall back 到 os.ReadDir 的全库扫描（O(n) 但内存占用极低）。
+// 有索引时先查 music_folder（扫描器唯一写入的表）以避免磁盘扫描；
+// 索引里查不到时 fall back 到有界的全库 walk（O(n) 但内存占用极低）。
+// 每个阶段都保留兜底，所以索引缺失只损失速度，不影响判定。
 //
 // 超时由 caller 通过 ctx 控制；本函数内部不再 wrap 第二层 timeout，
 // 以便 caller 用统一 deadline 调度 hash + fingerprint（hash 一个文件通常 < 100ms）。
@@ -241,50 +242,27 @@ func (c *Checker) checkFilename(_ context.Context, path string, _ Options) (stri
 	// 自己不算重复。
 	abs := filepath.Clean(path)
 	// 优先：同一曲子可能在不同 album dir 下重名；扫一遍同名候选。
-	// DB 有则查 Task 表。
-	if c.db != nil {
-		var samepaths []string
-		// Task 表里 success 行可能不止一个（多目录同名）；用 filename 直接查。
-		err := c.db.Raw(
-			"SELECT full_path FROM task_task WHERE filename = ? AND state = ?",
-			base, "success",
-		).Scan(&samepaths).Error
-		if err == nil {
-			for _, sp := range samepaths {
-				if filepath.Clean(sp) == abs {
-					continue
-				}
-				if _, statErr := os.Stat(sp); statErr == nil {
-					return relOrSelf(sp, root), true
-				}
-			}
-			// 退一步：查 music_track 表
-			var tracks []string
-			err = c.db.Table("music_track").
-				Where("suffix = ? AND name LIKE ?", filepath.Ext(base)[1:], "%"+base).
-				Limit(50).Pluck("path", &tracks).Error
-			if err == nil {
-				for _, sp := range tracks {
-					if sp == "" {
-						continue
-					}
-					full := filepath.Join(root, sp)
-					if filepath.Clean(full) == abs {
-						continue
-					}
-					if _, statErr := os.Stat(full); statErr == nil {
-						return sp, true
-					}
-				}
-			}
+	//
+	// The index is the fast path. It used to query task_task (written by
+	// nothing since the worker auto-scrape chain was deleted) and then
+	// music_track (never written by anything), so both branches returned
+	// nothing and every name clash was found by the full-volume walk below.
+	// music_folder is the table the scanners actually populate, with one row
+	// per audio file under file_type='music'.
+	for _, sp := range c.libraryFiles(indexCandidateLimit, "name = ?", base) {
+		if isSelf(sp, abs) {
+			continue
+		}
+		if _, statErr := os.Stat(sp); statErr == nil {
+			return relOrSelf(sp, root), true
 		}
 	}
 
-	// Fallback（DB 缺失）：直接扫 MUSIC_DIR 全卷一次，找同名。
-	// 这条路径仅在初次或测试场景出现；生产请保持 db != nil。
+	// Fallback（索引里没有）：扫 MUSIC_DIR 全卷一次，找同名。
+	// 一条 walk，代价与库大小成正比，所以索引命中时是可观的提速。
 	candidates, _ := findFilesByName(root, base)
 	for _, c2 := range candidates {
-		if filepath.Clean(c2) == abs {
+		if isSelf(c2, abs) {
 			continue
 		}
 		return relOrSelf(c2, root), true
@@ -359,41 +337,29 @@ func (c *Checker) checkHash(ctx context.Context, path string, _ Options) (string
 	}
 
 	root := c.musicRoot
-	// DB 路径：查 music_track 拿 size + path，或者扫 Task 表 full_path。
-	if c.db != nil {
-		var paths []string
-		// 走 Track 表（有 size 字段可索引）。
-		err = c.db.Table("music_track").
-			Where("size = ?", target).
-			Limit(512).
-			Pluck("path", &paths).Error
-		if err == nil {
-			for _, rel := range paths {
-				if rel == "" {
-					continue
-				}
-				full := filepath.Join(root, rel)
-				if filepath.Clean(full) == filepath.Clean(path) {
-					continue
-				}
-				if _, statErr := os.Stat(full); statErr != nil {
-					continue
-				}
-				h, e := sha256OfFile(full)
-				if e == nil && h == myHash {
-					return rel, true, nil
-				}
-				if ctx.Err() != nil {
-					return "", false, ctx.Err()
-				}
-			}
+	// 索引路径：按 size 从 music_folder 取候选。这张表此前查的是
+	// music_track，而那张表从没有人写入，所以这里永远返回空，真正干活的
+	// 一直是下面那条全盘 walk。size 由扫描器写入（见 tasks.fileSize）。
+	for _, full := range c.libraryFiles(hashCandidateLimit, "size = ?", target) {
+		if isSelf(full, path) {
+			continue
+		}
+		if _, statErr := os.Stat(full); statErr != nil {
+			continue
+		}
+		h, e := sha256OfFile(full)
+		if e == nil && h == myHash {
+			return relOrSelf(full, root), true, nil
+		}
+		if ctx.Err() != nil {
+			return "", false, ctx.Err()
 		}
 	}
 
-	// Fallback：DB 缺失时遍历 root 全盘，但仅查看同 size 文件（极少）。
+	// Fallback：索引里没有时遍历 root 全盘，但仅查看同 size 文件（极少）。
 	cands, _ := findFilesBySize(root, target, 1024)
 	for _, c2 := range cands {
-		if filepath.Clean(c2) == filepath.Clean(path) {
+		if isSelf(c2, path) {
 			continue
 		}
 		h, e := sha256OfFile(c2)
@@ -450,10 +416,11 @@ func (c *Checker) checkFingerprint(ctx context.Context, path string, opts Option
 	}
 	root := c.musicRoot
 
-	// 候选集合：同 duration ±2s 的库内 Tracks。
-	// 这里采用：DB 查 size 范围（duration 没有直接列；duration 在 music_track
-	// 的字段是真实秒数；同一曲复压 size 可能差几 MB 但 duration 几乎一致）。
-	// Fallback：DB 缺失时，按 size 在 [target*0.8, target*1.2] 区间找候选。
+	// 候选集合：size 接近的库内音频。
+	//
+	// 这里用 size 而不是 duration：music_folder 没有 duration 列，而同一曲
+	// 复压 size 可能差几 MB、声纹却一致。music_track 倒是有 duration，但那
+	// 张表从没有人写入，所以按 duration 的那条分支过去同样永远返回空。
 	fi, _ := os.Stat(path)
 	target := int64(0)
 	if fi != nil {
@@ -461,36 +428,14 @@ func (c *Checker) checkFingerprint(ctx context.Context, path string, opts Option
 	}
 	candidates := []string{}
 
-	if c.db != nil {
-		var rels []string
-		if target > 0 {
-			lo := target * 8 / 10
-			hi := target * 12 / 10
-			_ = c.db.Table("music_track").
-				Where("size BETWEEN ? AND ?", lo, hi).
-				Limit(64).
-				Pluck("path", &rels).Error
-		} else {
-			_ = c.db.Table("music_track").
-				Where("duration BETWEEN ? AND ?", float64(myDur)-2, float64(myDur)+2).
-				Limit(64).
-				Pluck("path", &rels).Error
-		}
-		for _, rel := range rels {
-			if rel == "" {
-				continue
-			}
-			full := filepath.Join(root, rel)
-			if filepath.Clean(full) == filepath.Clean(path) {
-				continue
-			}
-			if _, err := os.Stat(full); err == nil {
-				candidates = append(candidates, full)
-			}
-			if ctx.Err() != nil {
-				return "", false, ctx.Err()
-			}
-		}
+	if target > 0 {
+		lo := target * 8 / 10
+		hi := target * 12 / 10
+		candidates = append(candidates, c.libraryFiles(indexCandidateLimit,
+			"size BETWEEN ? AND ?", lo, hi)...)
+	}
+	if ctx.Err() != nil {
+		return "", false, ctx.Err()
 	}
 	if len(candidates) == 0 && root != "" {
 		// 退一步：size 大区间扫盘。
@@ -607,46 +552,54 @@ func findFilesBySizeBetween(root string, lo, hi int64, limit int) ([]string, err
 //
 // 由于「无 hash 命中 + 怕漏放」的兜底性质，候选集限定同 artist 同曲名。
 func (c *Checker) checkMeta(ctx context.Context, path string, _ Options) (string, float64) {
-	// 候选集合：music_track 表中 name LIKE + artist 命中（DB 路径）。
-	// DB 缺失时这一层直接返回空（避免扫盘时的 tag.Read 数千次）。
-	if c.db == nil {
-		return "", 0
-	}
 	my := readTransposed(path)
 	if my.Title == "" && my.Artist == "" {
 		return "", 0 // 缺元数据无法比对
 	}
-
-	var rels []string
-	// 简单 %name% 模糊找同名 track。
+	// 候选集合：索引里曲名模糊命中的音频。
+	//
+	// The old version queried music_track, a table nothing has ever written,
+	// and had no fallback at all: an empty result was taken as the answer.
+	// Since that table is permanently empty, this stage could never produce a
+	// verdict — the one weak-signal stage that exists to catch re-tagged
+	// copies was inert. Unlike the other three stages there is nothing to
+	// degrade to, so a missing index silently meant "no duplicates".
+	//
+	// The artist comparison is not part of the query: music_folder has no
+	// artist column, and filtering on it here would be a second reason for
+	// the stage to come up empty. metaSimilarity weights it instead, and a
+	// wrong artist simply scores lower rather than disappearing.
 	like := strings.Replace(strings.ToLower(my.Title), "%", "\\%", -1)
 	if like == "" {
 		return "", 0
 	}
-	_ = c.db.Table("music_track").
-		Where("LOWER(name) LIKE ?", "%"+like+"%").
-		Limit(64).
-		Pluck("path", &rels).Error
+	candidates := c.libraryFiles(indexCandidateLimit, "LOWER(name) LIKE ?", "%"+like+"%")
+
+	// Fallback（索引里没有）：按曲名走一遍全盘，但只 stat 匹配的 basename。
+	// 比 collect-all-then-read-tags 便宜得多 —— tag.Read 仍然只对最终的候选
+	// 调用，最多 indexCandidateLimit 次。
+	if len(candidates) == 0 && c.musicRoot != "" {
+		fsCands, _ := walkLimit(c.musicRoot, indexCandidateLimit,
+			func(p string, _ int64) bool {
+				return strings.Contains(strings.ToLower(filepath.Base(p)), like)
+			})
+		candidates = append(candidates, fsCands...)
+	}
 
 	bestScore := 0.0
 	bestRel := ""
 	root := c.musicRoot
-	for _, rel := range rels {
-		if rel == "" {
-			continue
-		}
-		full := filepath.Join(root, rel)
-		if filepath.Clean(full) == filepath.Clean(path) {
+	for _, full := range candidates {
+		if full == "" || isSelf(full, path) {
 			continue
 		}
 		if _, err := os.Stat(full); err != nil {
 			continue
 		}
-		meta := readTransposed(full)
-		score := metaSimilarity(my, meta)
+		score := metaSimilarity(my, readTransposed(full))
 		if score > bestScore {
 			bestScore = score
-			bestRel = rel
+			bestRel = relOrSelf(full, root)
 		}
 		if ctx.Err() != nil {
 			break
@@ -727,6 +680,95 @@ func metaSimilarity(a, b metaRecord) float64 {
 		}
 	}
 	return w / total
+}
+
+// ─── library index ──────────────────────────────────────────────────────────
+
+// Candidate bounds per stage. These stages are a funnel, not an exhaustive
+// comparison: each answers "is there a plausible duplicate", and a bound
+// keeps a pathological library from turning one Check() into thousands of
+// hashes or tag reads. The hash stage gets a larger budget because an exact
+// size match is a precise filter — a library of 5000 same-length tracks
+// should still be searchable — while hashing is far cheaper per candidate
+// than reading and comparing tags.
+const (
+	// indexCandidateLimit is the default for name, size-range and metadata
+	// lookups.
+	indexCandidateLimit = 64
+	// hashCandidateLimit is the exact-size-match budget.
+	hashCandidateLimit = 512
+)
+
+// musicFileType is the file_type the scanners assign to audio files. Rows
+// with any other value — directories, cover images, and the youtube download
+// cache — are not library audio and must not be offered as duplicate
+// candidates.
+const musicFileType = "music"
+
+// libraryFiles returns absolute paths of indexed audio files matching
+// `cond`, or nil when there is no index to consult.
+//
+// Why music_folder and not music_track: the scanners record every path they
+// see — files and folders alike — into music_folder, distinguished by
+// file_type. Nothing has ever inserted a music_track row, so that table is
+// permanently empty and a query against it returns nothing forever. Because
+// every stage also has a filesystem-walk fallback, the effect was invisible:
+// the stages kept producing correct verdicts, just by walking the disk, and
+// the dead queries read as "no matches found".
+//
+// Why the results are absolute: music_folder.path stores the real path, so
+// callers must NOT re-join the music root onto it. resolveUnderRoot accepts
+// both shapes because a caller that did re-join produced
+// <root>/tmp/.../song.mp3, which fails every os.Stat and reports "unique"
+// against a table full of exact duplicates.
+func (c *Checker) libraryFiles(limit int, cond string, args ...interface{}) []string {
+	if c.db == nil {
+		return nil
+	}
+	if limit <= 0 {
+		limit = indexCandidateLimit
+	}
+	var paths []string
+	err := c.db.Table("music_folder").
+		Where("file_type = ?", musicFileType).
+		Where(cond, args...).
+		Limit(limit).
+		Pluck("path", &paths).Error
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if abs := resolveUnderRoot(c.musicRoot, p); abs != "" {
+			out = append(out, abs)
+		}
+	}
+	return out
+}
+
+// resolveUnderRoot turns an index-sourced path into an absolute one.
+//
+// Index rows are stored absolute today, but the same value can arrive
+// root-relative from other sources, so both are accepted: an absolute path is
+// returned cleaned and otherwise untouched, and only a relative one is joined
+// onto root. Joining an already-absolute path is the bug this avoids.
+func resolveUnderRoot(root, p string) string {
+	if p == "" {
+		return ""
+	}
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	if root == "" {
+		return filepath.Clean(p)
+	}
+	return filepath.Clean(filepath.Join(root, p))
+}
+
+// isSelf reports whether candidate is the file under test, which must never
+// be reported as its own duplicate.
+func isSelf(candidate, path string) bool {
+	return filepath.Clean(candidate) == filepath.Clean(path)
 }
 
 // ─── utils ──────────────────────────────────────────────────────────────────
