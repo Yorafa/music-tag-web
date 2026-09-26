@@ -58,12 +58,9 @@ func (h *FullScanHandler) fullScan(ctx context.Context, subPaths [][2]string) er
 	}
 	musicFolder := h.musicRoot()
 	ignoreData := filepath.Join(musicFolder, "data")
-	var stack [][2]string
-	if len(subPaths) == 0 {
-		stack = append(stack, [2]string{"", musicFolder})
-	} else {
-		stack = append(stack, subPaths...)
-	}
+	// sub_paths is a request body, so the scopes are checked against the
+	// music root before any of them becomes a walk root. See scanstack.go.
+	stack := scanStack(musicFolder, subPaths)
 	const batchSize = 500
 	batch := make([]db.Folder, 0, batchSize)
 	// REVIEW.md P2-5: a second full scan used to INSERT a brand-new uid for
@@ -284,12 +281,10 @@ func (h *UpdateScanHandler) updateScan(ctx context.Context, subPaths [][2]string
 	}
 	musicFolder := h.musicRoot()
 	ignoreData := filepath.Join(musicFolder, "data")
-	var stack [][2]string
-	if len(subPaths) == 0 {
-		stack = append(stack, [2]string{"", musicFolder})
-	} else {
-		stack = append(stack, subPaths...)
-	}
+	// Same containment as fullScan, and for the same reason. The two were
+	// once separate copies of "trust the payload"; leaving either one out
+	// would be the same bug in a different function.
+	stack := scanStack(musicFolder, subPaths)
 	now := time.Now()
 
 	for len(stack) > 0 {

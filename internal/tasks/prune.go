@@ -28,7 +28,6 @@ import (
 
 	"go-music-tag/internal/audit"
 	"go-music-tag/internal/db"
-	"go-music-tag/internal/utils"
 )
 
 // PruneEmptyFoldersPayload 与 FullScanPayload 同 schema：worker 入口可选传
@@ -213,40 +212,23 @@ func directoryWouldEmpty(dir string, willGo map[string]bool) bool {
 }
 
 // scopes resolves a task payload's sub_paths into the directories this task
-// is allowed to act on, or just the music root when the payload names none.
+// is allowed to act on.
 //
-// Every directory either pass touches comes from here, which is the only
-// place containment is decided. That matters because the two passes once
-// disagreed about it: pruneVanished skipped an out-of-root scope while
-// pruneEmpty walked it, and pruneEmpty then os.Remove'd empty directories
-// wherever the payload pointed — an authenticated caller could name any
-// directory the worker can write. The limit was "only empty ones", which is
-// a property of os.Remove, not access control. One helper, one answer.
-//
-// A scope is a path, not a fragment, so it is checked with SafeAbs: a
-// payload naming "/etc/ssl" is an absolute path outside the library and is
-// refused outright rather than being reinterpreted as a relative subpath.
+// It is scanStack with the parent uids dropped, and it is no longer its own
+// implementation. This used to be the second copy of the containment rule,
+// and the two passes disagreed: pruneVanished skipped an out-of-root scope
+// while pruneEmpty walked it, and pruneEmpty then os.Remove'd empty
+// directories wherever the payload pointed. The limit was "only empty
+// ones", which is a property of os.Remove, not access control. Now the rule
+// lives in scanstack.go and the scanners share it.
 func (h *PruneEmptyFoldersHandler) scopes(subPaths [][2]string) []string {
-	root := h.musicRoot()
-	if root == "" {
+	if h.musicRoot() == "" {
 		return nil
 	}
-	cleanRoot := filepath.Clean(root)
-	if len(subPaths) == 0 {
-		return []string{cleanRoot}
-	}
-	out := make([]string, 0, len(subPaths))
-	for _, sp := range subPaths {
-		if sp[1] == "" {
-			out = append(out, cleanRoot)
-			continue
-		}
-		abs, err := utils.SafeAbs(cleanRoot, sp[1])
-		if err != nil {
-			log.Printf("[prune] skip out-of-root scope %q: %v", sp[1], err)
-			continue
-		}
-		out = append(out, abs)
+	stack := scanStack(h.musicRoot(), subPaths)
+	out := make([]string, 0, len(stack))
+	for _, sp := range stack {
+		out = append(out, sp[1])
 	}
 	return out
 }
