@@ -325,7 +325,8 @@ func wireTaskHandlers(mux *asynq.ServeMux, d taskHandlerDeps) {
 		// consumer of fpcalc inside the worker image.
 		{tasks.TypeFpIndex, func() {
 			tasks.NewFpIndexMux(mux, &tasks.FpIndexHandler{
-				DB: gormDB,
+				DB:        gormDB,
+				MusicRoot: musicRoot,
 				// Re-arm on progress so the index follows the library
 				// instead of freezing at whatever was on disk when the
 				// worker booted. See FpIndexHandler.Rearm.

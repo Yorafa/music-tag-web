@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -160,6 +161,81 @@ func TestPruneEmpty_ScopedToSubPaths(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "out-of-scope", "empty-b")); err != nil {
 		t.Errorf("out-of-scope dir was removed: %v", err)
+	}
+}
+
+// The scope comes straight out of the request body, and this pass removes
+// directories. It used to walk whatever it was handed while its sibling
+// pruneVanished skipped out-of-root scopes — so an authenticated caller
+// could name any directory the worker can write and have its empty
+// subdirectories removed. "Only empty ones" is a property of os.Remove,
+// not access control.
+//
+// The sibling's version of this test is TestPruneVanished_IgnoresOutOfRootScope.
+func TestPruneEmpty_IgnoresOutOfRootScope(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("MUSIC_DIR", root)
+
+	outside := t.TempDir()
+	// A sibling of the library, not a child: this is the shape that has to
+	// be refused, because a child of root cannot be reached by escaping it.
+	victim := filepath.Join(outside, "important-empty-dir")
+	mustMkdir(t, victim)
+	// And a legitimate in-scope directory in the same payload, so the
+	// refusal cannot be satisfied by dropping the whole request.
+	legit := filepath.Join(root, "in-scope", "empty")
+	mustMkdir(t, legit)
+
+	h := &PruneEmptyFoldersHandler{MusicRoot: root}
+	removed, err := h.pruneEmpty(context.Background(),
+		[][2]string{{"", outside}, {"", filepath.Join(root, "in-scope")}})
+	if err != nil {
+		t.Fatalf("pruneEmpty: %v", err)
+	}
+
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("ESCAPED: an empty directory outside the music root was removed: %v", err)
+	}
+	for _, r := range removed {
+		if strings.HasPrefix(r, "..") {
+			t.Errorf("removed = %v, which names a path outside the library", removed)
+		}
+	}
+	// The in-scope half still ran: containment filters scopes, it does not
+	// discard the request.
+	if !equalStrings(removed, []string{"in-scope", "in-scope/empty"}) {
+		t.Errorf("removed = %v, want [in-scope in-scope/empty]", removed)
+	}
+}
+
+// A scope is a path, not a fragment. "../../etc" is the traversal shape, and
+// an absolute path outside the root is the other one — neither may be
+// re-read as a relative subpath of the library, which is what SafeJoin
+// would do with them.
+func TestPruneEmpty_IgnoresTraversalAndForeignAbsoluteScopes(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("MUSIC_DIR", root)
+
+	outside := t.TempDir()
+	mustMkdir(t, filepath.Join(outside, "empty"))
+	mustMkdir(t, filepath.Join(filepath.Dir(root), "sibling-empty"))
+
+	h := &PruneEmptyFoldersHandler{MusicRoot: root}
+	for _, scope := range []string{
+		outside, // absolute, elsewhere
+		filepath.Join(filepath.Dir(root), "sibling-empty"), // absolute, a sibling
+		"../" + filepath.Base(outside),                     // traversal
+	} {
+		removed, err := h.pruneEmpty(context.Background(), [][2]string{{"", scope}})
+		if err != nil {
+			t.Fatalf("pruneEmpty(%q): %v", scope, err)
+		}
+		if len(removed) != 0 {
+			t.Errorf("scope %q removed %v, want nothing", scope, removed)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(outside, "empty")); err != nil {
+		t.Errorf("empty dir outside the root was removed: %v", err)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"go-music-tag/internal/audioext"
 	"go-music-tag/internal/db"
 	"go-music-tag/internal/fingerprint"
+	"go-music-tag/internal/utils"
 )
 
 // FpIndexHandler fills in music_folder.duration for library audio.
@@ -29,6 +30,11 @@ import (
 // added since.
 type FpIndexHandler struct {
 	DB *gorm.DB
+	// MusicRoot bounds the index to the library. Empty means every row is
+	// in scope, which is the right default for a test that has no root
+	// configured and the wrong one in production — see the field's comment
+	// in processRow's filter, and utils.UnderRoot.
+	MusicRoot string
 	// FPcalcPath overrides binary discovery; empty means look it up on PATH.
 	FPcalcPath string
 	// Workers is the number of concurrent fpcalc processes. Zero means 4.
@@ -101,6 +107,13 @@ func (h *FpIndexHandler) staleIndexedFiles() ([]fpIndexRow, error) {
 	}
 	out := make([]fpIndexRow, 0, len(rows))
 	for _, r := range rows {
+		// Containment first, so a cache row costs a string compare rather
+		// than a stat. This runs over every already-indexed file on every
+		// re-arm, so the rows it skips are the ones that would otherwise
+		// be paid for on each pass.
+		if !utils.UnderRoot(h.MusicRoot, r.Path) {
+			continue
+		}
 		fi, serr := os.Stat(r.Path)
 		if serr != nil {
 			// Gone from disk. Not this task's business to delete the
@@ -303,9 +316,26 @@ func (h *FpIndexHandler) pendingFiles() ([]fpIndexRow, error) {
 	// drifted before (see internal/audioext), so the extension is checked
 	// again here. Indexing a .jpg would spend 0.4s proving fpcalc cannot
 	// decode it.
+	//
+	// And the download cache is dropped, by root containment rather than
+	// by file_type. Widening the SQL above to `file_type NOT IN ('folder',
+	// 'image')` was necessary — it is what brought 加入库 tracks back — but
+	// it also swept in /tmp/audio_cache, where the downloader parks a copy
+	// of the file it just fetched. Those rows got a duration and a full
+	// fingerprint (visible in the live table), at 0.4s a file, for rows that
+	// duplicate detection never queries: it excludes them by exactly this
+	// containment test. The bill also does not stop — the cache is scratch
+	// space that changes as downloads happen, so every cache file reads as
+	// "indexed but stale" on the next run, and a run that indexes anything
+	// re-arms the chain. The index would then wake up on cache activity,
+	// which is the opposite of what the re-arm is for.
+	//
+	// Two predicates, two different jobs: extension says "can fpcalc read
+	// this", containment says "is this the library's file to compare".
+	// Only the second one keeps the cache out.
 	out := rows[:0]
 	for _, r := range rows {
-		if audioext.IsLibraryPath(r.Path) {
+		if audioext.IsLibraryPath(r.Path) && utils.UnderRoot(h.MusicRoot, r.Path) {
 			out = append(out, r)
 		}
 	}

@@ -127,3 +127,43 @@ func SafeRelPath(p string) (string, error) {
 	}
 	return cleaned, nil
 }
+
+// UnderRoot reports whether p names something inside root.
+//
+// It exists because "does this row belong to the library?" kept getting
+// answered two different ways. The answer decides whether a row is a
+// duplicate-detection candidate, whether it should be fingerprinted, and
+// whether it may be deleted as stale — and the wrong answer is always
+// silent, because the row is simply absent from the query's point of view.
+//
+// A path can arrive absolute (music_folder.path stores it that way) or
+// root-relative (older rows, and callers that joined before storing), so
+// both are accepted. Joining an already-absolute path is the bug this
+// avoids: it would produce <root>/tmp/audio_cache/... and then fail every
+// containment test against a table full of correctly-stored rows.
+//
+// An empty root means "no root configured", which is not the same answer as
+// "not inside the root". Callers use this to decide whether a feature has
+// any scope at all, and refusing every row there would silently disable it
+// rather than narrowing it — so an empty root admits everything, and the
+// disk-walk fallbacks those callers pair it with have the same limitation.
+func UnderRoot(root, p string) bool {
+	if p == "" {
+		return false
+	}
+	abs := filepath.Clean(p)
+	if !filepath.IsAbs(abs) {
+		if root == "" {
+			return true
+		}
+		abs = filepath.Clean(filepath.Join(root, abs))
+	}
+	if root == "" {
+		return true
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), abs)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}

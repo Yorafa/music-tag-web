@@ -28,6 +28,7 @@ import (
 
 	"go-music-tag/internal/audit"
 	"go-music-tag/internal/db"
+	"go-music-tag/internal/utils"
 )
 
 // PruneEmptyFoldersPayload 与 FullScanPayload 同 schema：worker 入口可选传
@@ -137,15 +138,9 @@ func (h *PruneEmptyFoldersHandler) pruneEmptyMode(ctx context.Context, subPaths 
 			return nil, fmt.Errorf("prune: walk root: %w", err)
 		}
 	} else {
-		for _, sp := range subPaths {
-			// SafeJoin semantics matter here: a payload path is untrusted
-			// input and must not be able to walk out of the library.
-			dir := sp[1]
-			if dir == "" {
-				dir = root
-			}
-			if err := walk(dir); err != nil {
-				log.Printf("[prune] walk %s: %v", dir, err)
+		for _, scope := range h.scopes(subPaths) {
+			if err := walk(scope); err != nil {
+				log.Printf("[prune] walk %s: %v", scope, err)
 			}
 		}
 	}
@@ -217,6 +212,45 @@ func directoryWouldEmpty(dir string, willGo map[string]bool) bool {
 	return true
 }
 
+// scopes resolves a task payload's sub_paths into the directories this task
+// is allowed to act on, or just the music root when the payload names none.
+//
+// Every directory either pass touches comes from here, which is the only
+// place containment is decided. That matters because the two passes once
+// disagreed about it: pruneVanished skipped an out-of-root scope while
+// pruneEmpty walked it, and pruneEmpty then os.Remove'd empty directories
+// wherever the payload pointed — an authenticated caller could name any
+// directory the worker can write. The limit was "only empty ones", which is
+// a property of os.Remove, not access control. One helper, one answer.
+//
+// A scope is a path, not a fragment, so it is checked with SafeAbs: a
+// payload naming "/etc/ssl" is an absolute path outside the library and is
+// refused outright rather than being reinterpreted as a relative subpath.
+func (h *PruneEmptyFoldersHandler) scopes(subPaths [][2]string) []string {
+	root := h.musicRoot()
+	if root == "" {
+		return nil
+	}
+	cleanRoot := filepath.Clean(root)
+	if len(subPaths) == 0 {
+		return []string{cleanRoot}
+	}
+	out := make([]string, 0, len(subPaths))
+	for _, sp := range subPaths {
+		if sp[1] == "" {
+			out = append(out, cleanRoot)
+			continue
+		}
+		abs, err := utils.SafeAbs(cleanRoot, sp[1])
+		if err != nil {
+			log.Printf("[prune] skip out-of-root scope %q: %v", sp[1], err)
+			continue
+		}
+		out = append(out, abs)
+	}
+	return out
+}
+
 // pruneVanished drops index rows for library files that are no longer on
 // disk.
 //
@@ -251,24 +285,7 @@ func (h *PruneEmptyFoldersHandler) pruneVanishedMode(ctx context.Context, subPat
 		return nil
 	}
 
-	scopes := []string{filepath.Clean(root)}
-	if len(subPaths) > 0 {
-		// A payload path is untrusted input and must not be able to walk
-		// out of the library; same reasoning as pruneEmpty above.
-		scopes = scopes[:0]
-		for _, sp := range subPaths {
-			dir := sp[1]
-			if dir == "" {
-				dir = root
-			}
-			clean := filepath.Clean(dir)
-			if clean != root && !strings.HasPrefix(clean, root+string(os.PathSeparator)) {
-				log.Printf("[prune] skip out-of-root scope %s", clean)
-				continue
-			}
-			scopes = append(scopes, clean)
-		}
-	}
+	scopes := h.scopes(subPaths)
 
 	// No de-duplication across scopes, because none is needed: music_folder
 	// has a UNIQUE index on path, so a query returns each path at most

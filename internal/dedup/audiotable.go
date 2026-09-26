@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"go-music-tag/internal/audioext"
+	"go-music-tag/internal/utils"
 )
 
 // Deciding which music_folder rows are library audio.
@@ -79,22 +80,22 @@ func isLibraryAudioRow(path string) bool {
 // file_type is whatever the downloader wrote ('youtube', 'netease', …) —
 // the same drift that hid real library tracks from this query in the first
 // place. Root containment does not drift.
+//
+// The test itself is utils.UnderRoot, shared with the fingerprint indexer
+// and the pruner. It was once spelled out here, and the three copies
+// disagreed: the indexer kept filtering on file_type and so indexed the
+// cache, spending 0.4s a file on rows nothing would ever query.
 func underMusicRoot(root, path string) bool {
+	if path == "" {
+		return false
+	}
 	if root == "" {
 		// No configured root: there is nothing to be inside of, and the
 		// disk-walk stages have the same limitation. Refusing every row
 		// would silently disable the index entirely.
 		return true
 	}
-	abs := resolveUnderRoot(root, path)
-	if abs == "" {
-		return false
-	}
-	rel, err := filepath.Rel(filepath.Clean(root), abs)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return utils.UnderRoot(root, path)
 }
 
 // libraryAudioRows runs `cond` against music_folder restricted to rows that
