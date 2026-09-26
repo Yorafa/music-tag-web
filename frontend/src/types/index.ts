@@ -13,7 +13,15 @@ export interface SongInfo {
    *  than substituting a default. */
   genre?: string;
   source?: string;
+  /** Confidence in the AUDIO, 0..1, and only ever set by a source that
+   *  listened to the file (AcoustID). Omitted means "matched on the title
+   *  text alone" — a different and far weaker claim, so consumers must
+   *  not invent a value for it. */
   score?: number;
+  /** How the candidate's title compared to the query, as a fact rather
+   *  than a fabricated percentage: 'exact' | 'partial'. Filled in by the
+   *  gateway's fan-out, so it is absent for single-source lookups. */
+  title_match?: 'exact' | 'partial';
   /** Lyric body for a scrape candidate — populated whenever the scrape
    *  call answered. Both keys are accepted because upstream is mixed: some
    *  plugins emit `lyric` (singular, e.g. Kuwo's [cover] appendix), others

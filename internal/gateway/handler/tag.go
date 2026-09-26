@@ -277,6 +277,9 @@ func SmartTagSearch(ctx context.Context, title, fullPath string) ([]plugin.Song,
 
 	all := []plugin.Song{}
 	seenIDs := map[string]bool{}
+	// Ordering only. Kept out of plugin.Song.Score so it cannot be mistaken
+	// for a confidence — see the comment at the assignment below.
+	rank := map[string]float64{}
 	for i := 0; i < len(sources); i++ {
 		r := <-ch
 		if r.err != nil || len(r.songs) == 0 {
@@ -291,15 +294,16 @@ func SmartTagSearch(ctx context.Context, title, fullPath string) ([]plugin.Song,
 			if id != "" {
 				seenIDs[id] = true
 			}
-			sg.Score = scoreMatch(title, fileArtist, fileAlbum, sg)
 			if sg.Name != "" && matchScoreSimple(title, sg.Name) == 0 {
 				continue // 标题不沾边 → 丢弃
 			}
+			sg = annotateCandidate(title, sg)
+			rank[sgKey(sg)] = scoreMatch(title, fileArtist, fileAlbum, sg)
 			all = append(all, sg)
 		}
 	}
 
-	sortSongsByScore(all)
+	sortSongsByRank(all, rank)
 
 	// 去重：同 (name, artist) 取首条
 	dedup := []plugin.Song{}
@@ -318,13 +322,49 @@ func SmartTagSearch(ctx context.Context, title, fullPath string) ([]plugin.Song,
 	return dedup, nil
 }
 
-func sortSongsByScore(s []plugin.Song) {
+// sortSongsByRank orders candidates by how well their text matched the
+// query. This is a ranking aid, not a measurement: the values it sorts on
+// never leave the gateway, because presenting them as a match percentage is
+// what made every candidate look identical.
+// annotateCandidate records what the gateway learned about a candidate
+// while fanning out, and returns it.
+//
+// It deliberately does NOT touch Score. Score used to be assigned here as
+// scoreMatch(title, artist, album, sg) — a 0..6 title-similarity sum that
+// the UI then multiplied by 20 to render as a percentage. Since a scrape
+// usually has no artist or album to compare (a filename is all the user
+// has), that sum was 2 for every candidate and every row read a flat
+// "40%", live versions and remixes included. Worse, the assignment
+// overwrote the one number in the system that is actually measured:
+// AcoustID's acoustic confidence, 0..1, which the plugin container had
+// computed and put on the wire.
+func annotateCandidate(title string, sg plugin.Song) plugin.Song {
+	switch matchScoreSimple(title, sg.Name) {
+	case 2:
+		sg.TitleMatch = "exact"
+	case 1:
+		sg.TitleMatch = "partial"
+	}
+	return sg
+}
+
+func sortSongsByRank(s []plugin.Song, rank map[string]float64) {
 	// 简单插入排序，分数高的在前
 	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j].Score > s[j-1].Score; j-- {
+		for j := i; j > 0 && rank[sgKey(s[j])] > rank[sgKey(s[j-1])]; j-- {
 			s[j], s[j-1] = s[j-1], s[j]
 		}
 	}
+}
+
+// sgKey identifies a candidate for the rank map. ID alone is not enough:
+// several sources return an empty ID, and those would otherwise collapse
+// into one bucket and be sorted by whatever the first of them scored.
+func sgKey(sg plugin.Song) string {
+	if sg.ID != "" {
+		return sg.Source + "\x00" + sg.ID
+	}
+	return sg.Source + "\x00" + strings.ToLower(sg.Name) + "\x00" + strings.ToLower(sg.Artist)
 }
 
 // scoreMatch 三维 (title, artist, album) 打分。空字符串字段返回 0。

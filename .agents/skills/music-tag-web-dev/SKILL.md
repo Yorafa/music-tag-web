@@ -322,6 +322,8 @@ When a shadcn component is missing:
 
 15. **First-boot bootstrap**: Lazymode generates secrets via `crypto/rand` on first start. Admin password appears ONCE in gateway startup log. Backup `.env` with explicit secrets to skip bootstrap.
 
+16. **`plugin.Song.Score` is an acoustic confidence, not a rank**: 0..1, `omitempty`, and only a source that actually decoded the file may set it (today: AcoustID, straight from the API). It is NOT `scoreMatch`'s 0..6 title-similarity sum — that used to occupy this field, and the frontend multiplied it by 20 to render a percentage. Because a scrape normally has no artist or album to compare (the user has a filename and little else), the sum was 2 for every candidate and every row in the picker read a flat 40%, with a hardcoded 85% for anything the backend never scored. If you need to order candidates, use the `rank` map in `SmartTagSearch` / `sortSongsByRank` — a ranking signal that deliberately never leaves the gateway. Publishing a number that is always the same, or inventing one when it is missing, is worse than saying "not verified against the audio"; `Song.TitleMatch` exists for the weaker text-only claim.
+
 ## Verification Checklist
 
 Go (needs `CGO_ENABLED=1` for go-sqlite3, and `fpcalc` on PATH or the

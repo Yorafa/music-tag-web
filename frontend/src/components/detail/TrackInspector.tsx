@@ -572,7 +572,27 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
             ) : (
               <div className="space-y-2">
                 {candidates.map((c, i) => {
-                  const score = typeof c.score === 'number' ? Math.min(100, Math.round(c.score * 20)) : 85;
+                  // Two different claims, never merged into one number.
+                  //
+                  // `score` is a confidence in the audio and only AcoustID
+                  // sets it, so when it is present it is worth showing. The
+                  // old code multiplied a title-similarity sum by 20 to
+                  // manufacture a percentage, which displayed a flat 40% for
+                  // every candidate of a normal scrape — and 85% (a literal
+                  // in the fallback) for the ones the backend never scored
+                  // at all. A number that is always the same, or invented
+                  // when missing, is worse than saying what is actually
+                  // known.
+                  const confidence =
+                    typeof c.score === 'number' && c.score > 0
+                      ? Math.round(c.score * 100)
+                      : null;
+                  const titleFact =
+                    c.title_match === 'exact'
+                      ? '标题完全匹配'
+                      : c.title_match === 'partial'
+                        ? '标题部分匹配'
+                        : null;
                   return (
                     <div
                       key={`${c.id}-${i}`}
@@ -606,9 +626,20 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
 
                       <div className="flex items-center justify-between pt-2 border-t border-border/40">
                         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                          <span>匹配度:</span>
-                          {/* A match score is a measurement, not a success state. `text-emerald-500` was a raw palette value with no dark-mode counterpart, so it rendered as the same fixed green in both themes while everything around it followed the design tokens. */}
-                          <span className="font-mono font-bold text-foreground">{score}%</span>
+                          {confidence ? (
+                            <>
+                              <Fingerprint className="w-3 h-3" />
+                              <span>声纹匹配</span>
+                              {/* A confidence is a measurement, not a success state, so it gets no colour. The old green was a raw palette value with no dark-mode counterpart: it rendered as the same fixed green in both themes while everything around it followed the design tokens. */}
+                              <span className="font-mono font-bold text-foreground">
+                                {confidence}%
+                              </span>
+                            </>
+                          ) : titleFact ? (
+                            <span>{titleFact}</span>
+                          ) : (
+                            <span className="italic">未按音频校验</span>
+                          )}
                         </div>
                         <Button
                           variant="secondary"

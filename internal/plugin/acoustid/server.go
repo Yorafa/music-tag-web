@@ -104,6 +104,9 @@ func (s *Server) FetchId3ByTitle(ctx context.Context, req *pb.FetchId3Request) (
 	for i, m := range matches {
 		out[i] = &pb.Song{
 			Id: m.RecordingID, Name: m.Title, Artist: m.Artist, Album: m.Album,
+			// 0..1 straight from the API. The gateway's fan-out leaves
+			// this alone; only the title heuristic used to overwrite it.
+			Score: m.Confidence,
 		}
 	}
 	return &pb.FetchId3Response{Songs: out}, nil
@@ -120,6 +123,13 @@ type match struct {
 	Title       string
 	Artist      string
 	Album       string
+	// Confidence is the API's own 0..1 score for this fingerprint
+	// against this recording. It used to live only in a local map, used
+	// to pick between fingerprints that pointed at one recording — so
+	// the number the user would most want to see was computed and then
+	// thrown away, and acoustid candidates went out indistinguishable
+	// from a title-text guess.
+	Confidence float64
 }
 
 // apiRecording 镜像一条 MusicBrainz recording 在 /v2/lookup 响应里的形状。
@@ -138,7 +148,7 @@ type apiTitled struct {
 	Title string `json:"title"`
 }
 
-func matchFor(rec apiRecording) match {
+func matchFor(rec apiRecording, confidence float64) match {
 	artist, album := "", ""
 	if len(rec.Artists) > 0 {
 		artist = rec.Artists[0].Name
@@ -146,7 +156,7 @@ func matchFor(rec apiRecording) match {
 	if len(rec.ReleaseGroups) > 0 {
 		album = rec.ReleaseGroups[0].Title
 	}
-	return match{RecordingID: rec.ID, Title: rec.Title, Artist: artist, Album: album}
+	return match{RecordingID: rec.ID, Title: rec.Title, Artist: artist, Album: album, Confidence: confidence}
 }
 
 func (s *Server) match(ctx context.Context, fingerprint string, duration int) ([]match, error) {
@@ -203,14 +213,14 @@ func (s *Server) match(ctx context.Context, fingerprint string, duration int) ([
 		for _, rec := range r.Recordings {
 			if i, seen := idx[rec.ID]; seen {
 				if r.Score > score[rec.ID] {
-					out[i] = matchFor(rec)
+					out[i] = matchFor(rec, r.Score)
 					score[rec.ID] = r.Score
 				}
 				continue
 			}
 			idx[rec.ID] = len(out)
 			score[rec.ID] = r.Score
-			out = append(out, matchFor(rec))
+			out = append(out, matchFor(rec, r.Score))
 		}
 	}
 	return out, nil

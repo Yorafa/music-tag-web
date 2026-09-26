@@ -7,19 +7,39 @@ import "context"
 
 // Song is the normalized result from any tag source.
 type Song struct {
-	ID       string  `json:"id"`
-	Name     string  `json:"name"`
-	Artist   string  `json:"artist"`
-	ArtistID string  `json:"artist_id"`
-	Album    string  `json:"album"`
-	AlbumID  string  `json:"album_id"`
-	AlbumImg string  `json:"album_img"`
-	Year     string  `json:"year"`
-	Source   string  `json:"source"`
-	Genre    string  `json:"genre,omitempty"`
-	Mid      string  `json:"mid,omitempty"`
-	Cover    string  `json:"cover,omitempty"`
-	Score    float64 `json:"score,omitempty"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Artist   string `json:"artist"`
+	ArtistID string `json:"artist_id"`
+	Album    string `json:"album"`
+	AlbumID  string `json:"album_id"`
+	AlbumImg string `json:"album_img"`
+	Year     string `json:"year"`
+	Source   string `json:"source"`
+	Genre    string `json:"genre,omitempty"`
+	Mid      string `json:"mid,omitempty"`
+	Cover    string `json:"cover,omitempty"`
+	// Score is a CONFIDENCE IN THE AUDIO, on 0..1, and only a source that
+	// actually listened to the file sets it — today that means AcoustID,
+	// whose value comes straight from the API. Omitted (0) means "this
+	// source matched on the title text alone", which is a different and
+	// much weaker claim.
+	//
+	// It used to be a 0..6 title-similarity sum filled in by the gateway,
+	// which made the number actively misleading: the frontend multiplied
+	// it by 20 to get a percentage, so a scrape with no artist or album
+	// to compare against — the normal case, since a filename is all the
+	// user has — scored 2 for every candidate and displayed a flat 40%
+	// for all of them, live versions and remixes included. It also threw
+	// away the one real confidence value the system had: AcoustID's score
+	// was used to order its own dedup and then dropped on the floor.
+	Score float64 `json:"score,omitempty"`
+	// TitleMatch states, as a fact rather than a fabricated percentage,
+	// how the candidate's title compared to the query: "exact" or
+	// "partial". Filled in by the gateway during fan-out, so it never
+	// crosses the gRPC wire — the plugins return titles, the gateway is
+	// what knows what was searched for.
+	TitleMatch string `json:"title_match,omitempty"`
 	// Duration is the track length in SECONDS, already normalized by the
 	// plugin. Upstream units differ (NetEase reports milliseconds, the
 	// rest seconds), so the conversion belongs at the edge rather than in
