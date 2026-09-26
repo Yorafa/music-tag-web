@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -153,8 +154,8 @@ func main() {
 	// detection picks candidates by track length, and this is what fills
 	// that column in. Enqueued from here rather than from the gateway so a
 	// fresh deployment converges without anyone clicking a button, and so
-	// the re-arm chain has a run to start from — see enqueueFpIndexAfter.
-	enqueueFpIndexAfter(0)
+	// the re-arm chain has a run to start from — see fpIndexBootOptions.
+	enqueueFpIndex(fpIndexBootOptions())
 
 	if err := srv.Run(mux); err != nil {
 		log.Fatalf("[worker] asynq terminated with error: %v", err)
@@ -192,13 +193,22 @@ type taskHandlerDeps struct {
 }
 
 // indexFollowup is what the producers call once they have added library
-// files. Immediate rather than delayed, and with no uniqueness window: a scan
-// that just found two hundred new tracks should not wait 30 seconds, and the
-// indexer is idempotent, so a redundant run costs one indexed query.
+// files. Immediate rather than delayed, so a scan that just found two
+// hundred new tracks does not wait 30 seconds for them to be indexed.
+//
+// It does take a uniqueness window, because "the indexer is idempotent, so a
+// redundant run is nearly free" was the reasoning that let it through and it
+// is wrong by a factor of N. A redundant run is not one indexed query — it is
+// pendingFiles (one query) plus staleIndexedFiles, which stats every
+// already-indexed library file. Adding fifty tracks to the library in one go
+// fires this hook fifty times, and without a window that is fifty runs, of
+// which the first does the work and the remaining forty-nine each re-stat the
+// whole library to conclude there is nothing to do. On a 2000-track library
+// that is ~100k syscalls to learn what the first run already established.
 //
 // This is the prompt half of the pair. The re-arm is the convergent half —
 // see librarychanged.go for why neither alone is enough.
-func indexFollowup() { enqueueFpIndexAfter(0) }
+func indexFollowup() { enqueueFpIndex(fpIndexFollowupOptions()) }
 
 // fpIndexRearmDelay is how long the indexer waits before scheduling the
 // follow-up run that a productive run asks for.
@@ -208,31 +218,58 @@ func indexFollowup() { enqueueFpIndexAfter(0) }
 // of the user finishing.
 const fpIndexRearmDelay = 30 * time.Second
 
-// enqueueFpIndexAfter schedules an index run, optionally delayed.
+// fpIndexFollowupWindow is the uniqueness window on the producer path.
 //
-// delay > 0 is the re-arm path.
+// It collapses a burst of downloads into a single run. Its safety rests on
+// what asynq's uniqueness lock actually is: the key is SET NX EX on enqueue
+// and deleted the moment that task reaches a terminal state (internal/rdb's
+// doneCmd, guarded by GET-unique-key == this task's id, so a run only ever
+// clears its own lock). A refusal therefore does not mean "we lost the
+// notification" — it means a run is already enqueued or in flight, and the
+// lock is released the instant it finishes rather than lingering for the
+// window.
 //
-// The boot path deliberately does NOT take a long uniqueness window. It used
-// to take an hour, to stop a restart from stacking runs — but the re-arm
-// chain is seeded by this call, so a skipped seed means the chain never
-// starts and every file added afterwards sits unindexed until the next
-// restart. That is exactly what happened on the first deployment of this:
-// the queue was empty, the enqueue was refused as a duplicate, and a file
-// added a minute later still had no duration an hour later.
-//
-// The task is idempotent and near-free when there is nothing to do — one
-// indexed query returning no rows — so a duplicate boot run costs a query,
-// not a decode. Stacking is bounded by restarts, which are rare and
-// deliberate, whereas an hour of blindness is not.
-//
-// A failed enqueue is logged and swallowed rather than propagated. The index
-// is an optimisation — without it the fingerprint stage still runs, just with
-// worse candidate selection — so a queue hiccup must not fail the download or
-// scan that triggered it.
-func enqueueFpIndexAfter(delay time.Duration) {
-	client := asynq.NewClient(queue.ClientOpts())
-	defer func() { _ = client.Close() }()
+// The window only has to outlast the gap between two producers in the same
+// burst, so it is short. A long one would be actively wrong here: it would
+// keep refusing enqueues for its whole duration even when no run exists.
+const fpIndexFollowupWindow = 30 * time.Second
 
+// The three ways an index run is scheduled, as option sets.
+//
+// These are named functions rather than (delay, unique) pairs passed at the
+// call sites, because that configuration IS the design: the seed must stay
+// unwindowed, the producer path must be windowed, and the re-arm must be both
+// delayed and windowed. Scattering the numbers across three call sites is
+// exactly what let a test assert on the shared builder and pass while the
+// wiring was wrong -- the builder accepts any pair, so asserting on it says
+// nothing about which pair a given path actually uses.
+func fpIndexBootOptions() []asynq.Option {
+	// The boot path deliberately does NOT take a uniqueness window. It used
+	// to take an hour, to stop a restart from stacking runs -- but the
+	// re-arm chain is seeded by this call, so a skipped seed means the
+	// chain never starts and every file added afterwards sits unindexed
+	// until the next restart. That is what happened on the first
+	// deployment of this: the queue was empty, the enqueue was refused as
+	// a duplicate, and a file added a minute later still had no duration
+	// an hour later.
+	//
+	// The task is idempotent and cheap when there is nothing to do, so a
+	// duplicate boot run costs a query, not a decode. Stacking is bounded
+	// by restarts, which are rare and deliberate, whereas an hour of
+	// blindness is not.
+	return fpIndexTaskOptions(0, 0)
+}
+
+func fpIndexFollowupOptions() []asynq.Option {
+	return fpIndexTaskOptions(0, fpIndexFollowupWindow)
+}
+
+func fpIndexRearmOptions() []asynq.Option {
+	return fpIndexTaskOptions(fpIndexRearmDelay, fpIndexRearmDelay)
+}
+
+// fpIndexTaskOptions builds the asynq options for an index run.
+func fpIndexTaskOptions(delay, unique time.Duration) []asynq.Option {
 	opts := []asynq.Option{
 		asynq.Queue("default"),
 		asynq.MaxRetry(1),
@@ -240,20 +277,54 @@ func enqueueFpIndexAfter(delay time.Duration) {
 		// is minutes of work. A short timeout would kill it partway.
 		asynq.Timeout(30 * time.Minute),
 	}
+	if unique > 0 {
+		opts = append(opts, asynq.Unique(unique))
+	}
 	if delay > 0 {
-		// The re-arm path does dedupe, so a burst of downloads collapses
-		// into one follow-up rather than one per file.
-		opts = append(opts, asynq.Unique(fpIndexRearmDelay))
 		opts = append(opts, asynq.ProcessIn(delay))
 	}
+	return opts
+}
+
+// enqueueFpIndex is the one place an index run is scheduled from.
+//
+// A failed enqueue is logged and swallowed rather than propagated. The index
+// is an optimisation -- without it the fingerprint stage still runs, just with
+// worse candidate selection -- so a queue hiccup must not fail the download or
+// scan that triggered it.
+func enqueueFpIndex(opts []asynq.Option) {
+	client := asynq.NewClient(queue.ClientOpts())
+	defer func() { _ = client.Close() }()
+
 	task, err := tasks.NewTypedTask(tasks.TypeFpIndex, &tasks.FpIndexPayload{}, opts...)
 	if err != nil {
 		log.Printf("[worker] could not build %s: %v", tasks.TypeFpIndex, err)
 		return
 	}
 	if _, err := client.Enqueue(task); err != nil {
+		if isBenignIndexRefusal(err) {
+			log.Printf("[worker] %s already scheduled or running; nothing to do", tasks.TypeFpIndex)
+			return
+		}
 		log.Printf("[worker] could not enqueue %s: %v", tasks.TypeFpIndex, err)
 	}
+}
+
+// isBenignIndexRefusal reports whether an enqueue error just means a run
+// already exists.
+//
+// A refusal is not a failure and must not read like one in the log. It is
+// the outcome the uniqueness window exists to produce, and logging it as
+// "could not enqueue" trained the reader to ignore the line — which is
+// exactly the line that would have told them the re-arm chain had no seed.
+//
+// Distinct from a real failure in a way worth stating: the key is SET NX EX
+// on enqueue and deleted the moment that task reaches a terminal state, so
+// the lock's presence means an index run is enqueued or in flight right now.
+// A Redis outage or a serialisation failure means no run exists, and the
+// index goes stale until something else schedules one.
+func isBenignIndexRefusal(err error) bool {
+	return errors.Is(err, asynq.ErrDuplicateTask)
 }
 
 // wireTaskHandlers registers every task type this worker consumes.
@@ -330,7 +401,7 @@ func wireTaskHandlers(mux *asynq.ServeMux, d taskHandlerDeps) {
 				// Re-arm on progress so the index follows the library
 				// instead of freezing at whatever was on disk when the
 				// worker booted. See FpIndexHandler.Rearm.
-				Rearm: func() { enqueueFpIndexAfter(fpIndexRearmDelay) },
+				Rearm: func() { enqueueFpIndex(fpIndexRearmOptions()) },
 			})
 		}},
 	}
