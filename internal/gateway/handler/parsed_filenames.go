@@ -50,11 +50,16 @@ const MaxPreviewRows = 5000
 //	}
 //
 //	→ 200 OK { token, results: [...same shape as cache.ParsedResult...] }
-//	→ 400 Bad  if paths is missing / empty / over MaxPreviewRows, or the
-//	           pattern does not compile / names a field that does not exist.
-//	→ 422 Unprocessable if any path fails SafeJoin (suspicious payload).
+//	→ Failure(...) if paths is missing / empty / over MaxPreviewRows, or
+//	           the pattern does not compile / names a field that does
+//	           not exist. Note the envelope convention: Failure answers
+//	           HTTP 200 with result:false and code "400" (see
+//	           handler/response.go), and the frontend turns that into a
+//	           thrown Error carrying `message` (api/envelope.ts).
+//	→ 422 Unprocessable if any path fails SafeJoin (suspicious payload) —
+//	           that one is a real status code, written directly.
 //
-// # Why a bad pattern is a 400 and not a per-row unparsable
+// # Why a bad pattern fails the request and is not a per-row unparsable
 //
 // The pattern used to be compiled inside the per-file loop, so a typo
 // turned every row unparsable and the response said nothing about why —
@@ -62,6 +67,13 @@ const MaxPreviewRows = 5000
 // error names the offending group and lists the fields that exist. The
 // preview is worthless with a broken pattern, so failing the request is
 // more useful than returning a table of blanks.
+//
+// The client checks the same things before spending the round trip
+// (frontend/src/components/scraper/parseAssist.ts) and additionally
+// rejects constructs Go's RE2 refuses but V8 accepts — lookahead,
+// lookbehind, backreferences — which is verified against
+// regexp.Compile in internal/utils/filenames_preset_test.go rather than
+// assumed.
 func PreviewParseFilenames(c *gin.Context) {
 	var req struct {
 		Paths   []string           `json:"paths" binding:"required"`

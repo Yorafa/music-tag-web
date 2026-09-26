@@ -109,11 +109,25 @@ export function changedCellCount(drafts: OverrideDrafts): number {
   return n;
 }
 
-/** Fields the parser found something for, per row, in reading order.
- *  The table hides a column's input for fields nothing was read into, so
- *  a default (pattern-less) preview does not show eight empty boxes. */
+/** Fields the table shows, in reading order.
+ *
+ *  Normally that is the fields the parser read something into, so a
+ *  pattern-less preview does not open eight empty columns. But when
+ *  NOTHING was read — every row unparsable, which is exactly the case
+ *  the dialog tells the user to fix by typing — the filtered list is
+ *  empty and the table renders no inputs at all, so the instruction
+ *  "手填即可" points at nothing. Falling back to the first two fields
+ *  gives them somewhere to type.
+ *
+ *  Fixed at two rather than all eight deliberately: a hand-typed title
+ *  and artist covers the overwhelmingly common repair, and eight empty
+ *  columns is the noise this function exists to avoid. */
 export function activeFields(results: ParsedPreviewRow[]): ParseTagField[] {
-  return PARSE_TAG_FIELDS.filter((f) => results.some((r) => (r[f] ?? '') !== ''));
+  const found = PARSE_TAG_FIELDS.filter((f) =>
+    results.some((r) => (r[f] ?? '') !== ''),
+  );
+  if (found.length > 0) return found;
+  return PARSE_TAG_FIELDS.slice(0, 2);
 }
 
 /** Whether any row the parser could not read exists. Drives the hint that

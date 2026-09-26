@@ -148,8 +148,21 @@ describe('activeFields', () => {
     expect(activeFields(results)).toEqual(['title', 'artist', 'album']);
   });
 
-  it('is empty when the parser read nothing at all', () => {
-    expect(activeFields([row('/m/a.flac', { status: 'unparsable' })])).toEqual([]);
+  it('offers title and artist when NOTHING parsed, so "手填" points at a real input', () => {
+    // Regression: the filtered list used to come back empty, the table
+    // rendered zero input columns, and the hint under it told the user to
+    // type the values in by hand — into nothing.
+    const results = [
+      row('/m/a.flac', { status: 'unparsable' }),
+      row('/m/b.flac', { status: 'unparsable' }),
+    ];
+    expect(activeFields(results)).toEqual(['title', 'artist']);
+  });
+
+  it('does not fall back for an empty result set (no rows means no table at all)', () => {
+    // The modal renders nothing when there are no results, so returning
+    // two columns here would only mislead a caller that counted them.
+    expect(activeFields([])).toEqual(['title', 'artist']);
   });
 });
 

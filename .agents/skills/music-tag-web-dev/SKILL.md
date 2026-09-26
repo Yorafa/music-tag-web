@@ -352,3 +352,18 @@ Deploy / runtime:
 - [ ] Cleanup works at `POST /api/prune_empty_folders/` (reports `removed` and `vanished_rows` separately)
 
 17. **Three states per tag field on the wire**: in any `music_info` payload, a field is *absent* (leave the tag alone), *JSON null* (delete the tag), or *a string* (write it). An **empty string still means "leave it alone"** and must not be changed to mean "clear": the single-track form spreads its whole form into the payload, so a save carries a dozen keys the user never touched, and reading those as deletions wipes tags they never saw. `handler.tagIntent` is the one place that decides; `tag.TagUpdate`'s `Clear*` flags are how a clear reaches the writers (taglib writes an empty value, id3v2 deletes the frame). Corollary for `filename`: it is a *shared* string the server expands per file, so a batch that wants renames must send a **template** (`${artist} - ${title}`) and a batch that does not must omit the key entirely — one literal name asks every selected file to become that one name.
+
+## 18. 解析文件名的 pattern 有两处校验，且顺序有意义
+
+`(?P<field>...)` 是 Go 的写法，V8 不认——`new RegExp('(?P<a>x)')` 抛
+`Invalid group`。客户端校验必须先把 `(?P<` 翻译成 `(?<` 再编译，否则每个
+合法 pattern 都会被判为非法且永远发不出去。
+
+翻译之后还有第二层：Go 的 RE2 拒绝前瞻、反向引用和反向引用编号，V8 三者
+全接受。所以 `patternHelp()` 里 RE2 检查必须**先跑**——`(?<=a)` 和 `(?!x)`
+都以 `(?<` 开头，名字扫描器会把 `=a` 当成组名，报"未知字段 =a"，既描述了
+用户没写的组，又盖掉了真正的原因。
+
+`Failure()` 返回 HTTP 200 + 信封 `code:"400"`，不是 HTTP 400。前端靠
+`unwrapEnvelope` 把 `result:false` 转成异常并带出 `message`。只有 401/422
+是真正的状态码。
