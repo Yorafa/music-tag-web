@@ -415,7 +415,7 @@ func (c *Checker) checkFingerprint(ctx context.Context, path string, opts Option
 	if !c.fpcalcAvailable() {
 		return "", false, nil
 	}
-	myFP, err := subFingerprint(ctx, c.fpcalcPath, path)
+	myFP, err := c.cachedFingerprint(ctx, path)
 	if err != nil {
 		// 解不出来（不是音频、被截断、fpcalc 缺失）都只是「本层没结论」，
 		// 不是「无重复」。
@@ -448,7 +448,7 @@ func (c *Checker) checkFingerprint(ctx context.Context, path string, opts Option
 		if isSelf(cand, path) {
 			continue
 		}
-		candFP, cerr := subFingerprint(ctx, c.fpcalcPath, cand)
+		candFP, cerr := c.cachedFingerprint(ctx, cand)
 		if cerr != nil {
 			continue // 候选解不出来：不是匹配，跳过
 		}
@@ -474,9 +474,10 @@ func (c *Checker) durationCandidates(target int, _ string) []string {
 	}
 	lo := int64(target - durationToleranceSeconds)
 	hi := int64(target + durationToleranceSeconds)
+	scope, _ := libraryAudioCond()
 	var paths []string
 	err := c.db.Table("music_folder").
-		Where("file_type = ?", musicFileType).
+		Where(scope).
 		// duration > 0 excludes rows the index task has not reached yet.
 		// Without it every unindexed row is duration=0, and a 0-0 window
 		// would match the entire library for any file under 5s long.
@@ -488,6 +489,16 @@ func (c *Checker) durationCandidates(target int, _ string) []string {
 	}
 	out := make([]string, 0, len(paths))
 	for _, p := range paths {
+		// The extension half of the classification, plus root
+		// containment — a download-cache row is audio and is not a
+		// folder, but it is not in the library either. See
+		// audiotable.go::underMusicRoot.
+		if !isLibraryAudioRow(p) {
+			continue
+		}
+		if !underMusicRoot(c.musicRoot, p) {
+			continue
+		}
 		if abs := resolveUnderRoot(c.musicRoot, p); abs != "" {
 			out = append(out, abs)
 		}
@@ -675,11 +686,10 @@ const (
 	hashCandidateLimit = 512
 )
 
-// musicFileType is the file_type the scanners assign to audio files. Rows
-// with any other value — directories, cover images, and the youtube download
-// cache — are not library audio and must not be offered as duplicate
-// candidates.
-const musicFileType = "music"
+// musicFileType is retained only so the comment above stays honest about
+// where the value comes from. No query filters on it: three writers spell it
+// three ways, and filtering on it is what hid every downloaded track from
+// duplicate detection. See audiotable.go.
 
 // libraryFiles returns absolute paths of indexed audio files matching
 // `cond`, or nil when there is no index to consult.
@@ -698,28 +708,7 @@ const musicFileType = "music"
 // <root>/tmp/.../song.mp3, which fails every os.Stat and reports "unique"
 // against a table full of exact duplicates.
 func (c *Checker) libraryFiles(limit int, cond string, args ...interface{}) []string {
-	if c.db == nil {
-		return nil
-	}
-	if limit <= 0 {
-		limit = indexCandidateLimit
-	}
-	var paths []string
-	err := c.db.Table("music_folder").
-		Where("file_type = ?", musicFileType).
-		Where(cond, args...).
-		Limit(limit).
-		Pluck("path", &paths).Error
-	if err != nil {
-		return nil
-	}
-	out := make([]string, 0, len(paths))
-	for _, p := range paths {
-		if abs := resolveUnderRoot(c.musicRoot, p); abs != "" {
-			out = append(out, abs)
-		}
-	}
-	return out
+	return c.libraryAudioRows(limit, cond, args...)
 }
 
 // resolveUnderRoot turns an index-sourced path into an absolute one.

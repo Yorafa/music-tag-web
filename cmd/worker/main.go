@@ -149,15 +149,12 @@ func main() {
 
 	log.Printf("[worker] starting asynq, concurrency=%d queues=%v", *concurrency, *queues)
 
-	// 6) Kick off the duration index. The fingerprint stage of duplicate
+	// 6) Seed the duration index. The fingerprint stage of duplicate
 	// detection picks candidates by track length, and this is what fills
 	// that column in. Enqueued from here rather than from the gateway so a
-	// fresh deployment converges without anyone clicking a button, and
-	// Unique keeps a restart from stacking runs: the task itself skips
-	// rows that already carry a duration, so a repeat is nearly free.
-	if err := enqueueFpIndex(); err != nil {
-		log.Printf("[worker] WARNING: could not enqueue %s: %v", tasks.TypeFpIndex, err)
-	}
+	// fresh deployment converges without anyone clicking a button, and so
+	// the re-arm chain has a run to start from — see enqueueFpIndexAfter.
+	enqueueFpIndexAfter(0)
 
 	if err := srv.Run(mux); err != nil {
 		log.Fatalf("[worker] asynq terminated with error: %v", err)
@@ -194,31 +191,69 @@ type taskHandlerDeps struct {
 	Bus       events.Bus
 }
 
-// enqueueFpIndex schedules the duration indexer, deduped for an hour so
-// restarts do not queue a run each time. A failure here is not fatal: the
-// fingerprint stage falls back to a size-filtered disk walk, which is slower
-// and misses large re-encodes, but every other stage is unaffected.
-func enqueueFpIndex() error {
-	client := asynq.NewClient(queue.ClientOpts())
-	defer client.Close()
+// indexFollowup is what the producers call once they have added library
+// files. Immediate rather than delayed, and with no uniqueness window: a scan
+// that just found two hundred new tracks should not wait 30 seconds, and the
+// indexer is idempotent, so a redundant run costs one indexed query.
+//
+// This is the prompt half of the pair. The re-arm is the convergent half —
+// see librarychanged.go for why neither alone is enough.
+func indexFollowup() { enqueueFpIndexAfter(0) }
 
-	task, err := tasks.NewTypedTask(tasks.TypeFpIndex, &tasks.FpIndexPayload{},
+// fpIndexRearmDelay is how long the indexer waits before scheduling the
+// follow-up run that a productive run asks for.
+//
+// Long enough that a burst of downloads collapses into one follow-up rather
+// than one per file; short enough that the index is current within a minute
+// of the user finishing.
+const fpIndexRearmDelay = 30 * time.Second
+
+// enqueueFpIndexAfter schedules an index run, optionally delayed.
+//
+// delay > 0 is the re-arm path.
+//
+// The boot path deliberately does NOT take a long uniqueness window. It used
+// to take an hour, to stop a restart from stacking runs — but the re-arm
+// chain is seeded by this call, so a skipped seed means the chain never
+// starts and every file added afterwards sits unindexed until the next
+// restart. That is exactly what happened on the first deployment of this:
+// the queue was empty, the enqueue was refused as a duplicate, and a file
+// added a minute later still had no duration an hour later.
+//
+// The task is idempotent and near-free when there is nothing to do — one
+// indexed query returning no rows — so a duplicate boot run costs a query,
+// not a decode. Stacking is bounded by restarts, which are rare and
+// deliberate, whereas an hour of blindness is not.
+//
+// A failed enqueue is logged and swallowed rather than propagated. The index
+// is an optimisation — without it the fingerprint stage still runs, just with
+// worse candidate selection — so a queue hiccup must not fail the download or
+// scan that triggered it.
+func enqueueFpIndexAfter(delay time.Duration) {
+	client := asynq.NewClient(queue.ClientOpts())
+	defer func() { _ = client.Close() }()
+
+	opts := []asynq.Option{
 		asynq.Queue("default"),
 		asynq.MaxRetry(1),
-		asynq.Unique(1*time.Hour),
 		// The run decodes every unindexed track, which for a large library
 		// is minutes of work. A short timeout would kill it partway.
-		asynq.Timeout(30*time.Minute),
-	)
+		asynq.Timeout(30 * time.Minute),
+	}
+	if delay > 0 {
+		// The re-arm path does dedupe, so a burst of downloads collapses
+		// into one follow-up rather than one per file.
+		opts = append(opts, asynq.Unique(fpIndexRearmDelay))
+		opts = append(opts, asynq.ProcessIn(delay))
+	}
+	task, err := tasks.NewTypedTask(tasks.TypeFpIndex, &tasks.FpIndexPayload{}, opts...)
 	if err != nil {
-		return err
+		log.Printf("[worker] could not build %s: %v", tasks.TypeFpIndex, err)
+		return
 	}
-	_, err = client.Enqueue(task)
-	if err == asynq.ErrDuplicateTask {
-		log.Printf("[worker] %s already scheduled; nothing to do", tasks.TypeFpIndex)
-		return nil
+	if _, err := client.Enqueue(task); err != nil {
+		log.Printf("[worker] could not enqueue %s: %v", tasks.TypeFpIndex, err)
 	}
-	return err
 }
 
 // wireTaskHandlers registers every task type this worker consumes.
@@ -237,10 +272,14 @@ func wireTaskHandlers(mux *asynq.ServeMux, d taskHandlerDeps) {
 		wire     func()
 	}{
 		{tasks.TypeFullScanFolder, func() {
-			tasks.NewFullScanMux(mux, &tasks.FullScanHandler{DB: gormDB, MusicRoot: musicRoot})
+			tasks.NewFullScanMux(mux, &tasks.FullScanHandler{
+				DB: gormDB, MusicRoot: musicRoot, OnLibraryChanged: indexFollowup,
+			})
 		}},
 		{tasks.TypeUpdateScanFolder, func() {
-			tasks.NewUpdateScanMux(mux, &tasks.UpdateScanHandler{DB: gormDB, MusicRoot: musicRoot})
+			tasks.NewUpdateScanMux(mux, &tasks.UpdateScanHandler{
+				DB: gormDB, MusicRoot: musicRoot, OnLibraryChanged: indexFollowup,
+			})
 		}},
 		{tasks.TypeTidyFolder, func() {
 			tasks.NewTidyFolderMux(mux, &tasks.TidyFolderHandler{
@@ -256,7 +295,9 @@ func wireTaskHandlers(mux *asynq.ServeMux, d taskHandlerDeps) {
 		// the cache/library copy + DB records, so this image needs no
 		// python / yt-dlp / ffmpeg.
 		{tasks.TypeDownloadGeneric, func() {
-			tasks.NewDownloadGenericMux(mux, tasks.NewDownloadHandler(gormDB, musicRoot))
+			dl := tasks.NewDownloadHandler(gormDB, musicRoot)
+			dl.OnLibraryChanged = indexFollowup
+			tasks.NewDownloadGenericMux(mux, dl)
 		}},
 		{tasks.TypeClearMusic, func() {
 			tasks.NewClearMusicMux(mux, &tasks.ClearMusicHandler{DB: gormDB, DBDriver: dbDriver})
@@ -283,7 +324,13 @@ func wireTaskHandlers(mux *asynq.ServeMux, d taskHandlerDeps) {
 		// by up to 25x while barely moving its length. This is the one
 		// consumer of fpcalc inside the worker image.
 		{tasks.TypeFpIndex, func() {
-			tasks.NewFpIndexMux(mux, &tasks.FpIndexHandler{DB: gormDB})
+			tasks.NewFpIndexMux(mux, &tasks.FpIndexHandler{
+				DB: gormDB,
+				// Re-arm on progress so the index follows the library
+				// instead of freezing at whatever was on disk when the
+				// worker booted. See FpIndexHandler.Rearm.
+				Rearm: func() { enqueueFpIndexAfter(fpIndexRearmDelay) },
+			})
 		}},
 	}
 	for _, r := range registrations {

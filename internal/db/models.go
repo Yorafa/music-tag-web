@@ -46,6 +46,28 @@ type Folder struct {
 	// re-encode also sweeps in most of the library — and fingerprinting
 	// every candidate costs ~0.4s each.
 	Duration int64 `gorm:"column:duration;index:idx_music_folder_duration"`
+
+	// Fingerprint is the raw subfingerprint list (4 bytes per ~26ms of
+	// audio, big-endian uint32), stored as a BLOB, plus the file size and
+	// mtime it was computed from.
+	//
+	// This exists because duplicate detection was re-decoding the same
+	// files over and over. One fpcalc run costs ~0.4s for a 120s track, and
+	// a check decodes the file under test *and* every candidate whose
+	// duration lands in the ±5s window. Caching the result makes a repeat
+	// check free, and the fingerprint index task — which already has to
+	// decode every unindexed track — fills this column in the same pass at
+	// effectively no extra cost, because fpcalc is decode-bound: it spends
+	// the same 0.4s whether we read only the DURATION line or the whole
+	// fingerprint.
+	//
+	// FPSize/FPMTime are the invalidation check, not decoration. A file
+	// that is re-encoded in place keeps its path and its row, so without
+	// them a stale fingerprint would outlive the audio it describes and
+	// keep reporting the old track's duplicates forever.
+	Fingerprint []byte `gorm:"column:fingerprint"`
+	FPSize      int64  `gorm:"column:fp_size"`
+	FPMTime     int64  `gorm:"column:fp_mtime"`
 }
 
 // TableName 明确指定表名（与 Django `music_folder` 表对齐）。

@@ -39,6 +39,7 @@ package fingerprint
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -290,4 +291,66 @@ func Similarity(a, b Fingerprint) (float64, bool) {
 		errBits += uint64(popcount(a.raw[i] ^ b.raw[i]))
 	}
 	return 1.0 - float64(errBits)/float64(uint64(n)*32), true
+}
+
+// ─── caching ───────────────────────────────────────────────────────────────
+//
+// A Fingerprint is worth storing because fpcalc is decode-bound: it costs
+// the same ~0.4s for a 120s track whether the caller reads one line or the
+// whole list. The subfingerprints are 4 bytes each (~3.8KB for a 3-minute
+// track), against ~10KB for fpcalc's decimal text form.
+//
+// The encoding is deliberately the raw big-endian uint32s, nothing more. A
+// compressed form would be smaller but would need a version tag and a
+// migration for a payload that is cheap to recompute — the whole point of
+// the cache is to avoid a decode, so trading robustness for a few KB is
+// backwards.
+
+// EncodeHeaderBytes is the fixed prefix: the duration, as a big-endian
+// uint32. Four bytes keeps every offset a multiple of four, so a blob is
+// still uniform words and the length check below stays a single modulo.
+const EncodeHeaderBytes = 4
+
+// Encode serialises the duration and the subfingerprints. The returned slice
+// is a copy, so the caller may retain it without aliasing the Fingerprint.
+//
+// The duration is part of the blob because a caller reconstructing a
+// Fingerprint needs it: the dedup stage picks its candidate window from
+// Duration(), so a decoded fingerprint that reported 0 would silently widen
+// every window instead of matching the one the index stored.
+func (f Fingerprint) Encode() []byte {
+	out := make([]byte, EncodeHeaderBytes+len(f.raw)*4)
+	binary.BigEndian.PutUint32(out, uint32(f.duration))
+	for i, v := range f.raw {
+		binary.BigEndian.PutUint32(out[EncodeHeaderBytes+i*4:], v)
+	}
+	return out
+}
+
+// Decode reconstructs a Fingerprint from Encode's output.
+//
+// A blob that is empty, shorter than the header, or not a whole number of
+// words is rejected rather than decoded partially: a truncated blob would
+// compare as "similar" against a short prefix, and a short prefix is exactly
+// the condition minSubfingerprints exists to reject.
+func Decode(blob []byte) (Fingerprint, error) {
+	if len(blob) < EncodeHeaderBytes {
+		return Fingerprint{}, fmt.Errorf("fingerprint: blob of %d bytes is shorter than the %d-byte header",
+			len(blob), EncodeHeaderBytes)
+	}
+	if (len(blob)-EncodeHeaderBytes)%4 != 0 {
+		return Fingerprint{}, fmt.Errorf("fingerprint: blob length %d leaves a partial subfingerprint",
+			len(blob)-EncodeHeaderBytes)
+	}
+	f := Fingerprint{
+		raw:      make([]uint32, (len(blob)-EncodeHeaderBytes)/4),
+		duration: int(binary.BigEndian.Uint32(blob)),
+	}
+	for i := range f.raw {
+		f.raw[i] = binary.BigEndian.Uint32(blob[EncodeHeaderBytes+i*4:])
+	}
+	if len(f.raw) == 0 {
+		return Fingerprint{}, errors.New("fingerprint: blob carries no subfingerprints")
+	}
+	return f, nil
 }

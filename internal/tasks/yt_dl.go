@@ -137,6 +137,10 @@ func audioCacheDir(source string) string {
 type DownloadHandler struct {
 	DB        *gorm.DB
 	MusicRoot string
+	// OnLibraryChanged fires after a download, so a track added to the
+	// library gets a duration without waiting for the indexer's re-arm
+	// chain to be running. See librarychanged.go.
+	OnLibraryChanged LibraryChangedHook
 }
 
 func NewDownloadHandler(gormDB *gorm.DB, musicRoot string) *DownloadHandler {
@@ -157,6 +161,12 @@ func (h *DownloadHandler) ProcessTask(ctx context.Context, t Task) error {
 	if payload.Source == "" {
 		return fmt.Errorf("download: empty source")
 	}
+	// A download is one of the two moments the library gains a file, so
+	// the index has to hear about it. Deferred, because the file is on
+	// disk and its index row is written whichever branch runs below — and a
+	// hook that only fires on the happy path would miss the ones that
+	// fail after the copy.
+	defer notifyLibraryChanged(h.OnLibraryChanged)
 
 	// DownloadSource branch first: any source registered as a
 	// DownloadSource (youtube today, soundcloud tomorrow) delegates the
@@ -291,7 +301,7 @@ func (h *DownloadHandler) runDownloadSource(ctx context.Context, payload *Downlo
 		UID:       payload.VideoID, // re-use video id as unique folder UID
 		ParentID:  "",
 		Name:      filepath.Base(dlFile),
-		FileType:  payload.Source,
+		FileType:  audioext.FileTypeForRow(dlFile),
 		Path:      dlFile,
 		Size:      dlSize,
 		UpdatedAt: now,
@@ -307,7 +317,7 @@ func (h *DownloadHandler) runDownloadSource(ctx context.Context, payload *Downlo
 		FullPath:  dlFile,
 		Source:    payload.Source,
 		UID:       payload.VideoID,
-		FileType:  payload.Source,
+		FileType:  audioext.FileTypeForRow(dlFile),
 		Status:    "completed",
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -436,7 +446,7 @@ func (h *DownloadHandler) runTagSource(ctx context.Context, payload *DownloadPay
 		UID:       payload.VideoID,
 		ParentID:  "",
 		Name:      filepath.Base(libraryPath),
-		FileType:  payload.Source,
+		FileType:  audioext.FileTypeForRow(libraryPath),
 		Path:      libraryPath,
 		Size:      0,
 		UpdatedAt: now,
@@ -455,7 +465,7 @@ func (h *DownloadHandler) runTagSource(ctx context.Context, payload *DownloadPay
 		FullPath:  libraryPath,
 		Source:    payload.Source,
 		UID:       payload.VideoID,
-		FileType:  payload.Source,
+		FileType:  audioext.FileTypeForRow(libraryPath),
 		Status:    "completed",
 		CreatedAt: now,
 		UpdatedAt: now,

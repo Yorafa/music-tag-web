@@ -138,6 +138,46 @@ func IsStreamablePath(path string) bool {
 	return IsStreamableExt(filepath.Ext(path))
 }
 
+// FileTypeForRow is the music_folder.file_type value for a downloaded file.
+//
+// This column is read by the folder scanner ("music" / "image" / "folder")
+// and was also written by the downloader, which put the *source* name there —
+// "youtube", "netease", … — for the very same kind of file. One column, two
+// vocabularies, and the consequence was silent: every query identifying
+// library audio by `file_type = 'music'` excluded every track that arrived
+// through 加入库. Such a track got no duration (the indexer filtered the same
+// way), so it was never a candidate for anyone else's fingerprint comparison,
+// so a re-encoded twin of it was never detected. Nothing errored — the row was
+// simply absent from each query's point of view.
+//
+// So the value is derived from the path, using the sets above as the single
+// source of truth. The download source is not lost: it lives in
+// TaskRecord.source, in the audit log, and in the cache path itself.
+//
+// Whether a row is in the *library* as opposed to the per-source download
+// cache is decided by root containment, not by this column — the cache lives
+// in AUDIO_CACHE_DIR, which is not under MUSIC_DIR at all.
+const (
+	// FileTypeMusic marks a row the library treats as audio.
+	FileTypeMusic = "music"
+	// FileTypeStreamable marks a cache entry we can serve but would not
+	// keep as a library track (webm/mkv/mp4).
+	FileTypeStreamable = "streamable"
+	// FileTypeOther marks anything else (a cover, a .lrc).
+	FileTypeOther = "other"
+)
+
+// FileTypeForRow classifies a downloaded file for music_folder.file_type.
+func FileTypeForRow(path string) string {
+	if IsLibraryPath(path) {
+		return FileTypeMusic
+	}
+	if IsStreamablePath(path) {
+		return FileTypeStreamable
+	}
+	return FileTypeOther
+}
+
 // audioMIMEToExt maps an upstream Content-Type to the extension we store.
 //
 // This replaces mime.ExtensionsByType, whose first-result-wins behaviour

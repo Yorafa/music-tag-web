@@ -386,8 +386,21 @@ func TestIntegration_DownloadGeneric_YouTube_MockPlugin(t *testing.T) {
 	if err := rig.DB.Where("uid = ?", videoID).First(&folder).Error; err != nil {
 		t.Fatalf("Find Folder: %v", err)
 	}
-	if folder.FileType != "youtube" {
-		t.Errorf("Folder.file_type=%q (want 'youtube')", folder.FileType)
+	// file_type describes WHAT the file is, and an .mp3 is 'music' whoever
+	// fetched it. It used to be the download source ('youtube'), which put
+	// two vocabularies in one column: the folder scanner writes
+	// 'music'/'image'/'folder', the downloader wrote a source name. Every
+	// query that identified library audio by `file_type = 'music'` then
+	// excluded every downloaded track — so it got no duration, was never a
+	// candidate for anyone else's fingerprint comparison, and a re-encoded
+	// twin of it went undetected. The download source is not lost: it is in
+	// TaskRecord.source, in the audit log, and in the cache path itself.
+	//
+	// Whether a row is in the *library* (as opposed to the per-source
+	// download cache) is decided by root containment, not by this column —
+	// see internal/dedup/audiotable.go.
+	if folder.FileType != "music" {
+		t.Errorf("Folder.file_type=%q (want 'music')", folder.FileType)
 	}
 	if filepath.Base(folder.Path) != videoID+".mp3" {
 		t.Errorf("Folder.path=%q (want basename %q)", folder.Path, videoID+".mp3")
@@ -401,8 +414,8 @@ func TestIntegration_DownloadGeneric_YouTube_MockPlugin(t *testing.T) {
 	if rec.Status != "completed" {
 		t.Errorf("TaskRecord.status=%q (want 'completed')", rec.Status)
 	}
-	if rec.FileType != "youtube" {
-		t.Errorf("TaskRecord.file_type=%q (want 'youtube')", rec.FileType)
+	if rec.FileType != "music" {
+		t.Errorf("TaskRecord.file_type=%q (want 'music')", rec.FileType)
 	}
 	if rec.FullPath == "" {
 		t.Error("TaskRecord.full_path should be populated")

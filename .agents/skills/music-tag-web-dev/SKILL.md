@@ -41,7 +41,7 @@ Self-hosted Docker 化音乐元数据批量编辑工具。支持 FLAC/APE/WAV/AI
 | Auth | JWT in-memory + bcrypt; fail-closed defaults |
 | Encryption | gRPC TLS optional (`GRPC_USE_TLS=1` + `GRPC_TLS_CA_FILE`) |
 | Deploy | `docker compose up -d --build` starts gateway + worker + 8 gRPC plugins + redis (11 containers). `fpcalc-base` is a build-only service at `scale: 0`: its image is built but no container is created |
-| Image size | gateway 131 MB, worker 126 MB, acoustid 115 MB, youtube 199 MB, six name-search plugins 21.5 MB each. gateway/worker/acoustid all `FROM` the shared `fpcalc-base`, so chromaprint's 88 MB of ffmpeg libraries is stored once |
+| Image size | gateway 131 MB, worker 126 MB, acoustid 115 MB, youtube 199 MB, six name-search plugins 21.5 MB each. gateway/worker/acoustid/youtube all `FROM` the shared `fpcalc-base`, so chromaprint's 88 MB of ffmpeg libraries is stored once. youtube's extra ~30 MB is not the ffmpeg binary (294 KB) but the 42 packages `apk add ffmpeg` drags in — `libavfilter`/`libavformat` plus a full video/filter/hw-accel chain (sdl2, vulkan-loader, libplacebo, shaderc, spirv-tools, glslang, harfbuzz, fontconfig, vidstab, alsa-lib, libpulse). yt-dlp's `--extract-audio` only exercises audio demux + re-encode; Alpine ships no finer-grained ffmpeg package to drop the rest |
 
 ### Frontend (`frontend/`)
 

@@ -37,6 +37,10 @@ type UpdateScanPayload = FullScanPayload
 type FullScanHandler struct {
 	DB        *gorm.DB
 	MusicRoot string
+	// OnLibraryChanged fires after the scan, so the duration/fingerprint
+	// index follows the files it just found. See librarychanged.go for why
+	// this is needed on top of the indexer's own re-arm.
+	OnLibraryChanged LibraryChangedHook
 }
 
 func (h *FullScanHandler) ProcessTask(ctx context.Context, t Task) error {
@@ -44,6 +48,7 @@ func (h *FullScanHandler) ProcessTask(ctx context.Context, t Task) error {
 	if raw, ok := t.Payload.(*FullScanPayload); ok && raw != nil {
 		p = *raw
 	}
+	defer notifyLibraryChanged(h.OnLibraryChanged)
 	return h.fullScan(ctx, p.SubPaths)
 }
 
@@ -260,6 +265,8 @@ func (h *FullScanHandler) musicRoot() string {
 type UpdateScanHandler struct {
 	DB        *gorm.DB
 	MusicRoot string
+	// OnLibraryChanged fires after the scan. See librarychanged.go.
+	OnLibraryChanged LibraryChangedHook
 }
 
 func (h *UpdateScanHandler) ProcessTask(ctx context.Context, t Task) error {
@@ -267,6 +274,7 @@ func (h *UpdateScanHandler) ProcessTask(ctx context.Context, t Task) error {
 	if raw, ok := t.Payload.(*UpdateScanPayload); ok && raw != nil {
 		p = *raw
 	}
+	defer notifyLibraryChanged(h.OnLibraryChanged)
 	return h.updateScan(ctx, p.SubPaths)
 }
 

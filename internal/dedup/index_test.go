@@ -78,16 +78,27 @@ func emptyRoot(t *testing.T) string {
 // It also pins path handling. music_folder.path is ABSOLUTE, while the code
 // did `filepath.Join(root, rel)` on query results — producing
 // <root>/tmp/.../candidate.mp3, which fails every os.Stat and reports "no
-// duplicates" against a table full of them. The candidate deliberately lives
-// outside the root so that mistake cannot pass unnoticed.
+// duplicates" against a table full of them. The path is stored absolute and
+// used as-is, so that mistake cannot pass unnoticed.
+//
+// The candidate lives INSIDE the root. It used to sit outside, which read as
+// a stronger test but asserted something production never does: the scanner
+// only ever indexes MUSIC_DIR, and the download cache is filtered out by
+// root containment (see TestIndexIgnoresNonMusicRows). An out-of-root
+// candidate is why an earlier version of the library-audio filter had to key
+// on file_type, and keying on file_type is what hid downloaded tracks from
+// duplicate detection.
 func TestIndexSuppliesCandidatesTheDiskWalkCannotReach(t *testing.T) {
 	gormDB := indexDB(t)
 	root := emptyRoot(t)
 
-	candidate := filepath.Join(t.TempDir(), "candidate.mp3")
-	target := filepath.Join(t.TempDir(), "target.mp3")
+	candidate := filepath.Join(root, "nested", "candidate.mp3")
+	target := filepath.Join(root, "target.mp3")
 	content := []byte("identical audio bytes, byte for byte")
 	for _, p := range []string{candidate, target} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(p, content, 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -105,8 +116,11 @@ func TestIndexSuppliesCandidatesTheDiskWalkCannotReach(t *testing.T) {
 	if got.MatchField != stageHash {
 		t.Errorf("MatchField = %q, want %q", got.MatchField, stageHash)
 	}
-	if got.DuplicatePath != candidate {
-		t.Errorf("DuplicatePath = %q, want %q", got.DuplicatePath, candidate)
+	// DuplicatePath is documented as relative to MUSIC_DIR, so an in-root
+	// candidate comes back relative. The absolute value is what the index
+	// stores; the relative one is what the API promises.
+	if want := "nested/candidate.mp3"; got.DuplicatePath != want {
+		t.Errorf("DuplicatePath = %q, want %q (root-relative)", got.DuplicatePath, want)
 	}
 }
 
@@ -146,15 +160,19 @@ func TestIndexResolvesRelativeRowsToo(t *testing.T) {
 	})
 }
 
-// TestIndexIgnoresNonMusicRows pins the file_type filter.
+// TestIndexIgnoresNonMusicRows pins the download-cache exclusion.
 //
-// music_folder also holds folder rows, cover-image rows and youtube cache
-// rows. The youtube ones are the real hazard: yt_dl indexes a completed
-// download under the transient cache dir with file_type='youtube', and that
-// audio is byte-identical to the file the user is about to tag — a copy they
-// just downloaded on purpose. Flagging that as a duplicate would refuse the
-// write, and the "existing" file would be deleted out from under the cache
-// on the next sweep.
+// music_folder also holds folder rows, cover-image rows, and — this is the
+// hazard — the per-source download cache, whose file is byte-identical to the
+// track the user is about to tag: a copy they just downloaded on purpose.
+// Flagging that as a library duplicate would report "already in your
+// library" about a file that is not in the library.
+//
+// The exclusion is by ROOT CONTAINMENT, not by file_type. It used to be
+// file_type, and that is what made the filter wrong in the other direction:
+// yt_dl wrote the download source ('youtube', 'netease', …) into the same
+// column the scanner fills with 'music', so filtering on 'music' also
+// excluded every track that had been downloaded INTO the library.
 func TestIndexIgnoresNonMusicRows(t *testing.T) {
 	gormDB := indexDB(t)
 	root := emptyRoot(t)
