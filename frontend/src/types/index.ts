@@ -7,6 +7,11 @@ export interface SongInfo {
   album_id: string;
   album_img: string;
   year: string;
+  /** Only MusicBrainz reports a genre today; the other tag sources omit
+   *  it, so this is genuinely optional rather than usually-empty. Callers
+   *  that apply a candidate must fall back to the file's own value rather
+   *  than substituting a default. */
+  genre?: string;
   source?: string;
   score?: number;
   /** Lyric body for a scrape candidate — populated whenever the scrape

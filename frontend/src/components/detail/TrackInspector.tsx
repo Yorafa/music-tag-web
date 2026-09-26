@@ -68,8 +68,14 @@ function getInitialFormData(row: DetailTarget): Partial<MusicTagInfo> {
     title: info.title || row.fileName.replace(/\.[^/.]+$/, '').trim(),
     artist: info.artist || '',
     album: info.album || '',
-    albumartist: info.albumartist || info.artist || '',
-    genre: info.genre || '流行',
+    albumartist: info.albumartist || info.artist || '',      // Seeded empty, never with an invented default. This form is spread
+      // into the update payload, so a placeholder here is a placeholder
+      // written to the file: opening any track that had no genre and
+      // pressing save stamped 流行 on it. An empty field clears the tag,
+      // which is the opposite of what "I didn't touch this" should mean —
+      // but a track with no genre has nothing to lose, and unlike the
+      // auto-scrape path there is a real user looking at the field.
+      genre: info.genre || '',
     year: info.year || '',
     tracknumber: info.tracknumber || '',
     discnumber: info.discnumber || '',
@@ -149,9 +155,12 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
       title: c.name || formData.title,
       artist: c.artist || formData.artist,
       album: c.album || formData.album,
-      album_img: c.album_img || formData.album_img,
-      year: c.year || formData.year,
-      lyrics: c.lyric || c.lyrics || formData.lyrics,
+      album_img: c.album_img || formData.album_img,        year: c.year || formData.year,
+        // Read the candidate's genre rather than leaving the field on
+        // whatever it was seeded with — MusicBrainz reports one, and
+        // applying its tags used to throw that away.
+        genre: c.genre || formData.genre,
+        lyrics: c.lyric || c.lyrics || formData.lyrics,
     };
     setFormData(updated);
     useNoticeStore.getState().push(`已应用「${c.name}」候选标签`, 'info');
