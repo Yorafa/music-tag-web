@@ -6,9 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-
 	"go-music-tag/internal/db"
 )
 
@@ -59,10 +56,7 @@ func TestFullScanSkipsSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gormDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	gormDB := openTestDB(t)
 	if err := gormDB.AutoMigrate(
 		&db.Folder{}, &db.Task{}, &db.TaskRecord{}, &db.Track{}, &db.Album{},
 		&db.Artist{}, &db.Genre{}, &db.Attachment{}, &db.User{},
@@ -137,10 +131,7 @@ func TestFullScan_Idempotent(t *testing.T) {
 		}
 	}
 
-	gormDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	gormDB := openTestDB(t)
 	if err := gormDB.AutoMigrate(&db.Folder{}); err != nil {
 		t.Fatal(err)
 	}
@@ -226,10 +217,7 @@ func TestFullScan_RepeatedDirInSubPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gormDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	gormDB := openTestDB(t)
 	if err := gormDB.AutoMigrate(&db.Folder{}); err != nil {
 		t.Fatal(err)
 	}
@@ -268,10 +256,7 @@ func TestFullScan_RefreshesExistingRows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gormDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	gormDB := openTestDB(t)
 	if err := gormDB.AutoMigrate(&db.Folder{}); err != nil {
 		t.Fatal(err)
 	}

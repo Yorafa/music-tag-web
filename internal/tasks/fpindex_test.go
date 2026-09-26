@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"go-music-tag/internal/db"
@@ -19,10 +18,7 @@ import (
 // newFpIndexDB migrates just the tables this task touches.
 func newFpIndexDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	gdb := openTestDB(t)
 	if err := gdb.AutoMigrate(&db.Folder{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

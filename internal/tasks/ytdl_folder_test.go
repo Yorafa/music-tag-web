@@ -5,9 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-
 	"go-music-tag/internal/db"
 )
 
@@ -19,10 +16,7 @@ import (
 // on the unique constraint, and failing there fails the whole task even
 // though the audio is already on disk.
 func TestUpsertDownloadFolder_AdoptsScannedPath(t *testing.T) {
-	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	gdb := openTestDB(t)
 	if err := gdb.AutoMigrate(&db.Folder{}); err != nil {
 		t.Fatal(err)
 	}
@@ -65,10 +59,7 @@ func TestUpsertDownloadFolder_AdoptsScannedPath(t *testing.T) {
 // the old row. Handing it over as well would leave two rows claiming the
 // same uid and break the folder tree, so the scan row keeps its own.
 func TestUpsertDownloadFolder_KeepsUIDAlreadyHeld(t *testing.T) {
-	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	gdb := openTestDB(t)
 	if err := gdb.AutoMigrate(&db.Folder{}); err != nil {
 		t.Fatal(err)
 	}
@@ -117,10 +108,7 @@ func TestUpsertDownloadFolder_KeepsUIDAlreadyHeld(t *testing.T) {
 // free" branch: a re-download that produced a differently-named file moves
 // the existing row rather than leaving a second one behind.
 func TestUpsertDownloadFolder_SameVideoNewPath(t *testing.T) {
-	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	gdb := openTestDB(t)
 	if err := gdb.AutoMigrate(&db.Folder{}); err != nil {
 		t.Fatal(err)
 	}
@@ -155,10 +143,7 @@ func TestUpsertDownloadFolder_SameVideoNewPath(t *testing.T) {
 // and the one a naive "update where uid = ?" implementation would silently
 // turn into a no-op.
 func TestUpsertDownloadFolder_InsertsWhenBothUnknown(t *testing.T) {
-	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	gdb := openTestDB(t)
 	if err := gdb.AutoMigrate(&db.Folder{}); err != nil {
 		t.Fatal(err)
 	}

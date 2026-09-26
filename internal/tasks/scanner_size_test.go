@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"go-music-tag/internal/db"
@@ -15,10 +14,7 @@ import (
 // newScanDB builds the minimal schema the scan handlers touch.
 func newScanDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	gormDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	gormDB := openTestDB(t)
 	if err := gormDB.AutoMigrate(&db.Folder{}); err != nil {
 		t.Fatal(err)
 	}
