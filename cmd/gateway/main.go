@@ -114,6 +114,12 @@ func main() {
 		audit.SetDB(gormDB)
 	}
 
+	// Hand the DB to dedup. The checker used to be injected through
+	// handler.SetDedupChecker, which nothing ever called, so duplicate
+	// detection had never run against a real library. A nil handle is fine:
+	// dedup falls back to its filesystem stages.
+	handler.SetDedupDB(gormDB)
+
 	router.Setup(r, cfg, gormDB)
 
 	// NOTE (REVIEW.md P0-2): the Stage B source-override load used to run

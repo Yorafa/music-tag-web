@@ -367,6 +367,17 @@ func (h *UpdateScanHandler) updateScan(ctx context.Context, subPaths [][2]string
 	return nil
 }
 
+// ScanPaths exposes the incremental scan to the gateway process, which needs
+// the music_track / music_folder index to be fresh before dedup consults it.
+//
+// The 全盘扫描 button that used to be the only trigger is gone: a user
+// should not have to click something whose effect is invisible. Instead the
+// gateway scans the directory it is about to write into, on demand. Callers
+// are expected to memoise by directory — this walks a subtree every call.
+func (h *UpdateScanHandler) ScanPaths(ctx context.Context, subPaths [][2]string) error {
+	return h.updateScan(ctx, subPaths)
+}
+
 func (h *UpdateScanHandler) musicRoot() string {
 	if h.MusicRoot != "" {
 		return h.MusicRoot

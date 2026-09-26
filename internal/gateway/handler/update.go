@@ -42,15 +42,11 @@ import (
 // 给内网出站连接用的)，所以默认 deny private/loopback 即可。
 var remoteGuard = netguard.NewGuard()
 
-// dedupChecker 是跨 handler 复用的 dedup.Checker 实例（按需懒构造）。
-// 它绑定当前 gateway 进程的 GORM DB 与 MUSIC_DIR，在第一次刮削请求时
-// 完成初始化；后续重入直接复用以省 fpcalc LookPath 等 syscall。
-//
-// nil ⇒ dedup 检查被禁用（操作员可在配置中显式 opt-out 时不挂上）。
-var dedupChecker *dedup.Checker
-
-// SetDedupChecker 由 main 在 db.Open 之后调用注入；handler 不主动 new。
-func SetDedupChecker(c *dedup.Checker) { dedupChecker = c }
+// The dedup.Checker lives in dedupwire.go, built lazily from the handle
+// cmd/gateway passes to SetDedupDB. It used to be a package var set through
+// SetDedupChecker — which had zero callers, so the var was permanently nil
+// and runDedupCheck bailed on its first line. A setter nothing calls is
+// indistinguishable from the feature being off; there is one owner now.
 
 // UpdateID3 handles POST /api/update_id3/ — 写入单条文件标签。
 //
@@ -94,6 +90,9 @@ func UpdateID3(c *gin.Context) {
 			return
 		}
 		report.addDone(rawPath, res.RenamedTo)
+		if res.Duplicate != nil {
+			report.addDuplicateWarning(rawPath, *res.Duplicate)
+		}
 		for _, m := range res.FailedSidecars() {
 			report.addSidecarWarning(rawPath, m)
 			log.Printf("[update_id3] sidecar %s -> %s did not follow %s: %v",
@@ -110,6 +109,9 @@ type updateBatchReport struct {
 	done     []map[string]interface{}
 	skipped  []map[string]interface{}
 	warnings []map[string]interface{}
+	// duplicateWarnings are non-blocking: a name clash or a metadata-similar
+	// track was found, the write still happened.
+	duplicateWarnings []map[string]interface{}
 }
 
 // addSidecarWarning records a sidecar that could not follow its audio
@@ -121,6 +123,19 @@ func (r *updateBatchReport) addSidecarWarning(path string, m tag.SidecarMove) {
 		"sidecar":        filepath.Base(m.From),
 		"target":         filepath.Base(m.To),
 		"reason":         m.Err.Error(),
+	})
+}
+
+// addDuplicateWarning records a suspected duplicate that did NOT stop the
+// write. Same voice as addSidecarWarning: the tags landed, so this is
+// information the client shows rather than a failure it retries.
+func (r *updateBatchReport) addDuplicateWarning(path string, d dedup.Result) {
+	r.duplicateWarnings = append(r.duplicateWarnings, map[string]interface{}{
+		"file_full_path": path,
+		"verdict":        d.Verdict,
+		"match_field":    d.MatchField,
+		"duplicate_path": d.DuplicatePath,
+		"reason":         d.Reason,
 	})
 }
 
@@ -161,10 +176,14 @@ func (r *updateBatchReport) toJSON() map[string]interface{} {
 	if r.warnings == nil {
 		r.warnings = []map[string]interface{}{}
 	}
+	if r.duplicateWarnings == nil {
+		r.duplicateWarnings = []map[string]interface{}{}
+	}
 	return map[string]interface{}{
-		"done":     r.done,
-		"skipped":  r.skipped,
-		"warnings": r.warnings,
+		"done":               r.done,
+		"skipped":            r.skipped,
+		"warnings":           r.warnings,
+		"duplicate_warnings": r.duplicateWarnings,
 	}
 }
 
@@ -211,6 +230,28 @@ func BatchUpdateID3(c *gin.Context) {
 	// this endpoint usable for auto-scrape: each scraped track has its own
 	// title/artist/album, and folding those into one shared map would write
 	// track A's tags onto track B.
+	//
+	// Control flags are the exception: they are request-level settings, not
+	// tag values, so a row's own music_info must inherit them from the shared
+	// map. Without this an auto-scrape — where every row overrides — would
+	// silently drop `check_duplicate` and get dedup it never asked to opt
+	// out of, while the same request with no overrides would honour it.
+	for _, key := range []string{"check_duplicate"} {
+		v, ok := req.MusicInfo[key]
+		if !ok {
+			continue
+		}
+		for _, sel := range req.SelectData {
+			own, ok := sel["music_info"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if _, set := own[key]; !set {
+				own[key] = v
+			}
+		}
+	}
+
 	perEntry := func(sel map[string]interface{}) map[string]interface{} {
 		if own, ok := sel["music_info"].(map[string]interface{}); ok {
 			return own
@@ -273,6 +314,9 @@ func BatchUpdateID3(c *gin.Context) {
 					return
 				}
 				report.addDone(relToMusicRoot(leaf), res.RenamedTo)
+				if res.Duplicate != nil {
+					report.addDuplicateWarning(relToMusicRoot(leaf), *res.Duplicate)
+				}
 				for _, m := range res.FailedSidecars() {
 					report.addSidecarWarning(relToMusicRoot(leaf), m)
 					log.Printf("[batch_update_id3] sidecar %s -> %s did not follow: %v",
@@ -299,6 +343,9 @@ func BatchUpdateID3(c *gin.Context) {
 			return
 		}
 		report.addDone(relToMusicRoot(leaf), res.RenamedTo)
+		if res.Duplicate != nil {
+			report.addDuplicateWarning(relToMusicRoot(leaf), *res.Duplicate)
+		}
 		for _, m := range res.FailedSidecars() {
 			report.addSidecarWarning(relToMusicRoot(leaf), m)
 			log.Printf("[batch_update_id3] sidecar %s -> %s did not follow: %v",
@@ -399,33 +446,46 @@ func UploadImage(c *gin.Context) {
 	SuccessData(c, b64)
 }
 
-// skipDuplicateCheck 返回 true 表示 info 标记了跳过去重。
-// JSON 入参约定: {"...":..., "check_duplicate": true}；显式传 false / 缺省都视为
-// 不开，保持旧行为（向后兼容，不强迫老前端必须升级才能用）。
+// shouldRunDedup 决定这一次写入要不要先去重查一遍。
+//
+// JSON 入参约定: {"check_duplicate": false} 显式关闭。缺省或 true 都是**开**。
+//
+// 这里从前一版的「缺省=关」翻了过来，因为阻断条件同时被收窄了：只有
+// SHA-256 / fpcalc 相同（内容一致）才会拒绝写入，同名和元数据相似都只
+// 警告。在这个前提下默认开启是安全的，而且缺省=关会让这个功能再次变成
+// 一个没人打开的开关——它上次就是这么消失的。
 func shouldRunDedup(info map[string]interface{}) bool {
 	v, ok := info["check_duplicate"]
 	if !ok || v == nil {
-		return false
+		return true
 	}
 	return truthy(v)
 }
 
-// runDedupCheck 在 applyFileUpdate 写入前执行一次去重检查；命中 Duplicate
-// 时跳过整个写入并返回一个 sentinel 错误，由 caller 把信息透传给前端。
-// LikelyDuplicate 仅给 caller 参考并不阻断写入，符合「兜底提示」语义。
-func runDedupCheck(ctx context.Context, filePath string, info map[string]interface{}) error {
-	if !shouldRunDedup(info) || dedupChecker == nil {
-		return nil
+// runDedupCheck 在 applyFileUpdate 写入前执行一次去重检查。
+//
+// 只有 VerdictDuplicate（内容级证据：SHA-256 / 声纹）会阻断写入，返回
+// sentinel 错误。VerdictLikelyDuplicate（同名 / 元数据相似）**不阻断**，
+// 作为警告回给调用方——这正是这函数上方注释一直声称、而代码此前没有做到
+// 的语义：同名和「70% 相似」的歌不应该被拒绝保存，只是值得提醒一声。
+func runDedupCheck(ctx context.Context, filePath string, info map[string]interface{}) (*dedup.Result, error) {
+	if !shouldRunDedup(info) {
+		return nil, nil
 	}
-	r := dedupChecker.Check(ctx, filePath, dedup.Options{MusicRoot: utils.MusicRoot()})
+	r, err := dedupCheckFor(ctx, filePath)
+	if err != nil || r == nil {
+		// dedup 自身的错误不阻塞写流程（保守策略：工具失败仍允许写入）。
+		return nil, nil
+	}
 	switch r.Verdict {
-	case dedup.VerdictDuplicate, dedup.VerdictLikelyDuplicate:
-		return ErrDuplicateSkipped{Dup: r}
-	case dedup.VerdictError:
-		// dedup 错误本身不阻塞写流程（保守策略：工具失败仍允许写入）。
-		return nil
+	case dedup.VerdictDuplicate:
+		return nil, ErrDuplicateSkipped{Dup: *r}
+	case dedup.VerdictLikelyDuplicate:
+		return r, nil
+	default:
+		// Unique / Skipped / Error。
+		return nil, nil
 	}
-	return nil
 }
 
 // ErrDuplicateSkipped 是 applyFileUpdate 在去重命中时返回的 sentinel 错误，
@@ -472,6 +532,11 @@ type applyResult struct {
 	// An entry with a non-nil Err did not make it; the audio is renamed
 	// regardless, so these become warnings rather than failures.
 	Sidecars []tag.SidecarMove
+	// Duplicate is set when dedup found a name clash or a metadata-similar
+	// track but not a content-identical one, so the write went ahead. It
+	// rides back as a warning: the tags landed, and the user still gets to
+	// know the library appears to hold two copies.
+	Duplicate *dedup.Result
 }
 
 // FailedSidecars returns only the sidecars that did not land.
@@ -494,11 +559,13 @@ func applyFileUpdate(filePath string, info map[string]interface{}) (applyResult,
 	if !isAudioFile(filePath) {
 		return res, nil
 	}
-	// 去重前置检查：caller 通过 info["check_duplicate"]=true 开启；
-	// 命中 Duplicate 即跳过整张文件的写入。
-	if err := runDedupCheck(context.Background(), filePath, info); err != nil {
+	// 去重前置检查。仅内容级证据（SHA-256 / 声纹）会跳过整张文件的写入；
+	// 同名或元数据相似只记为警告，继续写。
+	warn, err := runDedupCheck(context.Background(), filePath, info)
+	if err != nil {
 		return res, err
 	}
+	res.Duplicate = warn
 	tmplVars := readFileContext(filePath)
 
 	upd := &tag.TagUpdate{}

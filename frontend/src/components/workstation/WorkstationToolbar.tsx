@@ -41,8 +41,10 @@ import {
 import {
   renamedPathFromUpdate,
   sidecarWarningsFromUpdate,
+  duplicateWarningsFromUpdate,
   baseNameOf,
 } from '@/components/detail/renameResult';
+import { dedupeFlag, isDedupeEnabled, setDedupeEnabled } from '@/utils/dedupe';
 import { cn } from '@/lib/utils';
 import type { MusicSource } from '@/types';
 
@@ -87,6 +89,10 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   ]);
   const [matchMode, setMatchMode] = useState<'smart' | 'simple'>('smart');
   const [autoApplyFirstMatch, setAutoApplyFirstMatch] = useState(true);
+  // Duplicate detection is a server-side decision (see internal/dedup);
+  // this only records whether the user wants it at all. It lives here
+  // because a batch scrape is where duplicates actually pile up.
+  const [dedupe, setDedupe] = useState(() => isDedupeEnabled());
 
   // Tidy form
   const [tidyForm, setTidyForm] = useState({
@@ -177,6 +183,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
 
     let successCount = 0;
     const sidecarNotes: string[] = [];
+    const dupNotes: string[] = [];
 
     for (const [dir, selectData] of groups) {
       const rowsInGroup = selectData.map((s) => ({
@@ -189,7 +196,11 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           // Required by the wire contract, but every row below carries
           // its own music_info, so this map is a placeholder that never
           // reaches a file. See handler.BatchUpdateID3's perEntry.
-          music_info: {},
+          //
+          // The dedupe opt-out is the exception to "never reaches a file":
+          // it is a control flag, and the server copies it from here into
+          // each overriding row.
+          music_info: dedupeFlag(dedupe),
           select_data: selectData,
           // Records this as 自动刮削 rather than 批量标签, so a scrape is
           // filterable as itself in 操作审计.
@@ -197,8 +208,25 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         });
 
         sidecarNotes.push(...sidecarWarningsFromUpdate(res));
+        dupNotes.push(...duplicateWarningsFromUpdate(res));
+
+        // A row the server refused to write comes back in `skipped`, not
+        // `done`. Counting it as a success would report "成功 N 首" for tags
+        // that never landed.
+        const rawSkipped = (res as { skipped?: unknown })?.skipped;
+        const refused = new Set(
+          (Array.isArray(rawSkipped) ? rawSkipped : []).map(
+            (e) => (e as { file_full_path?: string })?.file_full_path,
+          ),
+        );
 
         for (const { fullPath } of rowsInGroup) {
+          if (refused.has(fullPath)) {
+            setStatus(fullPath, 'failed');
+            failCount++;
+            dupNotes.push(`已跳过（内容与库内文件完全一致）: ${fullPath}`);
+            continue;
+          }
           const info = matched.get(fullPath);
           if (info) setMusicInfo(fullPath, info);
           setStatus(fullPath, 'scraped');
@@ -385,6 +413,20 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
                   id="auto-apply"
                   checked={autoApplyFirstMatch}
                   onCheckedChange={setAutoApplyFirstMatch}
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="dedupe" className="text-xs">
+                  跳过重复文件
+                </Label>
+                <Switch
+                  id="dedupe"
+                  checked={dedupe}
+                  onCheckedChange={(v) => {
+                    setDedupe(v);
+                    setDedupeEnabled(v);
+                  }}
                 />
               </div>
             </div>

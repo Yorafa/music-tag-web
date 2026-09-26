@@ -45,6 +45,11 @@ type gormDBWrapper = gorm.DB
 // Result 描述一次 Check 的判定结果。handler/helper 据此决定写入与否和 UI 反馈。
 type Result struct {
 	// Verdict ∈ {Unique, Duplicate, LikelyDuplicate, Skipped, Error}。
+	//
+	// Duplicate means content-level evidence (SHA-256 or fpcalc) and is
+	// the only verdict that may justify refusing a write. A name clash and
+	// a metadata-similarity hit both come back LikelyDuplicate, which is a
+	// warning only.
 	Verdict string `json:"verdict"`
 	// Run 用以指示触发 / 未启用某漏斗层（filename / hash / fingerprint / meta）。
 	Run []string `json:"run"`
@@ -108,6 +113,23 @@ func New(database *gorm.DB, musicRoot string) *Checker {
 	return c
 }
 
+// SetMusicRoot repoints an existing Checker at a different library root.
+//
+// The gateway builds one Checker and reuses it for the life of the process,
+// so a root captured at construction goes stale the moment MUSIC_DIR is not
+// literally the value it had at boot — which is exactly what a test with
+// t.Setenv does, and it made dedup verdicts depend on test ordering. Reading
+// the root per call is cheap; the genuinely expensive state (fpcalc
+// discovery) is behind the Checker's own sync.Once and survives this.
+func (c *Checker) SetMusicRoot(root string) {
+	if root == "" {
+		return
+	}
+	c.mu.Lock()
+	c.musicRoot = root
+	c.mu.Unlock()
+}
+
 func defaultRoot() string {
 	if v := os.Getenv("MUSIC_DIR"); v != "" {
 		return v
@@ -117,6 +139,10 @@ func defaultRoot() string {
 
 // Check 对 path 执行去重判定。预期调用约定：path 必须是绝对物理路径，且
 // caller 已通过 utils.SafeJoin 校验过它落在 MUSIC_DIR 之内。
+//
+// 漏斗分两类证据。filename 与 meta 两级只是弱信号，一律返回
+// VerdictLikelyDuplicate（警告）；只有 hash / fingerprint 两级——内容
+// 本身相同——才返回 VerdictDuplicate，而那是唯一可以拒绝写入的判定。
 //
 // DB 不为 nil 会查 Task 表（含 /music_track 触及表）以避免磁盘扫描；
 // 为 nil 时 fall back 到 os.ReadDir 的全库扫描（O(n) 但内存占用极低）。
@@ -134,8 +160,16 @@ func (c *Checker) Check(ctx context.Context, path string, opts Options) Result {
 	res := Result{Verdict: VerdictUnique, Run: run}
 
 	// Stage 1: filename
+	//
+	// A name clash is NOT strong evidence. "track01.mp3", "01 - Song.mp3"
+	// and the same title under two albums all collide here while being
+	// completely different recordings, and the caller treats
+	// VerdictDuplicate as "skip the write". Content evidence — SHA-256 in
+	// stage 2, fpcalc in stage 3 — is what justifies blocking; a filename
+	// only earns a warning. MatchField still says "filename" so the UI can
+	// say why.
 	if dup, ok := c.checkFilename(ctx, path, opts); ok {
-		res.Verdict = VerdictDuplicate
+		res.Verdict = VerdictLikelyDuplicate
 		res.Run = append(res.Run, stageFilename)
 		res.MatchField = stageFilename
 		res.DuplicatePath = dup

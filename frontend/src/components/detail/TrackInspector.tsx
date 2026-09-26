@@ -33,6 +33,8 @@ import { useWorklistStore } from '@/store/useWorklistStore';
 import { useLibraryStore } from '@/store/useLibraryStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
+import { duplicateWarningsFromUpdate } from '@/components/detail/renameResult';
+import { dedupeFlag, isDedupeEnabled } from '@/utils/dedupe';
 import {
   updateId3,
   fetchId3ByTitle,
@@ -180,6 +182,10 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
           file_full_path: savedFrom,
           file_name: row.fileName,
           ...formData,
+          // The same preference the batch scrape reads, so turning dedup off
+          // in one place covers both. It lives inside the tag map because
+          // that is the only place the server looks for it.
+          ...dedupeFlag(isDedupeEnabled()),
         },
       ]);
       // Both stores key rows by fullPath, and both setters ignore ids
@@ -187,6 +193,22 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
       // 音乐库 also refresh the scraper table's status badge and
       // preview, and vice versa, without either view knowing which
       // section the dialog was opened from.
+      for (const note of duplicateWarningsFromUpdate(res)) {
+        useNoticeStore.getState().push(note, 'warn');
+      }
+      const rawSkipped = (res as { skipped?: unknown })?.skipped;
+      if (Array.isArray(rawSkipped) && rawSkipped.length > 0) {
+        // A refused duplicate is the only thing this endpoint puts in
+        // `skipped`, so say why rather than reporting a save that wrote
+        // nothing, and point at the way through.
+        useNoticeStore
+          .getState()
+          .push(
+            '保存被跳过：内容与库内文件完全一致。可在刮削设置中关闭「跳过重复文件」后重试',
+            'warn',
+          );
+      }
+
       setMusicInfo(savedFrom, formData);
       setStatus(savedFrom, 'scraped');
       setLibraryMusicInfo(savedFrom, formData);

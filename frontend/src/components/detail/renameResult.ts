@@ -81,6 +81,38 @@ export function sidecarWarningsFromUpdate(res: unknown): string[] {
   });
 }
 
+export interface DuplicateWarningEntry {
+  file_full_path?: string;
+  verdict?: string;
+  /** filename | hash | fingerprint | meta — which stage fired. */
+  match_field?: string;
+  duplicate_path?: string;
+  reason?: string;
+}
+
+/** Notes about suspected duplicates that did NOT stop the write.
+ *
+ *  A different channel from `skipped`, and the distinction matters: a
+ *  skipped entry means the tags were not written, while everything here
+ *  means they were. These are name clashes and metadata-similar tracks —
+ *  weak evidence the server deliberately refuses to treat as grounds for
+ *  refusing a save — surfaced so the user learns the library holds two
+ *  copies without losing their edit. */
+export function duplicateWarningsFromUpdate(res: unknown): string[] {
+  if (typeof res !== 'object' || res === null) return [];
+  const env = res as { data?: { duplicate_warnings?: unknown }; duplicate_warnings?: unknown };
+
+  const warnings = asArray<DuplicateWarningEntry>(
+    env.data?.duplicate_warnings ?? env.duplicate_warnings,
+  );
+
+  return warnings.map((w) => {
+    const other = typeof w?.duplicate_path === 'string' ? w.duplicate_path : '';
+    const reason = typeof w?.reason === 'string' ? w.reason : '疑似重复';
+    return other ? `疑似重复（${reason}）：${other}` : `疑似重复：${reason}`;
+  });
+}
+
 /** The file name part of a relative path, without a dependency on
  *  node's `path` (this ships to the browser and the stores already hold
  *  POSIX separators regardless of the host OS). */

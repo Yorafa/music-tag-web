@@ -49,17 +49,28 @@ func TestCheck_RejectsBadInput(t *testing.T) {
 	}
 }
 
-// TestCheck_SameNameInAnotherFolder is the filename stage, the cheapest and
-// most decisive one. Same basename under a different album directory is the
-// normal shape of a duplicate in a tagged library.
+// TestCheck_SameNameInAnotherFolder covers the filename stage — the cheapest
+// one, but no longer the most decisive, and that used to be the bug.
+//
+// The verdict assertion used to be VerdictDuplicate, on the reasoning that a
+// shared basename under a different album directory "is the normal shape of a
+// duplicate". The fixture refutes that: the two files hold "content-a" and
+// "totally different bytes". They are different recordings that happen to
+// share a name, and the caller reads VerdictDuplicate as "refuse the write",
+// so this was a test pinning a false positive as correct.
+//
+// The stage still reports the clash — MatchField, DuplicatePath and Reason
+// are all still asserted below, and the UI shows them as a warning. What
+// changed is only how much weight the verdict carries. See
+// TestFilenameClashIsNotStrongEvidence in verdict_test.go for the rule.
 func TestCheck_SameNameInAnotherFolder(t *testing.T) {
 	root := t.TempDir()
 	mine := music(t, root, "Artist A/Album 1/track.mp3", "content-a")
 	other := music(t, root, "Artist B/Album 2/track.mp3", "totally different bytes")
 
 	got := newChecker(t, root).Check(context.Background(), mine, Options{})
-	if got.Verdict != VerdictDuplicate {
-		t.Fatalf("Verdict = %q, want %q (Reason: %s)", got.Verdict, VerdictDuplicate, got.Reason)
+	if got.Verdict != VerdictLikelyDuplicate {
+		t.Fatalf("Verdict = %q, want %q (Reason: %s)", got.Verdict, VerdictLikelyDuplicate, got.Reason)
 	}
 	if got.MatchField != stageFilename {
 		t.Errorf("MatchField = %q, want %q", got.MatchField, stageFilename)

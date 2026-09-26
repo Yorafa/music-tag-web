@@ -78,15 +78,35 @@ func postBatch(t *testing.T, r *gin.Engine, body map[string]interface{}) map[str
 // an empty map survives validation is the load-bearing assumption here —
 // if it did not, every scrape would fail at ShouldBindJSON.
 func TestBatchUpdateID3_PerEntryMusicInfo(t *testing.T) {
+	// Both fixtures hold identical bytes, so with dedup on (the default) the
+	// second file is content-identical to the first and the write is
+	// correctly refused. This spec is about per-row tags, not dedup, so each
+	// case opts out — and the two cases differ in *where* the flag sits,
+	// because that placement is load-bearing:
+	//
+	//   - on the row's own music_info, where nothing has to be inherited;
+	//   - on the shared music_info, which handler.BatchUpdateID3 copies down
+	//     into every overriding row (its control-flag carry-over).
+	//
+	// The opt-out has to sit INSIDE music_info. The request struct has no
+	// top-level check_duplicate field, so one passed as a sibling of
+	// music_info is silently dropped by JSON binding — a mistake worth
+	// pinning rather than rediscovering.
 	for _, shared := range []struct {
-		name string
-		info map[string]interface{}
+		name      string
+		info      map[string]interface{}
+		rowOptOut bool
 	}{
-		// The empty placeholder the scrape path actually sends.
-		{"empty placeholder", map[string]interface{}{}},
+		// The empty placeholder the scrape path actually sends, kept
+		// literally empty to prove it survives `binding:"required"`.
+		{"empty placeholder, flag on the row", map[string]interface{}{}, true},
 		// A leftover from a caller that still fills it, to prove the
-		// placeholder really is inert rather than accidentally harmless.
-		{"populated placeholder", map[string]interface{}{"genre": "placeholder-must-not-be-used"}},
+		// placeholder really is inert rather than accidentally harmless,
+		// and to exercise the inheritance path.
+		{"populated placeholder, flag inherited", map[string]interface{}{
+			"genre":           "placeholder-must-not-be-used",
+			"check_duplicate": false,
+		}, false},
 	} {
 		t.Run(shared.name, func(t *testing.T) {
 			music := t.TempDir()
@@ -101,26 +121,24 @@ func TestBatchUpdateID3_PerEntryMusicInfo(t *testing.T) {
 
 			r, _ := setupAuditRouter(t)
 
+			row := func(name, title, artist, genre string) map[string]interface{} {
+				own := map[string]interface{}{
+					"title":  title,
+					"artist": artist,
+					"genre":  genre,
+				}
+				if shared.rowOptOut {
+					own["check_duplicate"] = false
+				}
+				return map[string]interface{}{"name": name, "music_info": own}
+			}
+
 			postBatch(t, r, map[string]interface{}{
 				"file_full_path": "Artist/Album",
 				"music_info":     shared.info,
 				"select_data": []map[string]interface{}{
-					{
-						"name": "01 - First.mp3",
-						"music_info": map[string]interface{}{
-							"title":  "First Song",
-							"artist": "Artist One",
-							"genre":  "Rock",
-						},
-					},
-					{
-						"name": "02 - Second.mp3",
-						"music_info": map[string]interface{}{
-							"title":  "Second Song",
-							"artist": "Artist Two",
-							"genre":  "Jazz",
-						},
-					},
+					row("01 - First.mp3", "First Song", "Artist One", "Rock"),
+					row("02 - Second.mp3", "Second Song", "Artist Two", "Jazz"),
 				},
 			})
 

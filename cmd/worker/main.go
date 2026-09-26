@@ -27,6 +27,7 @@ import (
 	"go-music-tag/internal/audit"
 	"go-music-tag/internal/config"
 	"go-music-tag/internal/db"
+	"go-music-tag/internal/dedup"
 	"go-music-tag/internal/events"
 	"go-music-tag/internal/plugin"
 	"go-music-tag/internal/queue"
@@ -121,7 +122,14 @@ func main() {
 	mux := asynq.NewServeMux()
 	tasks.NewFullScanMux(mux, &tasks.FullScanHandler{DB: gormDB, MusicRoot: cfg.MusicDir})
 	tasks.NewUpdateScanMux(mux, &tasks.UpdateScanHandler{DB: gormDB, MusicRoot: cfg.MusicDir})
-	tasks.NewBatchAutoTagMux(mux, &tasks.BatchAutoTagHandler{DB: gormDB})
+	// Dedup was left nil here, which is why batchtag.go carried a
+	// "dedup hook stubbed" TODO: the worker's auto-scrape had no duplicate
+	// checking at all. Wired now, so a scrape in the worker can skip a
+	// file whose content already exists in the library.
+	tasks.NewBatchAutoTagMux(mux, &tasks.BatchAutoTagHandler{
+		DB:    gormDB,
+		Dedup: dedup.New(gormDB, cfg.MusicDir),
+	})
 	tasks.NewTidyFolderMux(mux, &tasks.TidyFolderHandler{
 		DB:        gormDB,
 		MusicRoot: cfg.MusicDir,
