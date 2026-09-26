@@ -185,7 +185,7 @@ export function tryPattern(
   filename: string,
   pattern: string,
 ): { results: TryResult[]; status: 'ok' | 'ambiguous' | 'unparsable' } {
-  const stem = stripExt(filename);
+  const stem = tryStem(filename);
   if (stem === '') return { results: [], status: 'unparsable' };
 
   const p = pattern.trim();
@@ -276,6 +276,38 @@ function stripExt(name: string): string {
   const idx = name.lastIndexOf('.');
   if (idx <= 0) return '';
   return name.slice(0, idx);
+}
+
+/** The try-it box's stem, which is NOT quite the server's.
+ *
+ *  `stripExt` requires a dot, and that requirement is sound on the
+ *  server: it only ever sees the basename of a file that exists on
+ *  disk, and those have extensions. The try-it box is the one place a
+ *  person types free text, and what a person types is "Artist - Title",
+ *  not "Artist - Title.flac" — so the strict rule reported "这条规则
+ *  匹配不上这个文件名" for a name the rule matches perfectly, and sent
+ *  them off to change a rule that was already right.
+ *
+ *  With no dot there is no extension to strip, so the whole string is
+ *  the stem. This cannot diverge from the server on any input the
+ *  server can receive: it only changes the answer for names with no
+ *  extension, and it is given a real file's basename. What it no longer
+ *  does is reproduce the server's one confusing corner, where "A - B"
+ *  yields the stem "A" because the separator looked like an extension.
+ *  Reproducing a confusing truth is not the point of a scratchpad. */
+function tryStem(input: string): string {
+  // The trim is load-bearing on the pattern path, not decoration: a
+  // name pasted from a file listing arrives with a trailing newline, and
+  // JS's `$` (unlike Perl's) does not match before a final `\n`, so an
+  // untrimmed stem fails every anchored pattern. Verified, not assumed.
+  const trimmed = input.trim();
+  if (trimmed === '') return '';
+  if (!trimmed.includes('.')) return trimmed;
+  // No leading-dot check here: stripExt's `idx <= 0` already rejects a
+  // dotfile, and a second rule for the same case is a second thing to
+  // keep in step. It was briefly written as its own guard and a
+  // mutation check proved the two are equivalent.
+  return stripExt(trimmed);
 }
 
 /** A client-side mirror of the server's `CompilePattern` rejection, used

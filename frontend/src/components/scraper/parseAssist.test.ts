@@ -235,14 +235,57 @@ describe('tryPattern', () => {
     ]);
   });
 
-  it('is unparsable for a name with no extension, like the server', () => {
-    // "A - B" and "Mr. A - B" both have a dot in the wrong place (or no
-    // extension at all), so the server's stripExt yields "A"/"Mr" — a
-    // single segment, hence unparsable. Matching that here matters: a
-    // try-it box that read those correctly while the server did not would
-    // be showing the user a preview that will not happen.
-    expect(tryPattern('A - B', '').status).toBe('unparsable');
-    expect(tryPattern('Mr. A - B', '').status).toBe('unparsable');
+  it('reads a name typed WITHOUT an extension, which is what people type', () => {
+    // Regression: the box used to call stripExt, which returns '' when
+    // there is no dot, so "Artist - Title" reported unparsable and told
+    // the user to fix a rule that was already correct. The server can
+    // keep that rule because it only ever sees real files, which always
+    // have extensions; a scratchpad gets human input.
+    const got = tryPattern('周杰倫 - 晴天', '');
+    expect(got.status).toBe('ok');
+    expect(got.results).toEqual([
+      { field: 'artist', value: '周杰倫' },
+      { field: 'title', value: '晴天' },
+    ]);
+  });
+
+  it('reads an extension-less name the same with or without the extension', () => {
+    const withExt = tryPattern('Artist - Title.flac', '');
+    const without = tryPattern('Artist - Title', '');
+    expect(without).toEqual(withExt);
+  });
+
+  it('still strips a real extension when one is given', () => {
+    // The fix must not turn "A - B" into a title of "A - B.flac".
+    expect(tryPattern('Artist - Title.flac', '').results).toEqual([
+      { field: 'artist', value: 'Artist' },
+      { field: 'title', value: 'Title' },
+    ]);
+  });
+
+  it('treats a leading dot as a hidden file, not an extension', () => {
+    expect(tryPattern('.hidden', '').status).toBe('unparsable');
+  });
+
+  it('ignores surrounding whitespace from a copy-paste', () => {
+    expect(tryPattern('  Artist - Title  ', '').results).toEqual([
+      { field: 'artist', value: 'Artist' },
+      { field: 'title', value: 'Title' },
+    ]);
+  });
+
+  it('survives a trailing newline, which breaks every anchored pattern', () => {
+    // JS's `$` does not match before a final \n the way Perl's does, so
+    // an untrimmed stem pasted from a file listing fails to match at
+    // all — the try-it box would report "匹配不上" for a rule that works.
+    const p = buildPattern(['artist', 'title']);
+    expect(tryPattern('Artist - Title\n', p).status).toBe('ok');
+    expect(tryPattern('Artist - Title\n', '').status).toBe('ok');
+  });
+
+  it('is unparsable for an empty string rather than looping', () => {
+    expect(tryPattern('', '').status).toBe('unparsable');
+    expect(tryPattern('   ', '').status).toBe('unparsable');
   });
 
   it('treats a dotfile as unparsable, like the server', () => {

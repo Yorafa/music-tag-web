@@ -227,9 +227,8 @@ export function ParseFilenamesModal({
             </span>
           </DialogTitle>
           <DialogDescription>
-            下载来的文件常常还没有标签，刮削也就无从比对。点「预览」先看解析结果，
-            任何一格都能手动改；确认后点「应用」写入，刮削就有东西可匹配了。
-            解析只填，不删——要清空标签请用「批量编辑标签」。
+            从文件名解析提取元数据并写入进文件。写入前可以先试算、再看匹配情况；
+            只填不删，已有的标签不会被清掉。
           </DialogDescription>
         </DialogHeader>
 
@@ -423,7 +422,8 @@ function TryItResult({
   if (result.status === 'unparsable') {
     return (
       <div className="text-xs text-amber-600 dark:text-amber-400" data-testid="parse-try-result">
-        这条规则匹配不上这个文件名。可以换一个预设，或在上面的方框里调整字段顺序。
+        没能从这个文件名里取出标签。确认文件名里有分隔符（默认按 “- _ / \ | ·” 切分），
+        若是多段命名则改用上面的规则。
       </div>
     );
   }
