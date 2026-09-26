@@ -97,10 +97,20 @@ func ensureAudioFile(path string) error {
 func writeWithTagLib(path string, upd *TagUpdate) error {
 	tags := make(map[string][]string)
 
-	if upd.Title != nil {
+	// Clear* 优先于同名写入：两者同时出现时以清除为准，因为「先写再删」
+	// 与「删」的结果一样，而先删再写会把清除悄悄吃掉。
+	//
+	// 清除在 taglib 侧只能靠写空值实现（taglib 没有删除单个 tag 的 API），
+	// 这与 ClearLyrics 当年的做法一致，也是唯一能让所有格式表现一致的
+	// 方式：MP3 走下面的 id3v2 分支，DeleteFrames 是真的删 frame。
+	if upd.ClearTitle {
+		tags[taglib.Title] = []string{""}
+	} else if upd.Title != nil {
 		tags[taglib.Title] = []string{strings.TrimSpace(*upd.Title)}
 	}
-	if len(upd.Artist) > 0 {
+	if upd.ClearArtist {
+		tags[taglib.Artist] = []string{""}
+	} else if len(upd.Artist) > 0 {
 		var validArtists []string
 		for _, a := range upd.Artist {
 			if trimmed := strings.TrimSpace(a); trimmed != "" {
@@ -111,25 +121,39 @@ func writeWithTagLib(path string, upd *TagUpdate) error {
 			tags[taglib.Artist] = validArtists
 		}
 	}
-	if upd.Album != nil {
+	if upd.ClearAlbum {
+		tags[taglib.Album] = []string{""}
+	} else if upd.Album != nil {
 		tags[taglib.Album] = []string{strings.TrimSpace(*upd.Album)}
 	}
-	if upd.AlbumArtist != nil {
+	if upd.ClearAlbumArtist {
+		tags[taglib.AlbumArtist] = []string{""}
+	} else if upd.AlbumArtist != nil {
 		tags[taglib.AlbumArtist] = []string{strings.TrimSpace(*upd.AlbumArtist)}
 	}
-	if upd.Genre != nil {
+	if upd.ClearGenre {
+		tags[taglib.Genre] = []string{""}
+	} else if upd.Genre != nil {
 		tags[taglib.Genre] = []string{strings.TrimSpace(*upd.Genre)}
 	}
-	if upd.Year != nil && strings.TrimSpace(*upd.Year) != "" {
+	if upd.ClearYear {
+		tags[taglib.Date] = []string{""}
+	} else if upd.Year != nil && strings.TrimSpace(*upd.Year) != "" {
 		tags[taglib.Date] = []string{strings.TrimSpace(*upd.Year)}
 	}
-	if upd.TrackNumber != nil && strings.TrimSpace(*upd.TrackNumber) != "" {
+	if upd.ClearTrackNumber {
+		tags[taglib.TrackNumber] = []string{""}
+	} else if upd.TrackNumber != nil && strings.TrimSpace(*upd.TrackNumber) != "" {
 		tags[taglib.TrackNumber] = []string{strings.TrimSpace(*upd.TrackNumber)}
 	}
-	if upd.DiscNumber != nil && strings.TrimSpace(*upd.DiscNumber) != "" {
+	if upd.ClearDiscNumber {
+		tags[taglib.DiscNumber] = []string{""}
+	} else if upd.DiscNumber != nil && strings.TrimSpace(*upd.DiscNumber) != "" {
 		tags[taglib.DiscNumber] = []string{strings.TrimSpace(*upd.DiscNumber)}
 	}
-	if upd.Comment != nil {
+	if upd.ClearComment {
+		tags[taglib.Comment] = []string{""}
+	} else if upd.Comment != nil {
 		tags[taglib.Comment] = []string{strings.TrimSpace(*upd.Comment)}
 	}
 	if upd.ClearLyrics {
@@ -169,22 +193,37 @@ func writeMP3(path string, upd *TagUpdate) error {
 	}
 	defer tag.Close()
 
-	if upd.Title != nil {
+	// MP3 这条路径能真的删 frame，所以清除在这里是真删除而不是写空值。
+	// 两个分支对同一个 Clear* 的行为不同（taglib 写空、id3v2 删 frame），
+	// 但对「读完这个 tag 应该是空的」这个可观察结果一致。
+	if upd.ClearTitle {
+		tag.DeleteFrames("TIT2")
+	} else if upd.Title != nil {
 		tag.AddTextFrame("TIT2", id3v2.EncodingUTF8, strings.TrimSpace(*upd.Title))
 	}
-	if upd.Artist != nil {
+	if upd.ClearArtist {
+		tag.DeleteFrames("TPE1")
+	} else if upd.Artist != nil {
 		tag.AddTextFrame("TPE1", id3v2.EncodingUTF8, strings.Join(upd.Artist, ", "))
 	}
-	if upd.Album != nil {
+	if upd.ClearAlbum {
+		tag.DeleteFrames("TALB")
+	} else if upd.Album != nil {
 		tag.AddTextFrame("TALB", id3v2.EncodingUTF8, strings.TrimSpace(*upd.Album))
 	}
-	if upd.AlbumArtist != nil {
+	if upd.ClearAlbumArtist {
+		tag.DeleteFrames("TPE2")
+	} else if upd.AlbumArtist != nil {
 		tag.AddTextFrame("TPE2", id3v2.EncodingUTF8, strings.TrimSpace(*upd.AlbumArtist))
 	}
-	if upd.Genre != nil {
+	if upd.ClearGenre {
+		tag.DeleteFrames("TCON")
+	} else if upd.Genre != nil {
 		tag.AddTextFrame("TCON", id3v2.EncodingUTF8, strings.TrimSpace(*upd.Genre))
 	}
-	if upd.Comment != nil {
+	if upd.ClearComment {
+		tag.DeleteFrames("COMM")
+	} else if upd.Comment != nil {
 		tag.AddCommentFrame(id3v2.CommentFrame{
 			Encoding:    id3v2.EncodingUTF8,
 			Language:    "chi",
@@ -192,11 +231,15 @@ func writeMP3(path string, upd *TagUpdate) error {
 			Text:        strings.TrimSpace(*upd.Comment),
 		})
 	}
-	if upd.Year != nil {
+	if upd.ClearYear {
+		tag.DeleteFrames("TDRC")
+	} else if upd.Year != nil {
 		// ID3v2.4 用 TDRC, ID3v2.3 用 TYER。bogem/open 按 v2.3 解析，先写 TDRC 兼容性最好。
 		tag.AddTextFrame("TDRC", id3v2.EncodingUTF8, strings.TrimSpace(*upd.Year))
 	}
-	if upd.TrackNumber != nil {
+	if upd.ClearTrackNumber {
+		tag.DeleteFrames("TRCK")
+	} else if upd.TrackNumber != nil {
 		n, total := parseTrack(*upd.TrackNumber)
 		val := strconv.Itoa(n)
 		if total > 0 {
@@ -206,7 +249,9 @@ func writeMP3(path string, upd *TagUpdate) error {
 			tag.AddTextFrame("TRCK", id3v2.EncodingUTF8, val)
 		}
 	}
-	if upd.DiscNumber != nil {
+	if upd.ClearDiscNumber {
+		tag.DeleteFrames("TPOS")
+	} else if upd.DiscNumber != nil {
 		n, total := parseTrack(*upd.DiscNumber)
 		val := strconv.Itoa(n)
 		if total > 0 {

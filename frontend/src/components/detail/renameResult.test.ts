@@ -9,12 +9,7 @@
 // this is worth pinning rather than trusting.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import {
-  renamedPathFromUpdate,
-  sidecarWarningsFromUpdate,
-  baseNameOf,
-  joinDir,
-} from './renameResult';
+import { renamedPathFromUpdate, sidecarWarningsFromUpdate, baseNameOf, joinDir, renamedPathsFromUpdate } from './renameResult';
 import { useWorklistStore } from '@/store/useWorklistStore';
 import { useLibraryStore } from '@/store/useLibraryStore';
 import { useDetailStore } from '@/store/useDetailStore';
@@ -314,5 +309,38 @@ describe('sidecarWarningsFromUpdate', () => {
       { sidecar: 'cover-A.jpg', target: 'cover-A.jpg', reason: 'denied' },
     ]);
     expect(sidecarWarningsFromUpdate(res)).toHaveLength(2);
+  });
+});
+
+describe('renamedPathsFromUpdate', () => {
+  it('collects every moved row, not just the first', () => {
+    const res = {
+      data: {
+        done: [
+          { file_full_path: 'Album/01.mp3', new_file_name: 'A - One.mp3' },
+          { file_full_path: 'Other/02.mp3', new_file_name: 'B - Two.mp3' },
+          { file_full_path: 'Album/03.mp3' },
+        ],
+      },
+    };
+    const moved = renamedPathsFromUpdate(res);
+    expect(moved.size).toBe(2);
+    expect(moved.get('Album/01.mp3')).toBe('Album/A - One.mp3');
+    // A row that did not move is absent, not mapped to itself: the caller
+    // uses absence to decide whether to touch the store at all.
+    expect(moved.has('Album/03.mp3')).toBe(false);
+  });
+
+  it('reads an already-unwrapped report', () => {
+    const moved = renamedPathsFromUpdate({
+      done: [{ file_full_path: 'a.mp3', new_file_name: 'b.mp3' }],
+    });
+    expect(moved.get('a.mp3')).toBe('b.mp3');
+  });
+
+  it('returns an empty map for junk rather than throwing', () => {
+    for (const junk of [null, undefined, 42, 'nope', {}]) {
+      expect(renamedPathsFromUpdate(junk).size).toBe(0);
+    }
   });
 });

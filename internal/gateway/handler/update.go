@@ -238,7 +238,14 @@ func (r *updateBatchReport) toJSON() map[string]interface{} {
 // report.skipped。失败 = 老语义的 Failure；整批没有 Failure 即 200 + report。
 func BatchUpdateID3(c *gin.Context) {
 	var req struct {
-		FileFullPath string                   `json:"file_full_path" binding:"required"`
+		// FileFullPath is the directory the row names are relative to, and
+		// an empty value is meaningful rather than missing: it means
+		// "resolve against MUSIC_DIR", which is what a selection spanning
+		// several directories needs in order to be one request instead of
+		// one per album. It therefore carries no `required` binding — the
+		// batch-edit dialog sends "" and was rejected at ShouldBindJSON
+		// before any path was ever resolved. The other two stay required.
+		FileFullPath string                   `json:"file_full_path"`
 		MusicInfo    map[string]interface{}   `json:"music_info" binding:"required"`
 		SelectData   []map[string]interface{} `json:"select_data" binding:"required"`
 		// Action picks the audit.Action to record. Only the two batch
@@ -601,6 +608,39 @@ func (r applyResult) FailedSidecars() []tag.SidecarMove {
 //
 // Renamed targets are computed via utils.SafeAbs so callers cannot drive
 // the rename into an arbitrary parent directory.
+// tagIntent resolves one field of a write payload into the three states a
+// caller can actually mean. They are told apart by what the JSON *key* does,
+// never by the value alone:
+//
+//	key absent            → nothing to do; leave the tag as it is
+//	key present, null     → clear the tag
+//	key present, ""       → nothing to do; leave the tag as it is
+//	key present, "value"  → write "value"
+//
+// The empty string has always meant "the caller had nothing to say" here —
+// the single-track form submits every field including the ones the user never
+// touched, and its store copy can be partial, so reading "" as "delete" would
+// wipe tags the user did not ask about. That is why clearing needs its own
+// wire representation, and why it is null rather than "": a payload that
+// predates this contract keeps behaving exactly as it did.
+//
+// lyrics already worked this way (its nil case predates everything else);
+// tagIntent exists so the other fields answer the same question the same way.
+func tagIntent(info map[string]interface{}, key string) (value string, clear bool, act bool) {
+	raw, present := info[key]
+	if !present {
+		return "", false, false
+	}
+	if raw == nil {
+		return "", true, true
+	}
+	v := stringValue(raw)
+	if v == "" {
+		return "", false, false
+	}
+	return v, false, true
+}
+
 func applyFileUpdate(filePath string, info map[string]interface{}) (applyResult, error) {
 	var res applyResult
 	if !isAudioFile(filePath) {
@@ -616,46 +656,82 @@ func applyFileUpdate(filePath string, info map[string]interface{}) (applyResult,
 	tmplVars := readFileContext(filePath)
 
 	upd := &tag.TagUpdate{}
-	if v := stringValue(info["title"]); v != "" {
-		v = applyTemplate(v, tmplVars)
-		upd.Title = &v
-	}
-	if v := stringValue(info["artist"]); v != "" {
-		arr := strings.Split(v, ",")
-		upd.Artist = make([]string, len(arr))
-		for i := range arr {
-			upd.Artist[i] = strings.TrimSpace(arr[i])
+	if v, cl, ok := tagIntent(info, "title"); ok {
+		if cl {
+			upd.ClearTitle = true
+		} else {
+			v = applyTemplate(v, tmplVars)
+			upd.Title = &v
 		}
 	}
-	if v := stringValue(info["album"]); v != "" {
-		v = applyTemplate(v, tmplVars)
-		upd.Album = &v
+	if v, cl, ok := tagIntent(info, "artist"); ok {
+		if cl {
+			upd.ClearArtist = true
+		} else {
+			arr := strings.Split(v, ",")
+			upd.Artist = make([]string, len(arr))
+			for i := range arr {
+				upd.Artist[i] = strings.TrimSpace(arr[i])
+			}
+		}
 	}
-	if v := stringValue(info["albumartist"]); v != "" {
-		v = applyTemplate(v, tmplVars)
-		upd.AlbumArtist = &v
+	if v, cl, ok := tagIntent(info, "album"); ok {
+		if cl {
+			upd.ClearAlbum = true
+		} else {
+			v = applyTemplate(v, tmplVars)
+			upd.Album = &v
+		}
 	}
-	if v := stringValue(info["discnumber"]); v != "" {
-		upd.DiscNumber = &v
+	if v, cl, ok := tagIntent(info, "albumartist"); ok {
+		if cl {
+			upd.ClearAlbumArtist = true
+		} else {
+			v = applyTemplate(v, tmplVars)
+			upd.AlbumArtist = &v
+		}
 	}
-	if v := stringValue(info["tracknumber"]); v != "" {
-		upd.TrackNumber = &v
+	if v, cl, ok := tagIntent(info, "discnumber"); ok {
+		if cl {
+			upd.ClearDiscNumber = true
+		} else {
+			upd.DiscNumber = &v
+		}
 	}
-	if v := stringValue(info["genre"]); v != "" {
-		upd.Genre = &v
+	if v, cl, ok := tagIntent(info, "tracknumber"); ok {
+		if cl {
+			upd.ClearTrackNumber = true
+		} else {
+			upd.TrackNumber = &v
+		}
 	}
-	if v := stringValue(info["year"]); v != "" {
-		upd.Year = &v
+	if v, cl, ok := tagIntent(info, "genre"); ok {
+		if cl {
+			upd.ClearGenre = true
+		} else {
+			upd.Genre = &v
+		}
 	}
-	if rawLyrics, present := info["lyrics"]; present {
-		if rawLyrics == nil {
+	if v, cl, ok := tagIntent(info, "year"); ok {
+		if cl {
+			upd.ClearYear = true
+		} else {
+			upd.Year = &v
+		}
+	}
+	if v, cl, ok := tagIntent(info, "lyrics"); ok {
+		if cl {
 			upd.ClearLyrics = true
-		} else if v := stringValue(rawLyrics); v != "" {
+		} else {
 			upd.Lyrics = &v
 		}
 	}
-	if v := stringValue(info["comment"]); v != "" {
-		upd.Comment = &v
+	if v, cl, ok := tagIntent(info, "comment"); ok {
+		if cl {
+			upd.ClearComment = true
+		} else {
+			upd.Comment = &v
+		}
 	}
 	if v := stringValue(info["album_img"]); v != "" {
 		raw, _, _ := tag.DecodePictureBase64(v)

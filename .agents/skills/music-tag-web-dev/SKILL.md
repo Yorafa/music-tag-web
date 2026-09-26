@@ -350,3 +350,5 @@ Deploy / runtime:
 - [ ] Search fan-out works at `POST /api/search_music/`
 - [ ] Dedup check works at `POST /api/check_duplicate/`
 - [ ] Cleanup works at `POST /api/prune_empty_folders/` (reports `removed` and `vanished_rows` separately)
+
+17. **Three states per tag field on the wire**: in any `music_info` payload, a field is *absent* (leave the tag alone), *JSON null* (delete the tag), or *a string* (write it). An **empty string still means "leave it alone"** and must not be changed to mean "clear": the single-track form spreads its whole form into the payload, so a save carries a dozen keys the user never touched, and reading those as deletions wipes tags they never saw. `handler.tagIntent` is the one place that decides; `tag.TagUpdate`'s `Clear*` flags are how a clear reaches the writers (taglib writes an empty value, id3v2 deletes the frame). Corollary for `filename`: it is a *shared* string the server expands per file, so a batch that wants renames must send a **template** (`${artist} - ${title}`) and a batch that does not must omit the key entirely — one literal name asks every selected file to become that one name.

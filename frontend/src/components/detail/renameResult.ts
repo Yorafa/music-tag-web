@@ -131,3 +131,30 @@ export function joinDir(oldPath: string, newBaseName: string): string {
   const cut = oldPath.lastIndexOf('/');
   return cut === -1 ? newBaseName : `${oldPath.slice(0, cut)}/${newBaseName}`;
 }
+
+/** Every path that moved, keyed by the path the request used.
+ *
+ *  `renamedPathFromUpdate` answers "where did THIS row go", which is the
+ *  question a single-track save asks. A batch asks it once per file, and
+ *  answering by re-scanning the report per row makes the cost O(n²) for a
+ *  report that already holds every answer — cheap at forty rows, but the
+ *  wrong shape to grow with.
+ *
+ *  Same reasoning as the single-row version for reading the report itself:
+ *  the client does not re-derive the new path, the handler reports the base
+ *  name it used, and this only joins it back onto the row's directory. */
+export function renamedPathsFromUpdate(res: unknown): Map<string, string> {
+  const moved = new Map<string, string>();
+  if (typeof res !== 'object' || res === null) return moved;
+  const env = res as { data?: { done?: unknown }; done?: unknown };
+  const done = asArray<UpdateDoneEntry>(env.data?.done ?? env.done);
+
+  for (const entry of done) {
+    const from = entry?.file_full_path;
+    const newName = entry?.new_file_name;
+    if (typeof from !== 'string' || from === '') continue;
+    if (typeof newName !== 'string' || newName === '') continue;
+    moved.set(from, joinDir(from, newName));
+  }
+  return moved;
+}

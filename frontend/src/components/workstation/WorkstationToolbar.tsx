@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Sparkles,
   FolderTree,
@@ -10,6 +10,7 @@ import {
   Square,
   Copy,
   ScanSearch,
+  Tags,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -30,6 +31,7 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { ParseFilenamesModal } from '@/components/scraper/ParseFilenamesModal';
+import { BatchEditDialog } from '@/components/workstation/BatchEditDialog';
 import { skippedNotesFromUpdate } from '@/utils/skippedNotes';
 import { useWorklistStore, type WorklistGrouping } from '@/store/useWorklistStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
@@ -87,6 +89,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   const clearDuplicates = useWorklistStore((s) => s.clearDuplicates);
 
   const [parseOpen, setParseOpen] = useState(false);
+  const [batchEditOpen, setBatchEditOpen] = useState(false);
   const [tidyOpen, setTidyOpen] = useState(false);
   const [scrapePopoverOpen, setScrapePopoverOpen] = useState(false);
   const [isScraping, setIsScraping] = useState(false);
@@ -131,6 +134,13 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
     error?: boolean;
   }>({ loading: false, emptyDirs: [], vanishedRows: [] });
 
+  // The rows a batch edit would apply to. Captured as rows rather than
+  // paths because the dialog also needs each row's fileName for the
+  // post-save store update.
+  const selectedRows = useMemo(
+    () => rows.filter((r) => selectedIds.includes(r.fullPath)),
+    [rows, selectedIds],
+  );
   const hasSelection = selectedIds.length > 0;
   const isAllSelected = rows.length > 0 && selectedIds.length === rows.length;
 
@@ -738,7 +748,33 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
             <span className="hidden sm:inline ml-1">清空</span>
           </Button>
         )}
+        {/* Batch tag edit. Gated on 2+ rows on purpose: with one row
+            selected the right-hand TrackInspector already IS the editor
+            for that track, complete with per-field suggestions and a cover
+            tab. Offering a second, thinner way to edit the same row is how
+            a UI grows two answers to one question. */}
+        {selectedRows.length >= 2 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setBatchEditOpen(true)}
+            className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/40"
+            title="把同一组标签写入选中的多首曲目"
+          >
+            <Tags className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">批量编辑标签</span>
+            <Badge variant="secondary" className="h-4 px-1 text-[10px] font-mono">
+              {selectedRows.length}
+            </Badge>
+          </Button>
+        )}
       </div>
+
+      {/* Batch tag edit. Mounted only while open so the form state starts
+          fresh each time without a reset effect. */}
+      {batchEditOpen && (
+        <BatchEditDialog rows={selectedRows} onClose={() => setBatchEditOpen(false)} />
+      )}
 
       {/* Parse Filenames Modal */}
       <ParseFilenamesModal

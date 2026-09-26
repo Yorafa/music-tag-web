@@ -22,9 +22,11 @@
 |---|---|---|
 | 全格式音频 ID3 / Vorbis / APE tag 读 | ✅ | `internal/tag/reader.go`（通过 `bogem/id3v2` + `dhowden/tag` 做格式分发） |
 | 全格式 ID3 写 / 侧车歌词/封面 | ✅ | `internal/tag/writer.go`（lyric write + `HandleSidecars` 的 `is_save_lyrics_file` / `is_save_album_cover`） |
-| 批量编辑 | ✅ | `internal/gateway/handler/update.go` 中 `BatchUpdateID3`（前端按目录分组提交；worker 侧 `tag:batch_auto` 链路已删除——它从不写入 `task_taskrecord` 行，处理数恒为 0，且前端无调用方） |
+| 批量编辑（机器填值） | ✅ | `internal/gateway/handler/update.go` 中 `BatchUpdateID3`（前端按目录分组提交；worker 侧 `tag:batch_auto` 链路已删除——它从不写入 `task_taskrecord` 行，处理数恒为 0，且前端无调用方） |
+| 批量编辑（人工填值） | ✅ | `frontend/src/components/workstation/BatchEditDialog.tsx` + `batchEdit.ts`。选区 ≥ 2 首时工具栏出现「批量编辑标签」：一份表单写入选中全部曲目，每个字段带「不修改」勾选（**默认勾选**），取消勾选后留空即**清空该标签**。一次请求覆盖跨目录选区（`file_full_path: ""` + 含斜杠的相对路径，服务端 `SafeJoin` 逐行做包含性检查）。1 首时故意不出现——那一行的编辑面是 `TrackInspector`，两个入口做同一件事会让用户问「我改的到底是哪个」 |
+| 批量清空标签（删除 tag） | ✅ | `tag.TagUpdate` 的 `Clear*` 开关 + `writer.go` 两条写入路径（taglib 写空值 / id3v2 `DeleteFrames`）。**线上契约：JSON `null` = 清除该 tag，key 缺失 = 不动，空字符串仍然 = 不动**（`handler.tagIntent`）。空字符串不能改成「清除」：单条表单把全部字段展开进 payload，其中大量是用户没碰过的空串，读成删除会把用户没看过的 tag 抹掉 |
 | 单条编辑 | ✅ | `frontend/src/components/detail/TrackInspector.tsx`（MusicTagInfo 实时表单） |
-| 列编辑（行内 inline） | 🚧 | 通过 selection+apply 实现批量编辑；per-row live-edit UI 仅支持单行 |
+| 列编辑（行内 inline） | ❌ | 未实现，**也不打算做**。之前这一行标的是 🚧 并写「通过 selection+apply 实现批量编辑」——那句把「批量刮削」（机器填值）说成了「批量编辑」，正是人工多首填值这条路长期没人发现的原因。现在人工路径已由上面的「批量编辑（人工填值）」补上，inline 剩下的只有开 spreadsheets：单元级 dirty / 逐行错误态 / 键盘导航 / 失败回滚，而收益只在「N 首每首要改的值都不同」这一种场景。本表标 ❌ 是因为**一行 UI 都没写**，不是「剩个 gap」 |
 
 ## 2. 元数据刮削与查找
 

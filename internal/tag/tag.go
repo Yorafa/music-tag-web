@@ -71,7 +71,27 @@ type TagUpdate struct {
 	AlbumType   *string  `json:"album_type,omitempty"`
 	Language    *string  `json:"language,omitempty"`
 	ClearLyrics bool     `json:"clear_lyrics,omitempty"`
-	AlbumImg    []byte   `json:"-"` // 二进制封面图，URL/base64 由调用方预处理
+
+	// Clear* 删除对应 tag，与上面的 *string 字段是两件不同的事。
+	//
+	// 指针能表达「写入某个值」，表达不了「删掉这个 tag」：把指针指到空串
+	// 只会写入一个空值，而不是移除 frame。ClearLyrics 早就是这个形状，
+	// 这里的其余字段是把它补齐。
+	//
+	// 没有 ClearAlbumImg 是故意的：移除内嵌封面只有 id3v2 那条路径能做
+	// （DeleteFrames("APIC")），taglib 侧只有 WriteImage，没有删除 API。
+	// 声称能清而实际只对 mp3 生效，比不支持更糟。
+	ClearTitle       bool `json:"clear_title,omitempty"`
+	ClearArtist      bool `json:"clear_artist,omitempty"`
+	ClearAlbum       bool `json:"clear_album,omitempty"`
+	ClearAlbumArtist bool `json:"clear_albumartist,omitempty"`
+	ClearTrackNumber bool `json:"clear_tracknumber,omitempty"`
+	ClearDiscNumber  bool `json:"clear_discnumber,omitempty"`
+	ClearGenre       bool `json:"clear_genre,omitempty"`
+	ClearYear        bool `json:"clear_year,omitempty"`
+	ClearComment     bool `json:"clear_comment,omitempty"`
+
+	AlbumImg []byte `json:"-"` // 二进制封面图，URL/base64 由调用方预处理
 }
 
 // ProbeFile 用文件头嗅探音频格式（mp3/flac/ogg/mp4）。
