@@ -8,6 +8,8 @@ import {
   FolderPlus,
   CheckSquare,
   Square,
+  Copy,
+  ScanSearch,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -36,6 +38,8 @@ import {
   fetchId3ByTitle,
   batchUpdateId3,
   pruneEmptyFolders,
+  checkDuplicate,
+  deleteFiles,
 } from '@/api/client';
 import {
   scrapedMusicInfo,
@@ -48,6 +52,7 @@ import {
   baseNameOf,
 } from '@/components/detail/renameResult';
 import { dedupeFlag, isDedupeEnabled, setDedupeEnabled } from '@/utils/dedupe';
+import { deleteTargetsFor } from '@/components/workstation/duplicateBadge';
 import { cn } from '@/lib/utils';
 import type { MusicSource } from '@/types';
 
@@ -77,12 +82,20 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   const renameRow = useWorklistStore((s) => s.renameRow);
   const grouping = useWorklistStore((s) => s.grouping);
   const setGrouping = useWorklistStore((s) => s.setGrouping);
+  const setDuplicates = useWorklistStore((s) => s.setDuplicates);
+  const clearDuplicates = useWorklistStore((s) => s.clearDuplicates);
 
   const [parseOpen, setParseOpen] = useState(false);
   const [tidyOpen, setTidyOpen] = useState(false);
   const [scrapePopoverOpen, setScrapePopoverOpen] = useState(false);
   const [isScraping, setIsScraping] = useState(false);
   const [scrapeProgress, setScrapeProgress] = useState<{ current: number; total: number } | null>(null);
+
+  // Duplicate check / delete
+  const [isCheckingDup, setIsCheckingDup] = useState(false);
+  const [dupResultOpen, setDupResultOpen] = useState(false);
+  const [dupDeleteOpen, setDupDeleteOpen] = useState(false);
+  const [isDeletingDup, setIsDeletingDup] = useState(false);
 
   // Scrape settings
   const [selectedSources, setSelectedSources] = useState<MusicSource[]>([
@@ -324,6 +337,86 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
     }
   };
 
+  // Run the read-only duplicate scan over the selected rows.
+  //
+  // Selection-scoped rather than whole-list on purpose. Each row is a full
+  // four-stage check and the fingerprint stage spawns fpcalc over a
+  // duration-filtered candidate set, so scanning a 2000-row list is a
+  // multi-minute request. Hand-selecting the folder you just suspect is
+  // both faster and more likely to be what the user meant.
+  const handleCheckDuplicate = async () => {
+    if (!hasSelection) {
+      useNoticeStore.getState().push('请先选择要查重的音乐行', 'warn');
+      return;
+    }
+    const targetRows = rows.filter((r) => selectedIds.includes(r.id));
+    if (targetRows.length === 0) return;
+
+    setIsCheckingDup(true);
+    try {
+      const report = await checkDuplicate(targetRows.map((r) => r.id));
+      setDuplicates(
+        report.results.map((row) => ({
+          fileFullPath: row.file_full_path,
+          verdict: row.verdict,
+          matchField: row.match_field,
+          duplicatePath: row.duplicate_path,
+          reason: row.reason,
+          run: row.run,
+        })),
+      );
+      setDupResultOpen(true);
+      const { duplicate, likely_duplicate: likely, error } = report.summary;
+      if (duplicate > 0) {
+        useNoticeStore
+          .getState()
+          .push(`查重完成：发现 ${duplicate} 个重复文件${likely > 0 ? `，${likely} 个疑似` : ''}`, 'warn');
+      } else {
+        useNoticeStore
+          .getState()
+          .push(`查重完成：未发现重复${likely > 0 ? `（${likely} 个疑似同名）` : ''}`, 'info');
+      }
+      if (error > 0) {
+        useNoticeStore.getState().push(`${error} 个文件无法查重（已跳过）`, 'warn');
+      }
+    } catch (e) {
+      useNoticeStore.getState().push(`查重失败：${(e as Error).message}`, 'error');
+    } finally {
+      setIsCheckingDup(false);
+    }
+  };
+
+  // Rows the delete action would actually remove: the selection, narrowed
+  // to rows the server called a content-level duplicate, minus any
+  // mutually-referencing pair. See duplicateBadge.ts::deleteTargetsFor.
+  const dupTargets = deleteTargetsFor(
+    hasSelection ? rows.filter((r) => selectedIds.includes(r.id)) : rows,
+  );
+
+  const handleDeleteDuplicates = async () => {
+    if (dupTargets.length === 0) return;
+    setIsDeletingDup(true);
+    try {
+      const report = await deleteFiles(dupTargets.map((r) => r.id));
+      setDupDeleteOpen(false);
+      // The file is gone, so the row must go too — and the badge with it.
+      // remove() drops the row entirely; clearDuplicates() then sweeps any
+      // verdict left on rows that survived.
+      remove(report.results.filter((x) => x.status === 'deleted').map((x) => x.file_full_path));
+      clearDuplicates();
+      useNoticeStore
+        .getState()
+        .push(
+          `已删除 ${report.deleted} 个重复文件${report.failed > 0 ? `，${report.failed} 个未处理` : ''}（已移入回收目录，可恢复）`,
+          report.failed > 0 ? 'warn' : 'info',
+        );
+    } catch (e) {
+      useNoticeStore.getState().push(`删除失败：${(e as Error).message}`, 'error');
+    } finally {
+      setIsDeletingDup(false);
+    }
+  };
+
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-border bg-surface-2/60 shrink-0">
       {/* Left Operations: Add, Batch Scrape, Parse, Tidy */}
@@ -518,6 +611,35 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
 
         <Separator orientation="vertical" className="mx-0.5 h-4" />
 
+        {/* Duplicate check — read-only, over the selection. */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleCheckDuplicate}
+          disabled={isCheckingDup || !hasSelection}
+          className="h-8 gap-1 text-xs"
+          title="对选中的行做只读查重（文件名 / 哈希 / 声纹 / 元数据），不修改任何文件"
+        >
+          <ScanSearch className={`w-3.5 h-3.5 text-muted-foreground ${isCheckingDup ? 'animate-pulse' : ''}`} />
+          <span>{isCheckingDup ? '查重中…' : '查重'}</span>
+        </Button>
+
+        {/* Delete the duplicates found. Only enabled once rows carry a
+            content-level duplicate verdict — see deleteTargetsFor for why
+            疑似 (name clash) is not enough to act on. */}
+        {dupTargets.length > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setDupDeleteOpen(true)}
+            className="h-8 gap-1 text-xs text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+            title={`将 ${dupTargets.length} 个重复文件移入回收目录（可恢复）`}
+          >
+            <Copy className="w-3.5 h-3.5" />
+            <span>删除重复 ({dupTargets.length})</span>
+          </Button>
+        )}
+
         {/* Scan local buttons */}
       </div>
 
@@ -598,6 +720,117 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         onOpenChange={setParseOpen}
         selectedPaths={selectedIds.length > 0 ? selectedIds : rows.map((r) => r.fullPath)}
       />
+
+      {/* Duplicate result panel — the same verdicts now shown as row badges,
+          gathered into one list so a 40-row check is reviewable without
+          hunting down individual rows. */}
+      <Dialog open={dupResultOpen} onOpenChange={setDupResultOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-base flex items-center gap-2">
+              <ScanSearch className="w-4 h-4 text-primary" />
+              查重结果
+            </DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[50vh] overflow-y-auto space-y-1.5 py-2">
+            {rows
+              .filter((r) => r.duplicate)
+              .map((r) => (
+                <div
+                  key={r.id}
+                  className="flex items-start gap-2 text-xs px-2 py-1.5 rounded border border-border/60 bg-surface-1"
+                >
+                  <Badge
+                    variant="outline"
+                    className={
+                      r.duplicate?.verdict === 'duplicate'
+                        ? 'shrink-0 text-[10px] h-4 px-1.5 text-destructive border-destructive/40 bg-destructive/10'
+                        : r.duplicate?.verdict === 'likely_duplicate'
+                          ? 'shrink-0 text-[10px] h-4 px-1.5 text-amber-500 border-amber-500/40 bg-amber-500/10'
+                          : 'shrink-0 text-[10px] h-4 px-1.5'
+                    }
+                  >
+                    {r.duplicate?.verdict === 'duplicate'
+                      ? '重复'
+                      : r.duplicate?.verdict === 'likely_duplicate'
+                        ? '疑似'
+                        : '唯一'}
+                  </Badge>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium">{r.fileName}</div>
+                    {r.duplicate?.duplicatePath && (
+                      <div className="truncate text-muted-foreground">
+                        与 {r.duplicate.duplicatePath} 相同
+                      </div>
+                    )}
+                    {r.duplicate?.reason && (
+                      <div className="text-muted-foreground">{r.duplicate.reason}</div>
+                    )}
+                  </div>
+                </div>
+              ))}
+          </div>
+          <DialogFooter showCloseButton>
+            {dupTargets.length > 0 && (
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  setDupResultOpen(false);
+                  setDupDeleteOpen(true);
+                }}
+                className="text-xs h-8"
+              >
+                <Copy className="w-3.5 h-3.5 mr-1" />
+                删除 {dupTargets.length} 个重复文件
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation. Names every file, says plainly that the
+          originals are kept, and states that the delete is recoverable —
+          because the honest description of a quarantine is not "删除". */}
+      <Dialog open={dupDeleteOpen} onOpenChange={setDupDeleteOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base flex items-center gap-2 text-destructive">
+              <Trash2 className="w-4 h-4" />
+              确认删除 {dupTargets.length} 个重复文件？
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2.5 py-1 text-xs">
+            <p className="text-muted-foreground">
+              以下文件与库内其他文件内容完全相同，将被移出音乐库。每行括号内是保留下来的那一份。
+            </p>
+            <div className="max-h-52 overflow-y-auto rounded border border-border/60 bg-surface-1 divide-y divide-border/40">
+              {dupTargets.map((r) => (
+                <div key={r.id} className="px-2 py-1.5 flex flex-col">
+                  <span className="truncate font-medium">{r.fileName}</span>
+                  <span className="truncate text-muted-foreground">
+                    保留：{r.duplicate?.duplicatePath ?? '—'}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="text-muted-foreground">
+              文件不会被真正抹除，而是移入数据目录下的
+              <code className="mx-1 px-1 rounded bg-muted/50 font-mono">.trash/</code>
+              ，需要时可以从服务器恢复。
+            </p>
+          </div>
+          <DialogFooter showCloseButton>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteDuplicates}
+              disabled={isDeletingDup}
+              className="text-xs h-8"
+            >
+              {isDeletingDup ? '删除中…' : `确认删除 ${dupTargets.length} 个`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Tidy Folder Modal */}
       <Dialog open={tidyOpen} onOpenChange={setTidyOpen}>

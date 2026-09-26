@@ -10,6 +10,9 @@
 // What is session-only:
 //   - selectedIds
 //   - filter
+//   - row `duplicate` verdicts (a check is a point-in-time fact: the file
+//     it described may since have been replaced or deleted, and a badge
+//     restored from localStorage would assert a verdict nobody re-checked)
 //   - collapsedGroups (Plan C.3 Open Details A: collapse state doesn't
 //     survive reload; expanded-by-default per Open Details A so a fresh
 //     page shows everything)
@@ -24,7 +27,7 @@
 // surgical per-row update.
 
 import { create } from 'zustand';
-import type { MusicTagInfo, ScrapeStatus, WorklistRow } from '@/types';
+import type { MusicTagInfo, RowDuplicate, ScrapeStatus, WorklistRow } from '@/types';
 import {
   expandDirsToAudioFiles,
   type ExpandedFile,
@@ -36,7 +39,7 @@ import {
   stripHeavyFromRows,
 } from '@/utils/persistMusicInfo';
 
-export type WorklistFilter = 'all' | 'pending' | 'scraped' | 'failed';
+export type WorklistFilter = 'all' | 'pending' | 'scraped' | 'failed' | 'duplicate';
 
 // Plan C.3 grouping dimension. Three mutually-exclusive values per the
 // plan § Step 2 ("group toggle 互斥"). Default 'none' = flat list
@@ -100,6 +103,19 @@ interface WorklistState {
   remove: (ids: string[]) => void;
   setStatus: (id: string, status: ScrapeStatus) => void;
   setFilter: (f: WorklistFilter) => void;
+  /** Record duplicate-check verdicts, keyed by row fullPath.
+   *
+   *  Applied per row rather than as a bulk replace so a partial response
+   *  (the server answers per row and can skip an unreadable file) updates
+   *  exactly the rows it spoke about and leaves the others alone. Ids with
+   *  no matching row are dropped rather than inserted — a check result is
+   *  not a reason to conjure a row. */
+  setDuplicates: (
+    verdicts: Array<{ fileFullPath: string } & RowDuplicate>,
+  ) => void;
+  /** Clear every row's verdict, e.g. after a delete so no badge outlives
+   *  the file it described. */
+  clearDuplicates: () => void;
   /** Lazy row-level musicInfo cache. Populated by the boot hydration
    *  below, by enqueueDirs, and by the detail dialog when it saves.
    *  Indexed by row id (== fullPath) so
@@ -175,6 +191,52 @@ function persistGrouping(g: WorklistGrouping): void {
     // swallow per persistRows rationale; grouping choice is recoverable
     // on next reload via the default 'none'.
   }
+}
+
+/** The wire shape the server sends for one row, minus the path key the
+ *  store already owns (a row's id IS its fullPath, so re-storing it would
+ *  let the two drift). */
+type VerdictInput = { fileFullPath: string } & RowDuplicate;
+
+const VERDICTS = new Set<string>([
+  'unique',
+  'duplicate',
+  'likely_duplicate',
+  'skipped',
+  'error',
+]);
+
+/** Normalise a server verdict into the row field.
+ *
+ *  `fileFullPath` is dropped because the id is the path; an unknown verdict
+ *  degrades to `error` rather than being stored verbatim, so a future
+ *  server verdict cannot smuggle an unhandled string into the filter logic
+ *  (which switches on these five). */
+function stripVerdictEnvelope(v: VerdictInput): RowDuplicate {
+  return {
+    // fileFullPath is intentionally not copied through: a row's id IS its
+    // fullPath, so storing it again would let the two drift apart.
+    verdict: VERDICTS.has(v.verdict) ? v.verdict : 'error',
+    matchField: v.matchField,
+    duplicatePath: v.duplicatePath,
+    reason: v.reason,
+    run: v.run,
+  };
+}
+
+/** Does a row pass the active filter?
+ *
+ *  Extracted because two places must agree exactly: the table's
+ *  `filteredRows`, and `selectAll()`'s "select every visible row". When
+ *  those drifted, 全选 under 「只看重复」 would have selected rows the user
+ *  could not see.
+ *
+ *  `duplicate` is its own axis, not a scrape status: a row can be both
+ *  `scraped` and `duplicate`, and 「只看重复」 must show it either way. */
+export function rowMatchesFilter(row: WorklistRow, filter: WorklistFilter): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'duplicate') return row.duplicate?.verdict === 'duplicate';
+  return row.status === filter;
 }
 
 /** Pure-row merge: take existing rows, append new ones, dedupe by id.
@@ -303,9 +365,7 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
 
   selectAll: () => {
     const { rows, filter } = get();
-    const visible = rows.filter((r) =>
-      filter === 'all' ? true : r.status === filter,
-    );
+    const visible = rows.filter((r) => rowMatchesFilter(r, filter));
     set({ selectedIds: visible.map((r) => r.id) });
     return visible.length;
   },
@@ -343,6 +403,33 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
   },
 
   setFilter: (f) => set({ filter: f }),
+
+  setDuplicates: (verdicts) => {
+    if (verdicts.length === 0) return;
+    set((s) => {
+      // Only ids that exist as rows. The server echoes the paths it was
+      // given, so a stale row id (a file renamed mid-check) is expected
+      // rather than exceptional.
+      const byPath = new Map(verdicts.map((v) => [v.fileFullPath, v]));
+      const known = s.rows.some((r) => byPath.has(r.id));
+      if (!known) return s;
+      const nextRows = s.rows.map((r) => {
+        const v = byPath.get(r.id);
+        if (!v) return r;
+        // `duplicate` is session-only (see the boot hydration below), so
+        // this deliberately does NOT call persistRows.
+        return { ...r, duplicate: stripVerdictEnvelope(v) };
+      });
+      return { rows: nextRows };
+    });
+  },
+
+  clearDuplicates: () => {
+    set((s) => {
+      if (!s.rows.some((r) => r.duplicate !== undefined)) return s;
+      return { rows: s.rows.map((r) => (r.duplicate ? { ...r, duplicate: undefined } : r)) };
+    });
+  },
 
   setMusicInfo: (id, info) => {
     set((s) => {

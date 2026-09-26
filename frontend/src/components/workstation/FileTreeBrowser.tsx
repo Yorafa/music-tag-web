@@ -13,6 +13,7 @@ import {
   Sparkles,
   HardDrive,
   FolderPlus,
+  Copy,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -137,6 +138,10 @@ export function FileTreeBrowser({ className, onOpenDirPicker }: Props) {
       pending: rows.filter((r) => r.status === 'pending').length,
       scraped: rows.filter((r) => r.status === 'scraped').length,
       failed: rows.filter((r) => r.status === 'failed').length,
+      // Only the content-level verdict counts here. `likely_duplicate` is a
+      // name clash, and offering a 「只看重复」 view that is really a
+      // 「只看同名」 view would train the user to ignore it.
+      duplicate: rows.filter((r) => r.duplicate?.verdict === 'duplicate').length,
     };
   }, [rows]);
 
@@ -145,6 +150,7 @@ export function FileTreeBrowser({ className, onOpenDirPicker }: Props) {
     { id: 'pending', label: '待刮削', icon: Clock, count: counts.pending, color: 'text-amber-500' },
     { id: 'scraped', label: '已刮削', icon: CheckCircle2, count: counts.scraped, color: 'text-emerald-500' },
     { id: 'failed', label: '失败/需复核', icon: AlertCircle, count: counts.failed, color: 'text-destructive' },
+    { id: 'duplicate', label: '重复文件', icon: Copy, count: counts.duplicate, color: 'text-destructive' },
   ];
 
   // Render a directory item recursively

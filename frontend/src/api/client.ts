@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { useAuthStore } from '@/store/useAuthStore';
 import { unwrapEnvelope, asArray } from '@/api/envelope';
-import type { SourceInfo } from '@/types';
+import type { RowDuplicate, SourceInfo } from '@/types';
 
 const api = axios.create({
   baseURL: '/api/',
@@ -131,6 +131,84 @@ export async function pruneEmptyFolders(subPaths?: Array<[string, string]>) {
 export async function getActiveQueue() {
   const { data } = await api.get('active_queue/');
   return data;
+}
+
+/** POST /api/check_duplicate/ — read-only duplicate scan over an explicit
+ *  list of Worklist rows.
+ *
+ *  The dedup funnel used to run only on the write path, which made it a
+ *  guard rail rather than a feature: a library that already contained
+ *  duplicates never said so, and the only way to find out was to attempt a
+ *  write. This runs the same four stages with no side effect, so a verdict
+ *  here and a verdict on the write path cannot disagree — one checker, one
+ *  index, one rule (handler/duplicate.go::CheckDuplicate).
+ *
+ *  `fileFullPaths` are relative to MUSIC_DIR — the same string a row's
+ *  `fullPath` already holds.
+ *
+ *  Throws via unwrapEnvelope on a malformed / failed envelope, but NOT for
+ *  an individual file that could not be checked: those come back as rows
+ *  with verdict `error` / `skipped` so one unreadable file cannot hide the
+ *  verdict on the other forty. */
+export async function checkDuplicate(fileFullPaths: string[]): Promise<DuplicateReport> {
+  const { data } = await api.post('check_duplicate/', {
+    file_full_paths: fileFullPaths,
+  });
+  return unwrapEnvelope<DuplicateReport>(data, 'check_duplicate');
+}
+
+export interface DuplicateReport {
+  results: Array<{
+    file_full_path: string;
+    /** Typed as RowDuplicate['verdict'] rather than `string` so a caller
+     *  cannot smuggle an unhandled verdict past the compiler into the
+     *  store's filter logic. The store still validates at runtime — this is
+     *  for our own code, not for defending against the server. */
+    verdict: RowDuplicate['verdict'];
+    match_field?: string;
+    duplicate_path?: string;
+    reason?: string;
+    run?: string[];
+  }>;
+  summary: {
+    duplicate: number;
+    likely_duplicate: number;
+    unique: number;
+    skipped: number;
+    error: number;
+  };
+}
+
+/** POST /api/delete_files/ — remove files from the library.
+ *
+ *  Backs the 「删除重复文件」 action, so it only ever receives paths a
+ *  duplicate check already flagged.
+ *
+ *  The server MOVES each file to `DATA_DIR/.trash/<timestamp>/` rather than
+ *  unlinking it, preserving its path relative to MUSIC_DIR — the original
+ *  is one `mv` away, and because the trash lives outside MUSIC_DIR neither
+ *  the scanner nor http.Dir(MUSIC_DIR) can still serve it. The caller does
+ *  not need to know this, but the UI does: the confirm dialog says the
+ *  files are recoverable rather than claiming a hard delete.
+ *
+ *  Returns per-row outcomes. A row that was already missing is `missing`,
+ *  not a request failure — a cleanup pass routinely races a manual delete. */
+export async function deleteFiles(fileFullPaths: string[]): Promise<DeleteFilesReport> {
+  const { data } = await api.post('delete_files/', {
+    file_full_paths: fileFullPaths,
+  });
+  return unwrapEnvelope<DeleteFilesReport>(data, 'delete_files');
+}
+
+export interface DeleteFilesReport {
+  results: Array<{
+    file_full_path: string;
+    status: string;
+    reason?: string;
+    trash_path?: string;
+  }>;
+  deleted: number;
+  failed: number;
 }
 
 /** POST /api/clear_celery/ — deletes every pending asynq task.

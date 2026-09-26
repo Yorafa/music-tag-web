@@ -15,3 +15,14 @@ func MusicRoot() string {
 	}
 	return "/app/media"
 }
+
+// DataDir returns the writable state directory (SQLite db, downloads, and
+// now the delete trash). Same env-first contract as MusicRoot so handlers
+// and config.Config agree without threading a config value through every
+// call site — config.DataDir is the same read, just resolved at boot.
+func DataDir() string {
+	if v := os.Getenv("DATA_DIR"); v != "" {
+		return v
+	}
+	return "/app/data"
+}

@@ -135,6 +135,16 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// 空目录清理: what TidyFolder leaves behind. POST for the same
 		// reason as its neighbours — it mutates the filesystem.
 		authed.POST("/prune_empty_folders/", handler.PruneEmptyFolders)
+		// Duplicate scan for the scrape Worklist. POST rather than GET
+		// even though it only reads: it spawns fpcalc per candidate, so
+		// a GET would let a single <img src> or prefetch trigger a
+		// multi-second filesystem sweep, and SameSite=Lax still sends
+		// the auth cookie on a top-level GET navigation.
+		authed.POST("/check_duplicate/", handler.CheckDuplicate)
+		// Removing files is the one endpoint here that destroys library
+		// content. It moves to DATA_DIR/.trash rather than unlinking,
+		// and logs an audit row — see handler/duplicate.go for why.
+		authed.POST("/delete_files/", handler.DeleteFiles)
 		// Task record list
 		// Operation history audit log endpoints
 		authed.GET("/operation_logs/", handler.ListOperationLogs)

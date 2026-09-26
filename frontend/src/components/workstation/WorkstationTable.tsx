@@ -9,13 +9,16 @@ import {
   ChevronDown,
   ChevronRight,
   Disc,
+  Copy,
+  CopyCheck,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { PlayButton } from '@/components/player/PlayButton';
-import { useWorklistStore } from '@/store/useWorklistStore';
+import { useWorklistStore, rowMatchesFilter } from '@/store/useWorklistStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
+import { duplicateBadgeSpec } from '@/components/workstation/duplicateBadge';
 import { resolveCoverSrc, COVER_PLACEHOLDER_GRADIENTS } from '@/utils/cover';
 import { cn } from '@/lib/utils';
 import type { WorklistRow } from '@/types';
@@ -45,11 +48,12 @@ export function WorkstationTable({ activeRow, onSelectRow }: Props) {
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
-  // Filter rows
-  const filteredRows = useMemo(() => {
-    if (filter === 'all') return rows;
-    return rows.filter((r) => r.status === filter);
-  }, [rows, filter]);
+  // Filter rows. rowMatchesFilter is shared with selectAll() so 「全选」
+  // and the visible set cannot disagree — see its comment.
+  const filteredRows = useMemo(
+    () => rows.filter((r) => rowMatchesFilter(r, filter)),
+    [rows, filter],
+  );
 
   // Group rows if grouping !== 'none'
   const groups = useMemo(() => {
@@ -108,6 +112,34 @@ export function WorkstationTable({ activeRow, onSelectRow }: Props) {
           </Badge>
         );
     }
+  };
+
+  // Duplicate badge, shown next to the scrape status.
+  //
+  // Separate from getStatusBadge on purpose: a duplicate is a property of
+  // the audio, `status` is a property of the scrape, and a file can be both
+  // 已刮削 and 重复. Merging them into one badge column would force a row
+  // to pick, and whichever lost would be a fact the user cannot see.
+  const getDuplicateBadge = (row: WorklistRow) => {
+    const spec = duplicateBadgeSpec(row.duplicate);
+    if (!spec) return null;
+    const styles = {
+      duplicate:
+        'text-destructive border-destructive/40 bg-destructive/10',
+      likely: 'text-amber-500 border-amber-500/40 bg-amber-500/10',
+      checked: 'text-muted-foreground border-border/60 bg-muted/30',
+    }[spec.tone];
+    const Icon =
+      spec.tone === 'duplicate' ? Copy : spec.tone === 'likely' ? AlertCircle : CopyCheck;
+    return (
+      <Badge
+        variant="outline"
+        className={`text-[10px] px-1.5 py-0 h-4 ${styles}`}
+        title={spec.title}
+      >
+        <Icon className="w-2.5 h-2.5 mr-0.5" /> {spec.label}
+      </Badge>
+    );
   };
 
   if (rows.length === 0) {
@@ -261,8 +293,9 @@ export function WorkstationTable({ activeRow, onSelectRow }: Props) {
                         </div>
 
                         {/* Status */}
-                        <div className="col-span-2 sm:col-span-1 text-center">
+                        <div className="col-span-2 sm:col-span-1 flex flex-col items-center gap-0.5">
                           {getStatusBadge(row.status)}
+                          {getDuplicateBadge(row)}
                         </div>
 
                         {/* Actions */}

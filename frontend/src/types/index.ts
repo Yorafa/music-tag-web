@@ -181,6 +181,30 @@ export interface SearchPagination {
  *  refactor/Plan-A-Scrape-Workflow.md §Handshake. */
 export type ScrapeStatus = 'pending' | 'scraped' | 'failed';
 
+/** One row's duplicate verdict, as returned by POST /api/check_duplicate/.
+ *
+ *  Mirrors the server's dedup funnel (internal/dedup):
+ *    - `unique`          nothing comparable found
+ *    - `duplicate`       content-level evidence (SHA-256 / 声纹) — the only
+ *                        verdict strong enough to act on destructively
+ *    - `likely_duplicate` name clash or similar metadata — a warning
+ *    - `skipped`         could not be compared (file gone, fpcalc missing)
+ *    - `error`           the check itself failed
+ *
+ *  `duplicate_path` is relative to MUSIC_DIR and points at the file this one
+ *  duplicates, i.e. the copy to KEEP. */
+export interface RowDuplicate {
+  verdict: 'unique' | 'duplicate' | 'likely_duplicate' | 'skipped' | 'error';
+  /** Which stage fired: filename / sha256 / fingerprint / meta. */
+  matchField?: string;
+  /** The other file — relative to MUSIC_DIR. The keeper, not the copy. */
+  duplicatePath?: string;
+  /** Server-authored human-readable explanation. */
+  reason?: string;
+  /** Stages that actually ran, so the UI can say why a verdict is weak. */
+  run?: string[];
+}
+
 /** One row in the scrape Worklist. The worklist replaces the old
  *  three-column ScrapeView layout (Toolbar + FileBrowser + SearchResults)
  *  with a flat list of files-to-scrape plus a per-row status badge.
@@ -205,4 +229,15 @@ export interface WorklistRow {
   fileName: string;
   status: ScrapeStatus;
   musicInfo?: Partial<MusicTagInfo>;
+  /** Latest duplicate-check verdict for this row, or undefined when the
+   *  row has not been checked in this session.
+   *
+   *  Deliberately NOT part of `status`: a duplicate is a fact about the
+   *  audio, while `status` is a fact about the scrape. Folding them
+   *  together would mean a duplicate file could not also be "已刮削", and
+   *  the existing three status filters would have to grow a fourth
+   *  meaning each.
+   *
+   *  Session-only, like `filter` — see useWorklistStore. */
+  duplicate?: RowDuplicate;
 }

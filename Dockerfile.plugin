@@ -68,6 +68,17 @@ FROM alpine:3.20 AS runtime_plain
 # ffmpeg is required by yt-dlp's --extract-audio post-processor (the worker
 # forwards output_format mp3/m4a/vorbis/wav from the frontend).
 #
+# Note what that one `apk add ffmpeg` actually costs: the binary is 294 KB,
+# but it drags in 42 extra packages worth ~30 MB — libavfilter (4.4 MB),
+# libavformat, libpostproc, libswscale/libswresample/libavdevice, plus a
+# full video/filter/hw-accel chain (sdl2, vulkan-loader, libplacebo,
+# shaderc, spirv-tools, glslang, harfbuzz, fontconfig, vidstab, alsa-lib,
+# libpulse). Only the audio demux + re-encode path is ever exercised here;
+# the video side is dead weight Alpine gives no finer-grained way to drop.
+# This is why youtube builds on the fpcalc base: the ~88 MB of codec
+# libraries it would otherwise duplicate are already in the parent layer, so
+# the real marginal cost is the 30 MB above, not 30 + 88.
+#
 # The acoustid plugin shells out to fpcalc (chromaprint) — see
 # internal/plugin/acoustid/server.go::NewServer, which LookPath's it and sets
 # disabled=true when absent, making every FetchId3ByTitle return zero songs.

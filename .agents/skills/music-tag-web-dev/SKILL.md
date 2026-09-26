@@ -137,6 +137,8 @@ Route groups:
 - `GET /api/clear_celery/` — clear task queue
 - `GET /api/active_queue/` — queue status
 - `GET /api/full_scan_folder/` — full recursive scan
+- `POST /api/check_duplicate/` — read-only dedup scan over an explicit path list (逐行返回，单个失败不拖垮整批)
+- `POST /api/delete_files/` — remove files from the library（**移入 `DATA_DIR/.trash/<ts>/`，不是 unlink**；拒绝目录/符号链接/越界路径；删除后清 `music_folder` 索引行；记 `delete_files` 审计）
 
 **Static:**
 - `/media/*filepath` — Range streaming for audio

@@ -36,6 +36,8 @@
 | MusicBrainz lookup | ✅ | `internal/plugin/musicbrainz/server.go`（不支持歌词，`SupportsLyric=false`） |
 | AcoustID 指纹匹配 | ✅ | `internal/plugin/acoustid/server.go`（`fpcalc` shell-out → `POST api.acoustid.org/v2/lookup`，结果为空时优雅降级）。需 `ACOUSTID_API_KEY`（可回退到官方公共测试 key，会过期）。声纹比对在 fan-out 里与其它源平级，失败只记日志不阻断 |
 | 重复文件检测 · 声纹层（跨编码） | ✅ | `internal/dedup/fingerprint.go`（阈值策略）+ `internal/fingerprint`（fpcalc 调用与子指纹位距离，三个调用方共用）。按 `music_folder.duration` 选候选（同一首歌换编码大小可差 25 倍，按大小选会漏掉最典型的 flac/mp3 重压），再按 **子指纹位距离** 判同，阈值 0.90。实测同一首歌 7 种编码相似度 0.995+，无关音频 0.511。`music_folder.duration` 由 `index:fp_duration` 任务一次性填充（worker 启动时自举，每首约 0.4s，只跑一次） |
+| 曲库查重页（只读） | ✅ | `POST /api/check_duplicate/`（`internal/gateway/handler/duplicate.go`）。智能刮削页选中行 → 「查重」→ 行上 `重复`/`疑似`/`唯一` 徽章 + 侧栏「只看重复」筛选。与写入路径共用 `dedupCheckFor`，两边判定不会分歧。逐行返回（单个文件不可查不拖垮整批），路径经 `SafeJoin` 限制在 MUSIC_DIR 内 |
+| 删除重复文件 | ✅ | `POST /api/delete_files/`（同上文件）。仅接受内容级 `duplicate` 判定；两侧互相指认时两边都不删。实现为**移入 `DATA_DIR/.trash/<ts>/`** 而非 unlink（保留相对路径，可恢复；trash 在 MUSIC_DIR 之外所以扫描器与 `http.Dir(MUSIC_DIR)` 都不会再服务它）。拒绝目录 / 符号链接 / 越界路径；跨设备回退到 copy+remove（默认 compose 就是两个独立 bind mount）；删除后同步清掉 `music_folder` 索引行（否则陈旧的 `duration` 会让已删文件永久留在候选集里），并记一条 `delete_files` 审计 |
 | 搜索源动态列表（`GET /api/sources/`） | ✅ | `internal/gateway/handler/source.go` 中 `ListSources` + `frontend/src/store/useSourceStore.ts` |
 | 用户源启用 / 关闭（`localStorage` 持久化） | ✅ | `frontend/src/store/useSourceStore.ts` `persist` -> `localStorage["app.enabledSources"]` |
 | 来源偏好设置页 | ✅ | `frontend/src/components/settings/SettingsModal.tsx` |

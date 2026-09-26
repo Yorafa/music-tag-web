@@ -24,6 +24,12 @@ const (
 	ActionPruneEmptyFolders = "prune_empty_folders"
 	ActionDownload          = "download"
 	ActionUploadCover       = "upload_cover"
+	// ActionDeleteFiles covers removing files from the library. It is
+	// recorded even though the files are quarantined rather than unlinked
+	// (handler/duplicate.go::DeleteFiles): a file that left the library is
+	// exactly the kind of thing the audit log exists to answer "when did
+	// this disappear, and where did it go".
+	ActionDeleteFiles = "delete_files"
 )
 
 // Status 常量定义操作结果状态。

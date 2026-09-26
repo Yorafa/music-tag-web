@@ -37,7 +37,7 @@
 | 鉴权 | JWT in-memory + bcrypt；fail-closed 默认值检测 |
 | 加密 | gRPC TLS 可选（env `GRPC_USE_TLS=1` + 可选 `GRPC_TLS_CA_FILE`） |
 | 部署 | 单条 `docker compose up -d --build` 拉起 gateway + worker + 8 gRPC plugin + redis，共 11 个容器（nginx 已合并进 gateway，不再有独立服务；React SPA 已烘进 gateway 镜像，不需要 host 侧先 build）。另有 `fpcalc-base` 是 `scale: 0` 的构建用服务：镜像会构建，但不创建容器 |
-| Docker image | gateway 131 MB、worker 126 MB、6 个按曲名搜索的插件各 21.5 MB、acoustid 插件 115 MB、youtube 插件 199 MB（yt-dlp + ffmpeg）。gateway / worker / acoustid 共用一个 `fpcalc-base` 基础镜像（102 MB，其中 88 MB 是 chromaprint 拉进来的 ffmpeg 库），所以那 88 MB 只存一份 |
+| Docker image | gateway 131 MB、worker 126 MB、6 个按曲名搜索的插件各 21.5 MB、acoustid 插件 115 MB、youtube 插件 199 MB（yt-dlp + ffmpeg）。gateway / worker / acoustid / youtube 四个镜像共用一个 `fpcalc-base` 基础镜像（102 MB，其中 88 MB 是 chromaprint 拉进来的 ffmpeg 解码库），那 88 MB 在磁盘上只存一份。youtube 比其它三个大的那 ~30 MB 并不是 ffmpeg 程序（只有 294 KB），而是 `apk add ffmpeg` 额外拉进来的 42 个包：`libavfilter`、`libavformat`、`libpostproc`、`libswscale` / `libswresample` / `libavdevice`，以及一整条视频/滤镜/硬件加速依赖（sdl2、vulkan-loader、libplacebo、shaderc、spirv-tools、glslang、harfbuzz、fontconfig、vidstab、alsa-lib、libpulse）。yt-dlp 的 `--extract-audio` 只用到其中的音频解复用 + 重编码部分，video 侧的库用不上，但 Alpine 没有拆得更细的 ffmpeg 包 |
 
 完整 operator 视角的安全默认值见 [`SECURITY.md`](SECURITY.md)；plugable plugin 设计草图见 [`docs/plugable-plugins.md`](docs/plugable-plugins.md)。
 
@@ -56,6 +56,8 @@
 ### 元数据刮削与查找 ✅
 - **7 个音乐源** 自动 fan-out 聚合：网易云 / 酷狗 / 酷我 / 咪咕 / QQ 音乐 / MusicBrainz / AcoustID 指纹 ✅
 - 搜索结果去重 + 按匹配度排序 ✅
+- **曲库查重** ✅ — 智能刮削页选中若干行 → 「查重」按钮，只读跑一遍四层漏斗（文件名 / SHA-256 / 声纹 / 元数据），行上显示「重复 / 疑似 / 唯一」徽章，侧栏可「只看重复」。只有内容级证据（SHA-256 / 声纹）才算重复；同名或元数据相似只标「疑似」，不参与删除。后端 `POST /api/check_duplicate/`，与写入路径共用同一个 checker，判定不会自相矛盾
+- **一键删除重复文件** ✅ — 仅对内容级重复开放，且两侧互相指认时（都在同一批次里被查过）两边都不删：那种情况下「哪份是原件」无法判定，与其猜错不如让用户自己看。删除是**移入 `DATA_DIR/.trash/<时间戳>/`**（保留相对 MUSIC_DIR 的路径），不是真删；确认框逐条列出「删哪个 / 留哪个」并说明可恢复。拒绝目录、符号链接与越界路径，删除后同步清掉 `music_folder` 索引行并记一条 `delete_files` 审计
 - AcoustID：没有元数据 / 文件名混乱的歌曲自动指纹识别匹配 ✅
 - 搜索源动态启用 / 关闭（`localStorage` per-user 持久化，SettingsModal 中切换） ✅
 - per-source YAML config override (C.4 Stage B) ✅ — 编辑 `data/sources/<name>.yaml` 改 `api_base` + `secrets.<plugin>Secret`，gateway 启动期加载 + `POST /api/sources/refresh/` 热重载（不需重启）；SettingsModal “Sources” tab 查看当前生效 + 重载按钮，secret 不暴露明文（仅 `hasSecret` 布尔）。Plugin server.go 各自 `SetSecret` / `SetAPIBase` method（const→var demote）。
@@ -377,7 +379,7 @@ golang music library manager, self-hosted docker music tagger,
 | 音乐源 | 同进程 python module | 独立 gRPC 服务进程 |
 | Tag I/O | `mutagen` (Python 库) | `bogem/id3v2` + `dhowden/tag`（纯 Go） |
 | 前端 | Django template + Bootstrap jQuery | React 19 + Vite 7 + TypeScript + Tailwind 4 + shadcn/ui + Zustand |
-| 部署 | 单 Python 容器 (~600 MB) | 多 service compose（gateway + worker + 7 gRPC plugin + redis），总 image ~80 MB（nginx 已合并进 gateway，v2 不再携带独立 nginx service) |
+| 部署 | 单 Python 容器 (~600 MB) | 多 service compose（gateway + worker + 8 gRPC plugin + redis），总 image 约 560 MB（nginx 已合并进 gateway，v2 不再携带独立 nginx service；其中 88 MB ffmpeg 库由四个镜像共用，只存一份） |
 | 鉴权 | Django session | JWT in-memory + bcrypt |
 | 默认配置保护 | 软默认值 | Fail-closed（占位 JWT_SECRET / 默认 admin 都被拒） |
 
