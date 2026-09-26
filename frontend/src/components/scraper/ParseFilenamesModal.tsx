@@ -9,35 +9,38 @@
 // 解析文件名 round-trip modal. Triggered from the worklist's
 // 「解析文件名」 button. The flow:
 //
-//   1. Mount → POST /api/tag/preview_parse_filenames/ for every
-//      selected row's path → token + per-row ParsedPreviewRow[].
-//   2. Render scrollable table: file basename + one editable cell per
-//      field the parser read something into + status badge.
-//   3. User types into override cells → override state updates.
-//   4. Click "Apply" → POST /api/tag/apply_parsed_filenames/ with the
-//      token + per-row overrides. Backend enqueues the async worker,
-//      returns the task_id which we surface as a toast.
+//   1. Pick a rule — chips or a preset; both GENERATE the pattern text,
+//      so the box and the chips can never disagree.
+//   2. POST /api/tag/preview_parse_filenames/ for every selected path →
+//      token + per-row ParsedPreviewRow[]. A one-line summary reports
+//      how many matched, how many were guessed at, how many will be
+//      skipped.
+//   3. Click 写入 → POST /api/tag/apply_parsed_filenames/ with the
+//      token. Backend enqueues the async worker, returns the task_id
+//      which we surface as a toast.
+//
+// The rule logic (generation, the default rule, the try-it box, the
+// RE2 limits) lives in parseAssist.ts and is tested there.
+//
+// This dialog deliberately does NOT offer per-file editing. It used to:
+// there was a table with an editable cell per field. Removing it splits
+// the job cleanly — 解析文件名 answers "does my rule work?", and
+// 批量编辑标签 answers "what should this actually say?". The batch editor
+// has the per-field 「不修改」 control and can DELETE a tag; this dialog
+// could do neither, so its edit cells were a weaker version of a
+// control that already exists elsewhere in the same toolbar.
 //
 // The modal is mounted with an optional starting pattern and reports
 // one back up so the toolbar can re-open it with whatever the user
 // last typed (see WorkstationToolbar's `parsePattern` state) — a
-// downloader's naming convention does not change between batches, and
-// re-typing a regex per batch is the kind of friction that makes
-// people stop using the feature.
+// downloader's naming convention does not change between batches.
 //
-// Override semantics live in parseOverride.ts and are tested there. The
-// short version: an empty cell inherits the parsed value, a filled one
-// replaces it, and there is no way to clear a tag from here — the batch
-// editor owns deleting.
-//
-// Token expiry (401 "preview_expired") is caught here and re-prompts
-// the user with a fresh preview by re-calling the parent's onReapply
-// callback. Negative-pressure case: large input batch with a slow
-// modal mount can exceed the 10min TTL if the user walks away; we
-// surface the re-preview prompt rather than 4xx silently.
+// Token expiry (401 "preview_expired") is caught here: the token is
+// cleared so the effect re-previews, and a toast explains why. A large
+// batch left open past the 10min TTL hits this.
 
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, Music2, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
+import { Loader2, Music2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -55,17 +58,6 @@ import {
   type ParsedPreviewRow,
 } from '@/api/client';
 import {
-  activeFields,
-  buildOverrides,
-  changedCellCount,
-  changedRowCount,
-  draftFor,
-  hasUnreadable,
-  seedDrafts,
-  type OverrideDrafts,
-  type ParseTagField,
-} from './parseOverride';
-import {
   PARSE_TAG_FIELDS,
   PARSE_TAG_LABELS,
   PATTERN_PRESETS,
@@ -75,6 +67,8 @@ import {
   firstParsedExample,
   patternHelp,
   tryPattern,
+  tallyPreview,
+  type ParseTagField,
 } from './parseAssist';
 import { cn } from '@/lib/utils';
 
@@ -98,7 +92,6 @@ export function ParseFilenamesModal({
 }: ParseFilenamesModalProps) {
   const [token, setToken] = useState<string | null>(null);
   const [results, setResults] = useState<ParsedPreviewRow[]>([]);
-  const [overrides, setOverrides] = useState<OverrideDrafts>({});
   const [pattern, setPattern] = useState(initialPattern);
   // Bumped to force a fresh preview. It exists because clearing the token
   // is not enough on its own: when the token is ALREADY null — a preview
@@ -127,7 +120,6 @@ export function ParseFilenamesModal({
       // and the caller's idea of the pattern silently diverged.
       setToken(null);
       setResults([]);
-      setOverrides({});
       setError(null);
       setLoading(null);
       setPattern(initialPattern);
@@ -146,7 +138,6 @@ export function ParseFilenamesModal({
         if (cancelled) return;
         setToken(t);
         setResults(rs);
-        setOverrides(seedDrafts(rs));
       } catch (e: unknown) {
         if (cancelled) return;
         const msg = e instanceof Error ? e.message : String(e);
@@ -165,17 +156,6 @@ export function ParseFilenamesModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, token, selectedPaths, previewNonce]);
 
-  const overridesForApply = useMemo(
-    () => buildOverrides(results, overrides),
-    [overrides, results],
-  );
-  const changedRows = useMemo(
-    () => changedRowCount(results, overrides),
-    [overrides, results],
-  );
-  const changedCells = useMemo(() => changedCellCount(overrides), [overrides]);
-  const fields = useMemo(() => activeFields(results), [results]);
-  const unreadable = useMemo(() => hasUnreadable(results), [results]);
   const help = useMemo(() => patternHelp(pattern), [pattern]);
   const patternErr = help.problem;
   // The chip row and the box are two views of one value, so the box is
@@ -198,7 +178,7 @@ export function ParseFilenamesModal({
     if (!token) return;
     setLoading('apply');
     try {
-      const res = await applyParsedFilenames(token, overridesForApply);
+      const res = await applyParsedFilenames(token, []);
       useNoticeStore.getState().push(
         `已提交解析写入任务 (${res.row_count} 行, task=${res.task_id.slice(0, 8)}…)`,
         'info',
@@ -219,17 +199,6 @@ export function ParseFilenamesModal({
     }
   };
 
-  const setOverrideField = (
-    path: string,
-    field: ParseTagField,
-    value: string,
-  ) => {
-    setOverrides((prev) => ({
-      ...prev,
-      [path]: { ...draftFor(prev, path), [field]: value },
-    }));
-  };
-
   // Both halves matter. Clearing the token discards the table the old
   // pattern produced; bumping the nonce is what actually guarantees the
   // effect re-runs, which clearing alone does not when the token was
@@ -238,7 +207,6 @@ export function ParseFilenamesModal({
     onPatternChange?.(pattern);
     setToken(null);
     setResults([]);
-    setOverrides({});
     setError(null);
     setPreviewNonce((n) => n + 1);
   };
@@ -417,57 +385,7 @@ export function ParseFilenamesModal({
             </div>
           )}
 
-          {results.length > 0 && (
-            <>
-              <div
-                className="max-h-[55vh] overflow-y-auto rounded border border-border"
-                data-testid="parse-filenames-table"
-              >
-                <div
-                  className="grid gap-2 px-3 py-2 text-xs font-medium text-muted-foreground border-b border-border sticky top-0 bg-surface-1"
-                  style={{ gridTemplateColumns: gridTemplate(fields.length) }}
-                >
-                  <div>文件名</div>
-                  {fields.map((f) => (
-                    <div key={f}>{fieldLabel(f)}</div>
-                  ))}
-                  <div>状态</div>
-                </div>
-                {results.map((r) => (
-                  <div
-                    key={r.path}
-                    className="grid gap-2 px-3 py-2 items-center text-sm border-b border-border last:border-b-0"
-                    style={{ gridTemplateColumns: gridTemplate(fields.length) }}
-                  >
-                    <div className="truncate font-mono text-xs" title={r.path}>
-                      {basename(r.path)}
-                    </div>
-                    {fields.map((f) => (
-                      <Input
-                        key={f}
-                        className="h-8 text-sm"
-                        value={draftFor(overrides, r.path)[f]}
-                        placeholder={r[f] ?? ''}
-                        onChange={(e) => setOverrideField(r.path, f, e.target.value)}
-                        aria-label={`${fieldLabel(f)} 覆盖 for ${basename(r.path)}`}
-                      />
-                    ))}
-                    <StatusBadge status={r.status} />
-                  </div>
-                ))}
-              </div>
-              {unreadable && (
-                <div className="text-xs text-muted-foreground">
-                  标为 ambiguous / unparsable 的行解析不出结果，直接在上表里手填即可照常写入。
-                </div>
-              )}
-              {changedCells > 0 && (
-                <div className="text-xs text-muted-foreground">
-                  已手动改动 {changedCells} 格（{changedRows} 行），留空的格子沿用解析值。
-                </div>
-              )}
-            </>
-          )}
+          {results.length > 0 && <PreviewSummary results={results} />}
         </div>
 
         <DialogFooter showCloseButton>
@@ -483,7 +401,7 @@ export function ParseFilenamesModal({
               </>
             ) : (
               <>
-                应用 ({changedRows} 个覆盖 / {results.length} 行)
+                写入 {results.length} 个文件
               </>
             )}
           </Button>
@@ -527,40 +445,51 @@ function TryItResult({
   );
 }
 
-/** One flexible column per active field, plus the file name, the status
- *  badge, and their gaps. Kept as a template string so the header and
- *  every row are guaranteed to line up. */
-function gridTemplate(fieldCount: number): string {
-  return ['minmax(0,1.4fr)', ...Array(fieldCount).fill('minmax(0,1fr)'), 'auto'].join(
-    ' ',
-  );
-}
+/** What the preview found, in one line.
+ *
+ *  This used to be a full per-file table with an editable cell per
+ *  field. Removing it is a deliberate trade: this dialog now answers
+ *  "does my rule work?" and nothing more, and hand-editing a value
+ *  belongs to 批量编辑标签 — which has the per-field 「不修改」 control
+ *  and can also DELETE a tag, neither of which this dialog could do.
+ *
+ *  The counts stay because "7 个文件" alone would let someone click
+ *  写入 and discover afterwards that five of them matched nothing. A
+ *  single line answers that before the click, which is the part of the
+ *  table that was actually load-bearing.
+ *
+ *  `ambiguous` is counted separately from `unparsable` on purpose: an
+ *  ambiguous row DID parse (it just guessed at the split), so it will
+ *  be written, and lumping it in with unparsable would overstate the
+ *  number of files being skipped. */
+function PreviewSummary({ results }: { results: ParsedPreviewRow[] }) {
+  const { total, matched, guessed, skipped } = tallyPreview(results);
 
-function fieldLabel(f: ParseTagField): string {
-  return PARSE_TAG_LABELS[f];
-}
-
-function basename(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i >= 0 ? p.substring(i + 1) : p;
-}
-
-function StatusBadge({ status }: { status: ParsedPreviewRow['status'] }) {
-  const cls = cn(
-    'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs whitespace-nowrap',
-    status === 'ok' &&
-      'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-    status === 'ambiguous' &&
-      'bg-amber-500/10 text-amber-700 dark:text-amber-300',
-    status === 'unparsable' &&
-      'bg-rose-500/10 text-rose-700 dark:text-rose-300',
-  );
   return (
-    <span className={cls} aria-label={`status ${status}`}>
-      {status === 'ok' && <CheckCircle2 className="w-3 h-3" />}
-      {status === 'ambiguous' && <AlertTriangle className="w-3 h-3" />}
-      {status === 'unparsable' && <XCircle className="w-3 h-3" />}
-      {status}
-    </span>
+    <div
+      className="rounded border border-border px-3 py-2 text-xs space-y-1"
+      data-testid="parse-filenames-summary"
+    >
+      <div>
+        共 {total} 个文件：
+        <span className="text-emerald-600 dark:text-emerald-400">匹配 {matched}</span>
+        {guessed > 0 && (
+          <span className="text-amber-600 dark:text-amber-400"> · 猜测 {guessed}</span>
+        )}
+        {skipped > 0 && (
+          <span className="text-rose-600 dark:text-rose-400"> · 不匹配 {skipped}</span>
+        )}
+      </div>
+      {skipped > 0 && (
+        <div className="text-muted-foreground">
+          不匹配的文件不会被写入，也不会删除已有标签。要给它们补标签，用「批量编辑标签」。
+        </div>
+      )}
+      {guessed > 0 && (
+        <div className="text-muted-foreground">
+          「猜测」表示文件名被切成了多段、按「首段=艺术家、其余=标题」处理——写入的是这个猜测的结果。
+        </div>
+      )}
+    </div>
   );
 }

@@ -19,7 +19,6 @@ import {
   type ParseTagField,
   type ParsedPreviewRow,
 } from '@/api/client';
-import { patternProblem } from './parseOverride';
 
 export { PARSE_TAG_FIELDS, PARSE_TAG_LABELS };
 export type { ParseTagField };
@@ -279,6 +278,47 @@ function stripExt(name: string): string {
   return name.slice(0, idx);
 }
 
+/** A client-side mirror of the server's `CompilePattern` rejection, used
+ *  to disable the re-parse button before spending a request.
+ *
+ *  The server remains the authority — it re-validates and returns a 400
+ *  naming the offending group. This only saves the round trip, and it is
+ *  deliberately conservative: a pattern this accepts is not proof the
+ *  server will, it only means this found nothing obviously wrong. */
+export function patternProblem(pattern: string): string | null {
+  const p = pattern.trim();
+  if (p === '') return null;
+
+  // The pattern is typed once and sent to Go, so it must be spelled the Go
+  // way (`(?P<name>...)`). `new RegExp` rejects that spelling outright —
+  // verified, not assumed: it throws "Invalid group" for `(?P<a>x)`. So
+  // the compile check has to translate first, or every valid pattern
+  // reads as invalid in the browser and never reaches the server.
+  //
+  // Only `(?P<` is rewritten. `(?P=name)` and `(?P>name)` are different Go
+  // syntaxes and stay untouched, which means a pattern using them fails
+  // here for a reason the message does not explain — acceptable, since
+  // RE2 rejects them too and the server says so properly.
+  const jsPattern = p.replace(/\(\?P</g, '(?<');
+  try {
+    new RegExp(jsPattern);
+  } catch {
+    return '正则表达式无法编译';
+  }
+
+  // Now check the names against the allow-list. The server does this too
+  // and is the authority; catching it here saves a round trip and lets
+  // the field show the reason inline instead of as a toast.
+  for (const m of jsPattern.matchAll(/\(\?<([^>]*)>/g)) {
+    const n = m[1];
+    if (n === '') return '命名分组缺少字段名';
+    if (!PARSE_TAG_FIELDS.includes(n as ParseTagField)) {
+      return `未知字段 ${n}，可用字段：${PARSE_TAG_FIELDS.join(' / ')}`;
+    }
+  }
+  return null;
+}
+
 /** The combined client-side complaint, or null when the pattern is fine
  *  here. Exists so the dialog has one place to ask and the field shows a
  *  single reason rather than two competing ones. */
@@ -369,4 +409,30 @@ export function firstParsedExample(results: ParsedPreviewRow[]): string {
     if (base !== '') return base;
   }
   return '';
+}
+
+/** How a preview came out, as the counts the summary line shows.
+ *
+ *  Extracted from the component so the arithmetic is testable — the
+ *  distinction that matters is `guessed` vs `skipped`. An ambiguous row
+ *  DID parse; the parser split the name on a separator and guessed how
+ *  many segments there were, and the worker WILL write it. Folding it
+ *  into "unparsable" would tell the user fewer files were being written
+ *  than actually are. */
+export interface PreviewTally {
+  total: number;
+  matched: number;
+  guessed: number;
+  skipped: number;
+}
+
+export function tallyPreview(results: ParsedPreviewRow[]): PreviewTally {
+  const matched = results.filter((r) => r.status === 'ok').length;
+  const guessed = results.filter((r) => r.status === 'ambiguous').length;
+  return {
+    total: results.length,
+    matched,
+    guessed,
+    skipped: results.length - matched - guessed,
+  };
 }

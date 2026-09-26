@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   DEFAULT_RULE_TEXT,
+  PARSE_TAG_FIELDS,
   PATTERN_PRESETS,
   buildPattern,
   describeRule,
@@ -10,7 +11,9 @@ import {
   findUnsupportedPerlForTest,
   firstParsedExample,
   patternHelp,
+  patternProblem,
   presetById,
+  tallyPreview,
   tryPattern,
   type ParseTagField,
 } from './parseAssist';
@@ -356,5 +359,77 @@ describe('firstParsedExample', () => {
 
   it('is empty when nothing was previewed', () => {
     expect(firstParsedExample([])).toBe('');
+  });
+});
+
+describe('patternProblem', () => {
+  it('accepts an empty pattern, which means "use the default split"', () => {
+    expect(patternProblem('')).toBeNull();
+    expect(patternProblem('   ')).toBeNull();
+  });
+
+  it("accepts Go's (?P<name>...) spelling, which new RegExp alone rejects", () => {
+    // Regression: compiling the raw string throws "Invalid group" in
+    // V8, so an un-translated check flags every valid pattern as broken
+    // and the pattern can never be submitted.
+    // eslint-disable-next-line no-invalid-regexp
+    expect(() => new RegExp('^(?P<artist>.+?) - (?P<title>.+)$')).toThrow();
+    expect(patternProblem('^(?P<artist>.+?) - (?P<title>.+)$')).toBeNull();
+  });
+
+  it('names an unknown group and lists the real ones', () => {
+    const p = patternProblem('^(?P<bob>.+)$');
+    expect(p).toContain('bob');
+    expect(p).toContain('albumartist');
+  });
+
+  it('accepts every field the server allows', () => {
+    const p = PARSE_TAG_FIELDS.map((f) => `(?P<${f}>.+?)`).join('-');
+    expect(patternHelp(`^${p}$`).problem).toBeNull();
+  });
+
+  it('rejects a pattern with no field name', () => {
+    // `(?P<>` is not valid in Go either, so this is a compile error, not
+    // a naming complaint — asserted so the two failure kinds stay
+    // distinguishable.
+    expect(patternProblem('^(?P<>.+)$')).toBe('正则表达式无法编译');
+  });
+
+  it('rejects an uncompilable pattern', () => {
+    expect(patternProblem('^(?P<title>.+')).toBe('正则表达式无法编译');
+  });
+
+  it('a mixed pattern with one bad group is rejected wholesale', () => {
+    expect(patternProblem('^(?P<title>.+?) - (?P<nope>.+)$')).toContain('nope');
+  });
+});
+
+describe('tallyPreview', () => {
+  const r = (status: 'ok' | 'ambiguous' | 'unparsable') => ({ path: '/m/x', status });
+
+  it('counts each status separately', () => {
+    expect(
+      tallyPreview([r('ok'), r('ok'), r('ambiguous'), r('unparsable')]),
+    ).toEqual({ total: 4, matched: 2, guessed: 1, skipped: 1 });
+  });
+
+  it('counts an ambiguous row as guessed, NOT skipped — it will be written', () => {
+    // The regression this guards: reporting "1 个文件" when two are
+    // about to be written is a lie told at the moment the user decides.
+    const t = tallyPreview([r('ambiguous'), r('ok')]);
+    expect(t.skipped).toBe(0);
+    expect(t.guessed).toBe(1);
+  });
+
+  it('the three buckets always add up to the total', () => {
+    for (const rows of [
+      [],
+      [r('ok')],
+      [r('unparsable'), r('unparsable')],
+      [r('ok'), r('ambiguous'), r('unparsable'), r('ok')],
+    ]) {
+      const t = tallyPreview(rows);
+      expect(t.matched + t.guessed + t.skipped, JSON.stringify(rows)).toBe(t.total);
+    }
   });
 });
