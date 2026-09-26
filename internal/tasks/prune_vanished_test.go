@@ -314,16 +314,13 @@ func TestPruneVanished_CountsEachRowOnce(t *testing.T) {
 	}
 }
 
-// An empty library root must not turn into "delete everything": a
-// misconfigured MusicRoot resolves to a path with no rows under it, and the
-// scope has to stay that narrow.
-func TestPruneVanished_EmptyRootDeletesNothing(t *testing.T) {
-	gdb := newScanDB(t)
-	h := &PruneEmptyFoldersHandler{DB: gdb, MusicRoot: ""}
-	if removed := h.pruneVanished(context.Background(), nil); len(removed) != 0 {
-		t.Errorf("removed = %v with no music root configured, want nothing", removed)
-	}
-}
+// There used to be a test here called TestPruneVanished_EmptyRootDeletesNothing,
+// guarding against an empty library root turning into "delete everything".
+// musicRoot() cannot return "" — it falls back to MUSIC_DIR and then to
+// /app/media — so that test was asserting on a branch that does not exist,
+// and passed only because the throwaway database happened to hold no rows.
+// The reachable version of "there is nothing to do" is a scope list where
+// every entry was refused; see TestPrune_LogsARefusedScopeOnce.
 
 // The list the audit log records has to be what actually left the table —
 // not what the code intended. Asserting "removed count == remaining count"

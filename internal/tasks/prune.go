@@ -45,7 +45,13 @@ func (h *PruneEmptyFoldersHandler) ProcessTask(ctx context.Context, t Task) erro
 	if raw, ok := t.Payload.(*PruneEmptyFoldersPayload); ok && raw != nil {
 		p = *raw
 	}
-	removed, err := h.pruneEmpty(ctx, p.SubPaths)
+	// Resolved once and handed to both passes. Each pass used to take the
+	// raw payload and resolve it for itself, so a refused scope was logged
+	// twice — and this is a log line an operator reads when something was
+	// skipped, so a doubled one is worse than a single one, not merely
+	// untidy. PreviewPrune had the same shape and the same doubling.
+	scopes := h.scopes(p.SubPaths)
+	removed, err := h.pruneEmptyScopes(ctx, scopes, false)
 	if err != nil {
 		return err
 	}
@@ -53,7 +59,7 @@ func (h *PruneEmptyFoldersHandler) ProcessTask(ctx context.Context, t Task) erro
 	// intent — the library stopped matching its own bookkeeping — and the
 	// two are reported separately so the audit log says which happened
 	// rather than lumping them into one number.
-	vanished := h.pruneVanished(ctx, p.SubPaths)
+	vanished := h.pruneVanishedScopes(ctx, scopes, false)
 	// The count is the whole point of the operation being visible, so it goes
 	// to the audit log: 操作审计 then answers "did that clean anything?"
 	// without the button having to guess.
@@ -83,18 +89,25 @@ func plural(n int) string {
 // same pass. So `Artist/Album` emptied by a tidy, and then the `Artist` that
 // held only that album, both disappear without anyone having to say so twice.
 func (h *PruneEmptyFoldersHandler) pruneEmpty(ctx context.Context, subPaths [][2]string) ([]string, error) {
-	return h.pruneEmptyMode(ctx, subPaths, false)
+	return h.pruneEmptyScopes(ctx, h.scopes(subPaths), false)
 }
 
-// pruneEmptyMode is pruneEmpty with the deletion switchable, so the same
-// walk can answer "what would you remove?" without touching the disk. The
-// preview is what the confirmation dialog renders; running a second,
-// slightly different walk to produce it would let the two disagree.
-func (h *PruneEmptyFoldersHandler) pruneEmptyMode(ctx context.Context, subPaths [][2]string, dryRun bool) ([]string, error) {
+// pruneEmptyScopes is the walk itself, over already-resolved scopes, with
+// the deletion switchable so the same code can answer "what would you
+// remove?" without touching the disk. The preview is what the confirmation
+// dialog renders; running a second, slightly different walk to produce it
+// would let the two disagree.
+//
+// Taking scopes rather than the payload is what lets ProcessTask and
+// PreviewPrune resolve once and share, instead of each pass resolving for
+// itself and logging every refusal twice.
+func (h *PruneEmptyFoldersHandler) pruneEmptyScopes(ctx context.Context, scopes []string, dryRun bool) ([]string, error) {
+	// No empty-root guard. musicRoot() falls back to MUSIC_DIR and then to
+	// /app/media, so it cannot return "", which made the guard this replaced
+	// unreachable -- and a test asserting on it passed only because its
+	// throwaway database happened to hold no rows. A branch that cannot run
+	// is not a safety net; it is a comment that has stopped being true.
 	root := h.musicRoot()
-	if root == "" {
-		return nil, fmt.Errorf("prune: music root not configured")
-	}
 	// data/ holds the app's own state (db, covers cache, bootstrap creds). It
 	// is under the music root and will often contain empty subdirectories, so
 	// it has to be excluded by path, not by hoping it is never empty.
@@ -132,15 +145,21 @@ func (h *PruneEmptyFoldersHandler) pruneEmptyMode(ctx context.Context, subPaths 
 		})
 	}
 
-	if len(subPaths) == 0 {
-		if err := walk(root); err != nil {
-			return nil, fmt.Errorf("prune: walk root: %w", err)
-		}
-	} else {
-		for _, scope := range h.scopes(subPaths) {
-			if err := walk(scope); err != nil {
-				log.Printf("[prune] walk %s: %v", scope, err)
-			}
+	if len(scopes) == 0 {
+		return nil, nil
+	}
+	for _, scope := range scopes {
+		// A walk that stops early cannot answer "what would you remove?",
+		// and a partial list in a confirmation dialog is worse than no
+		// answer: the user approves a count that was never the real one.
+		// So the error propagates.
+		//
+		// Per-entry problems (an unreadable directory) do NOT reach here --
+		// walk logs those and carries on, because one unreadable directory
+		// should not abort the sweep of the rest. This is only ctx.Err()
+		// and a failure to read a scope root itself.
+		if err := walk(scope); err != nil {
+			return nil, fmt.Errorf("prune: walk %s: %w", scope, err)
 		}
 	}
 
@@ -183,8 +202,7 @@ func (h *PruneEmptyFoldersHandler) pruneEmptyMode(ctx context.Context, subPaths 
 		}
 		removed = append(removed, filepath.ToSlash(rel))
 	}
-	sort.Strings(removed)
-	return removed, nil
+	return sortedUniq(removed), nil
 }
 
 // directoryWouldEmpty reports whether dir holds nothing that would survive
@@ -258,24 +276,32 @@ func (h *PruneEmptyFoldersHandler) scopes(subPaths [][2]string) []string {
 // parent_id points at them, so removing one can strand the rest of the tree.
 // See TestPruneVanished_KeepsFolderRows.
 func (h *PruneEmptyFoldersHandler) pruneVanished(ctx context.Context, subPaths [][2]string) []string {
-	return h.pruneVanishedMode(ctx, subPaths, false)
+	return h.pruneVanishedScopes(ctx, h.scopes(subPaths), false)
 }
 
-func (h *PruneEmptyFoldersHandler) pruneVanishedMode(ctx context.Context, subPaths [][2]string, dryRun bool) []string {
+func (h *PruneEmptyFoldersHandler) pruneVanishedScopes(ctx context.Context, scopes []string, dryRun bool) []string {
+	// No empty-root guard, for the reason given in pruneEmptyScopes.
 	root := h.musicRoot()
-	if root == "" {
+	if len(scopes) == 0 {
 		return nil
 	}
 
-	scopes := h.scopes(subPaths)
-
-	// No de-duplication across scopes, because none is needed: music_folder
-	// has a UNIQUE index on path, so a query returns each path at most
-	// once, and a row deleted under one scope is simply not returned by the
-	// next. A second pass over an overlapping scope re-stats a row it
-	// chose to keep, which costs a syscall and changes nothing. An earlier
-	// version carried a `seen` set for this; it could never have fired, and
-	// a map that implies a guarantee it cannot deliver is worse than none.
+	// No per-scope `seen` set, because none is needed to avoid deleting
+	// twice: music_folder has a UNIQUE index on path, so a query returns a
+	// given path at most once, and a row deleted under one scope is not
+	// returned by the next. A second pass over an overlapping scope
+	// re-stats a row it chose to keep, which costs a syscall and changes
+	// nothing. An earlier version carried such a set; it could never have
+	// fired, and a map that implies a guarantee it cannot deliver is worse
+	// than none.
+	//
+	// That reasoning is about deletion, and it is FALSE for the dry run:
+	// nothing is deleted, so an overlapping scope returns the same row
+	// again and the preview listed it twice. The dialog's whole job is to
+	// be a list the user can check, and "16 items" over 15 distinct paths
+	// is the kind of small lie that makes the next number untrustworthy.
+	// The dry run reports nothing, so deduping its result is the whole fix
+	// — see sortedUniq below.
 	var removed []string
 	for _, scope := range scopes {
 		var rows []db.Folder
@@ -314,8 +340,7 @@ func (h *PruneEmptyFoldersHandler) pruneVanishedMode(ctx context.Context, subPat
 			removed = append(removed, filepath.ToSlash(rel))
 		}
 	}
-	sort.Strings(removed)
-	return removed
+	return sortedUniq(removed)
 }
 
 // likeEscape neutralises the LIKE wildcards in a literal path prefix.
@@ -334,6 +359,28 @@ func (h *PruneEmptyFoldersHandler) pruneVanishedMode(ctx context.Context, subPat
 // to catch this could not fail for the right reason. The escape character
 // itself is escaped first, so a directory literally named "a!b" is still
 // matched exactly.
+// sortedUniq sorts and removes duplicates from a list of paths to report.
+//
+// Both passes build their answer by appending per scope, so two scopes that
+// overlap produce the same path twice. Deletion is idempotent, so only the
+// reported list is wrong — and the reported list is what the confirmation
+// dialog renders and what the audit log records, so "16 items" over 15
+// distinct paths is a small lie in the one place the user is being asked to
+// trust a count.
+func sortedUniq(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	sort.Strings(in)
+	out := in[:1]
+	for _, v := range in[1:] {
+		if v != out[len(out)-1] {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func likeEscape(s string) string {
 	r := strings.NewReplacer(`!`, `!!`, `%`, `!%`, `_`, `!_`)
 	return r.Replace(s)
@@ -351,11 +398,12 @@ func likeEscape(s string) string {
 // Read-only, so the gateway can answer it inline instead of round-tripping
 // through the worker queue the way the mutation does.
 func (h *PruneEmptyFoldersHandler) PreviewPrune(ctx context.Context, subPaths [][2]string) ([]string, []string, error) {
-	dirs, err := h.pruneEmptyMode(ctx, subPaths, true)
+	scopes := h.scopes(subPaths)
+	dirs, err := h.pruneEmptyScopes(ctx, scopes, true)
 	if err != nil {
 		return nil, nil, err
 	}
-	return dirs, h.pruneVanishedMode(ctx, subPaths, true), nil
+	return dirs, h.pruneVanishedScopes(ctx, scopes, true), nil
 }
 
 func (h *PruneEmptyFoldersHandler) musicRoot() string {
