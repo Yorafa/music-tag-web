@@ -40,6 +40,9 @@
 package testaudio
 
 import (
+	"bytes"
+	"encoding/binary"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -120,4 +123,159 @@ func WriteMP3(tb testing.TB, path string) string {
 func SeedMP3(tb testing.TB, dir, name string) string {
 	tb.Helper()
 	return WriteMP3(tb, filepath.Join(dir, name))
+}
+
+// ─── WAV ───────────────────────────────────────────────────────────────────
+//
+// SeedWAV writes a real, decodable PCM WAV file and returns its path.
+//
+// The MP3 fixture above is a few KB of synthetic frames: enough for taglib,
+// not something a decoder will accept. fpcalc rejects it outright (exit
+// status 2), so any test that needs a fingerprint or a duration to actually
+// be computed had no usable fixture and skipped instead. WAV sidesteps that —
+// the format is a 44-byte header followed by raw samples, so a genuine audio
+// file can be written with nothing but the standard library, and every
+// decoder handles it.
+//
+// The content is a chord rather than a single tone on purpose: chromaprint
+// builds its fingerprint from spectral band energies, and a pure sine leaves
+// most of them empty, which makes for a degenerate fingerprint that matches
+// nothing well.
+func SeedWAV(tb testing.TB, dir, name string, seconds float64) string {
+	tb.Helper()
+	const (
+		sampleRate = 44100
+		channels   = 1
+		bits       = 16
+	)
+	n := int(seconds * sampleRate)
+	if n < 1 {
+		n = 1
+	}
+
+	// A minor triad, detuned slightly per partial so no two bands are
+	// identical.
+	freqs := []float64{220.0, 277.18, 329.63, 440.0, 554.37}
+	samples := make([]byte, n*2)
+	for i := 0; i < n; i++ {
+		t := float64(i) / sampleRate
+		var v float64
+		for k, f := range freqs {
+			v += (0.2 / float64(len(freqs))) * math.Sin(2*math.Pi*f*t) * (1 + 0.01*float64(k))
+		}
+		// A gentle fade at both ends so the file does not start and stop on
+		// a discontinuity, which would show up as broadband noise in the
+		// first and last subfingerprints.
+		env := 1.0
+		if fade := sampleRate / 4; i < fade {
+			env = float64(i) / float64(fade)
+		} else if i > n-fade {
+			env = float64(n-i) / float64(fade)
+		}
+		s := int16(math.Round(v * env * math.MaxInt16))
+		binary.LittleEndian.PutUint16(samples[i*2:], uint16(s))
+	}
+
+	dataLen := len(samples)
+	var buf bytes.Buffer
+	var hdr [44]byte
+	copy(hdr[0:], "RIFF")
+	binary.LittleEndian.PutUint32(hdr[4:], uint32(36+dataLen))
+	copy(hdr[8:], "WAVE")
+	copy(hdr[12:], "fmt ")
+	binary.LittleEndian.PutUint32(hdr[16:], 16) // PCM fmt chunk size
+	binary.LittleEndian.PutUint16(hdr[20:], 1)  // format = PCM
+	binary.LittleEndian.PutUint16(hdr[22:], channels)
+	binary.LittleEndian.PutUint32(hdr[24:], sampleRate)
+	binary.LittleEndian.PutUint32(hdr[28:], sampleRate*channels*bits/8)
+	binary.LittleEndian.PutUint16(hdr[32:], channels*bits/8)
+	binary.LittleEndian.PutUint16(hdr[34:], bits)
+	copy(hdr[36:], "data")
+	binary.LittleEndian.PutUint32(hdr[40:], uint32(dataLen))
+	buf.Write(hdr[:])
+	buf.Write(samples)
+
+	path := filepath.Join(dir, name)
+	if d := filepath.Dir(path); d != "" && d != "." {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			tb.Fatalf("create fixture dir %s: %v", d, err)
+		}
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		tb.Fatalf("write wav fixture %s: %v", path, err)
+	}
+	return path
+}
+
+// SeedDissonantWAV writes a real PCM WAV whose spectrum has nothing in
+// common with SeedWAV's chord.
+//
+// It exists so a test can hold track length constant while making the audio
+// genuinely different. Without it, "not a duplicate" could be satisfied
+// simply by the two files differing in length, and the fingerprint matcher
+// would never be the thing under test.
+func SeedDissonantWAV(tb testing.TB, dir, name string, seconds float64) string {
+	tb.Helper()
+	const (
+		sampleRate = 44100
+	)
+	n := int(seconds * sampleRate)
+	if n < 1 {
+		n = 1
+	}
+	// A cluster in a different register, and a deliberately different
+	// interval structure rather than a transposition of the same chord.
+	freqs := []float64{311.13, 369.99, 622.25, 739.99}
+	samples := make([]byte, n*2)
+	for i := 0; i < n; i++ {
+		t := float64(i) / sampleRate
+		var v float64
+		for k, f := range freqs {
+			// Odd/even alternation gives a different harmonic series from
+			// SeedWAV's, so the chroma bands genuinely disagree.
+			if k%2 == 0 {
+				v += 0.2 * math.Sin(2*math.Pi*f*t)
+			} else {
+				v += 0.2 * math.Sin(2*math.Pi*f*t*1.5)
+			}
+		}
+		env := 1.0
+		if fade := sampleRate / 4; i < fade {
+			env = float64(i) / float64(fade)
+		} else if i > n-fade {
+			env = float64(n-i) / float64(fade)
+		}
+		s := int16(math.Round(v * env * math.MaxInt16))
+		binary.LittleEndian.PutUint16(samples[i*2:], uint16(s))
+	}
+
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, append(wavHeader(len(samples)), samples...), 0o644); err != nil {
+		tb.Fatalf("write wav fixture %s: %v", path, err)
+	}
+	return path
+}
+
+// wavHeader builds the 44-byte canonical PCM header for dataLen bytes.
+func wavHeader(dataLen int) []byte {
+	const (
+		sampleRate = 44100
+		channels   = 1
+		bits       = 16
+	)
+	hdr := make([]byte, 44)
+	copy(hdr[0:], "RIFF")
+	binary.LittleEndian.PutUint32(hdr[4:], uint32(36+dataLen))
+	copy(hdr[8:], "WAVE")
+	copy(hdr[12:], "fmt ")
+	binary.LittleEndian.PutUint32(hdr[16:], 16)
+	binary.LittleEndian.PutUint16(hdr[20:], 1)
+	binary.LittleEndian.PutUint16(hdr[22:], channels)
+	binary.LittleEndian.PutUint32(hdr[24:], sampleRate)
+	binary.LittleEndian.PutUint32(hdr[28:], sampleRate*channels*bits/8)
+	binary.LittleEndian.PutUint16(hdr[32:], channels*bits/8)
+	binary.LittleEndian.PutUint16(hdr[34:], bits)
+	copy(hdr[36:], "data")
+	binary.LittleEndian.PutUint32(hdr[40:], uint32(dataLen))
+	return hdr
 }

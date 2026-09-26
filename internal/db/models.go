@@ -34,6 +34,18 @@ type Folder struct {
 	UID          string    `gorm:"column:uid;type:char(32);uniqueIndex"`
 	ParentID     string    `gorm:"column:parent_id;type:char(32);index"`
 	State        string    `gorm:"column:state"` // none|scanning|scanned|updated
+
+	// Duration in whole seconds, for file_type='music' rows only, 0 when
+	// unknown. Populated by the fingerprint index task rather than the
+	// folder scanner, because reading it means decoding the audio.
+	//
+	// It exists so duplicate detection can pick candidates by length instead
+	// of by byte size. Re-encoding one track changes its size by up to 25x
+	// (a 120s track is ~1.2MB at 96kbps opus and ~30MB as flac) while its
+	// duration does not move, so a size window large enough to catch a
+	// re-encode also sweeps in most of the library — and fingerprinting
+	// every candidate costs ~0.4s each.
+	Duration int64 `gorm:"column:duration;index:idx_music_folder_duration"`
 }
 
 // TableName 明确指定表名（与 Django `music_folder` 表对齐）。

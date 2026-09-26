@@ -370,32 +370,6 @@ func TestRelOrSelf(t *testing.T) {
 	}
 }
 
-func TestExtractJSONField(t *testing.T) {
-	// The real fpcalc -json shape.
-	s := `{"duration":187.123,"fingerprint":"AQABtMm0Xa...=="}`
-	if got := extractJSONField(s, "fingerprint"); got != "AQABtMm0Xa...==" {
-		t.Errorf("fingerprint = %q", got)
-	}
-	if got := extractJSONField(s, "duration"); got != "187.123" {
-		t.Errorf("duration = %q, want 187.123", got)
-	}
-	if got := extractJSONField(s, "missing"); got != "" {
-		t.Errorf("missing key = %q, want empty", got)
-	}
-	if got := extractJSONField("", "duration"); got != "" {
-		t.Errorf("empty input = %q", got)
-	}
-	// A key that is present but has no value separator must not read past
-	// the end of the document.
-	if got := extractJSONField(`{"duration"`, "duration"); got != "" {
-		t.Errorf("truncated input = %q, want empty", got)
-	}
-	// Negative and integer durations.
-	if got := extractJSONField(`{"duration":-1}`, "duration"); got != "-1" {
-		t.Errorf("negative duration = %q", got)
-	}
-}
-
 func TestNormLower(t *testing.T) {
 	if got := normLower("  MiXeD Case \t"); got != "mixed case" {
 		t.Errorf("normLower = %q", got)

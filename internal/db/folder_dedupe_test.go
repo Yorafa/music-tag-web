@@ -25,7 +25,7 @@ func TestDedupeFolderPaths_NoTableIsNotAnError(t *testing.T) {
 // oldest id's, and every child's parent_id must point at it.
 func TestDedupeFolderPaths_CollapsesRepeatedScans(t *testing.T) {
 	gdb := openLegacyDB(t)
-	seed := []Folder{
+	seedLegacyRows(t, gdb, []Folder{
 		{Name: "music", Path: "/m", UID: "a", FileType: "folder", State: "scanning"},
 		{Name: "music", Path: "/m", UID: "b", FileType: "folder", State: "scanning"},
 		{Name: "music", Path: "/m", UID: "c", FileType: "folder", State: "scanning"},
@@ -34,10 +34,7 @@ func TestDedupeFolderPaths_CollapsesRepeatedScans(t *testing.T) {
 		{Name: "song.mp3", Path: "/m/song.mp3", UID: "e", ParentID: "c", FileType: "music"},
 		// Untouched path, must survive verbatim.
 		{Name: "other.mp3", Path: "/other.mp3", UID: "f", FileType: "music"},
-	}
-	if err := gdb.Create(&seed).Error; err != nil {
-		t.Fatalf("seed legacy rows: %v", err)
-	}
+	})
 
 	if err := DedupeFolderPaths(gdb); err != nil {
 		t.Fatalf("DedupeFolderPaths: %v", err)
@@ -79,13 +76,11 @@ func TestDedupeFolderPaths_CollapsesRepeatedScans(t *testing.T) {
 // AutoMigrate error, so that would be a self-inflicted outage.
 func TestAutoMigrate_UnblocksOnDuplicatedPaths(t *testing.T) {
 	gdb := openLegacyDB(t)
-	if err := gdb.Create(&[]Folder{
+	seedLegacyRows(t, gdb, []Folder{
 		{Name: "music", Path: "/m", UID: "a"},
 		{Name: "music", Path: "/m", UID: "b"},
 		{Name: "song.mp3", Path: "/m/song.mp3", UID: "c", ParentID: "b"},
-	}).Error; err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	})
 	if !gdb.Migrator().HasIndex(&Folder{}, "idx_music_folder_path") {
 		t.Fatalf("legacy schema should carry the non-unique index")
 	}
@@ -98,9 +93,37 @@ func TestAutoMigrate_UnblocksOnDuplicatedPaths(t *testing.T) {
 	if !gdb.Migrator().HasIndex(&Folder{}, "uni_music_folder_path") {
 		t.Errorf("unique index on path was not created")
 	}
+	// Every deployment upgrading to the fingerprint index lands here: a
+	// table that predates music_folder.duration. AutoMigrate has to add the
+	// column, not assume it.
+	if !gdb.Migrator().HasColumn(&Folder{}, "duration") {
+		t.Error("AutoMigrate did not add the duration column to a pre-existing table")
+	}
 	dup := Folder{Name: "music", Path: "/m", UID: "z"}
 	if err := gdb.Create(&dup).Error; err == nil {
 		t.Errorf("inserting a duplicate path succeeded; the unique index is not enforced")
+	}
+}
+
+// seedLegacyRows inserts rows into a music_folder that predates the current
+// model, naming the columns explicitly.
+//
+// A plain gdb.Create(&rows) would build the INSERT from the Folder struct,
+// which now carries duration — and would fail against a table that does not
+// have it. That failure is the test setup breaking rather than the behaviour
+// under test, and it is also the one thing these tests genuinely need to
+// express: an existing installation whose table is missing the new column.
+func seedLegacyRows(t *testing.T, gdb *gorm.DB, rows []Folder) {
+	t.Helper()
+	for _, r := range rows {
+		err := gdb.Exec(
+			`INSERT INTO music_folder (name, path, size, file_type, uid, parent_id, state)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			r.Name, r.Path, r.Size, r.FileType, r.UID, r.ParentID, r.State,
+		).Error
+		if err != nil {
+			t.Fatalf("seed legacy row %s: %v", r.Path, err)
+		}
 	}
 }
 
@@ -115,7 +138,10 @@ func openLegacyDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	// The legacy DDL: identical columns, no unique index on path.
+	// The legacy DDL: the same columns as Folder minus duration, and no
+	// unique index on path. duration is left out deliberately — the point is
+	// a table that predates the fingerprint index, so AutoMigrate has to add
+	// the column as well as install the index.
 	if err := gdb.Exec(`CREATE TABLE music_folder (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT, path TEXT, size INTEGER,

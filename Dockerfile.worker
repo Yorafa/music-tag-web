@@ -21,8 +21,15 @@ FROM alpine:3.20
 # Pure-Go runtime: the only yt-dlp consumer is the youtube plugin (the
 # worker's download:generic task delegates the exec over gRPC via
 # plugin.DownloadSource), so python3 / yt-dlp / ffmpeg live exclusively in
-# the youtube plugin image (see Dockerfile.plugin). This image stays ~15 MB.
-RUN apk add --no-cache ca-certificates tzdata
+# the youtube plugin image (see Dockerfile.plugin).
+#
+# chromaprint IS needed here: the worker runs the duration indexer
+# (index:fp_duration), which shells out to fpcalc once per library track.
+# It is not here for tag I/O — the gateway and worker both do that in pure Go
+# via go.senan.xyz/taglib. The Alpine package pulls ffmpeg's decode libraries
+# in with it, which is where most of the added weight goes.
+RUN apk add --no-cache ca-certificates tzdata chromaprint
+RUN fpcalc -version
 ENV TZ=Asia/Shanghai
 
 # REVIEW.md P3-2: run unprivileged. The worker writes into the music

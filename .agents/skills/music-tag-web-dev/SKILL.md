@@ -40,8 +40,8 @@ Self-hosted Docker 化音乐元数据批量编辑工具。支持 FLAC/APE/WAV/AI
 | Tag I/O | `bogem/id3v2` + `dhowden/tag` (pure Go, no FFI) |
 | Auth | JWT in-memory + bcrypt; fail-closed defaults |
 | Encryption | gRPC TLS optional (`GRPC_USE_TLS=1` + `GRPC_TLS_CA_FILE`) |
-| Deploy | `docker compose up -d --build` starts gateway + worker + 7 gRPC plugins + redis |
-| Image size | ~80 MB (Alpine + Go binary + yt-dlp) |
+| Deploy | `docker compose up -d --build` starts gateway + worker + 8 gRPC plugins + redis |
+| Image size | ~560 MB total: gateway 131 MB, worker 33 MB, six name-search plugins 21.5 MB each, acoustid 114 MB, youtube 199 MB. Both gateway and worker carry `chromaprint` (fpcalc) for the fingerprint dedup stage |
 
 ### Frontend (`frontend/`)
 
@@ -136,10 +136,7 @@ Route groups:
 - `GET /api/sources/` — dynamic source list
 - `GET /api/clear_celery/` — clear task queue
 - `GET /api/active_queue/` — queue status
-- `GET /api/task1/` — scan folder
-- `GET /api/task2/` — clear cache
 - `GET /api/full_scan_folder/` — full recursive scan
-- `GET /api/record/` — task record list
 
 **Static:**
 - `/media/*filepath` — Range streaming for audio

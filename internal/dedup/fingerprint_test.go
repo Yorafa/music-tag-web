@@ -9,7 +9,7 @@ import (
 	"go-music-tag/internal/testaudio"
 )
 
-// requireFpcalc skips unless fpcalc is on PATH.
+// requireFpcalc skips unless fpcalc is on PATH, and returns its path.
 //
 // The fingerprint stage is optional by design — Checker.fpcalcAvailable()
 // probes once with exec.LookPath and disables the stage for the process if the
@@ -19,11 +19,13 @@ import (
 // every image and nothing failed. So the test skips loudly rather than
 // silently, and Dockerfile.gateway is expected to carry fpcalc (it installs
 // the chromaprint package) — a build that drops it loses this coverage.
-func requireFpcalc(t *testing.T) {
+func requireFpcalc(t *testing.T) string {
 	t.Helper()
-	if _, err := exec.LookPath("fpcalc"); err != nil {
+	p, err := exec.LookPath("fpcalc")
+	if err != nil {
 		t.Skip("fpcalc not installed; the fingerprint stage is disabled on this host")
 	}
+	return p
 }
 
 // TestFingerprintStageIsEnabled is the regression test for the stage having
@@ -43,7 +45,7 @@ func requireFpcalc(t *testing.T) {
 // either is not worth the dependency. See the match-rule note on
 // checkFingerprint for why a match is a narrow case anyway.
 func TestFingerprintStageIsEnabled(t *testing.T) {
-	requireFpcalc(t)
+	_ = requireFpcalc(t)
 
 	root := t.TempDir()
 	target := testaudio.SeedMP3(t, root, "song.mp3")
@@ -68,7 +70,7 @@ func TestFingerprintStageIsEnabled(t *testing.T) {
 // work. fpcalc cannot decode the synthetic fixture, so the stage must
 // decline and leave the file writable.
 func TestFingerprintStageDoesNotBlockOnUndecodableAudio(t *testing.T) {
-	requireFpcalc(t)
+	_ = requireFpcalc(t)
 
 	root := t.TempDir()
 	target := testaudio.SeedMP3(t, root, "song.mp3")

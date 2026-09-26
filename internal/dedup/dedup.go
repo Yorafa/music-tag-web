@@ -31,7 +31,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"gorm.io/gorm"
 
@@ -398,55 +397,44 @@ func sha256OfFile(path string) (string, error) {
 
 // ─── Stage 3: fpcalc fingerprint ────────────────────────────────────────────
 
-// checkFingerprint 仅在有潜在 duplicate 候选时启动：
-// 我们已经在 stage1/2 过滤掉了「同名 + 同 hash」；剩下还有一种场景即
-// 「不同名 / 不同 hash / 但音频解码后 wave 一样」（重编码重复）。这种情况
-// 用 chromaprint FINGERPRINT 字段比对就能识别。
+// checkFingerprint 找「同一首歌的不同编码」：不同名、不同 hash，但解码后
+// 声纹一致。
 //
-// 当前实现：在 DB / FS 里找同 duration (±2s) 的候选，逐个跑 fpcalc，比
-// fingerprint 字符串相等即判重。fpcalc 在机器上的概率也不高，所以联系
-// acoustid service 的 LookPath 一致；缺失则跳过本层即可。
+// 候选集按**时长**而不是文件大小选。同一首歌换编码，大小可以差 25 倍（120
+// 秒的歌在 96k opus 下约 1.2MB，flac 下约 30MB），而时长不变。所以旧版
+// 的 size ±20% 窗口恰好漏掉了最典型的无损转有损重复：实测里只有 vorbis /
+// opus 200k 落进窗口，flac、mp3、wav 全部在窗口外。
+//
+// 时长读自 music_folder.duration，由索引任务预先算好（见
+// internal/tasks/fpindex.go）。没有索引时退回按大小扫盘，并明确标注这条
+// 路径仍然会漏掉大幅变小的重编码。
+//
+// 比较用子指纹位距离而不是压缩指纹字符串全等，原因见 fingerprint.go。
 func (c *Checker) checkFingerprint(ctx context.Context, path string, opts Options) (string, bool, error) {
 	if !c.fpcalcAvailable() {
 		return "", false, nil
 	}
-	myFP, myDur, err := c.runFPCalc(path)
-	if err != nil || myFP == "" {
+	myFP, err := subFingerprint(ctx, c.fpcalcPath, path)
+	if err != nil {
+		// 解不出来（不是音频、被截断、fpcalc 缺失）都只是「本层没结论」，
+		// 不是「无重复」。
 		return "", false, err
 	}
 	root := c.musicRoot
 
-	// 候选集合：size 接近的库内音频。
-	//
-	// 这里用 size 而不是 duration：music_folder 没有 duration 列，而同一曲
-	// 复压 size 可能差几 MB、声纹却一致。music_track 倒是有 duration，但那
-	// 张表从没有人写入，所以按 duration 的那条分支过去同样永远返回空。
-	fi, _ := os.Stat(path)
-	target := int64(0)
-	if fi != nil {
-		target = fi.Size()
-	}
-	candidates := []string{}
-
-	if target > 0 {
-		lo := target * 8 / 10
-		hi := target * 12 / 10
-		candidates = append(candidates, c.libraryFiles(indexCandidateLimit,
-			"size BETWEEN ? AND ?", lo, hi)...)
-	}
-	if ctx.Err() != nil {
-		return "", false, ctx.Err()
-	}
-	if len(candidates) == 0 && root != "" {
-		// 退一步：size 大区间扫盘。
-		lo := target * 7 / 10
-		hi := target * 13 / 10
-		fsCands, _ := findFilesBySizeBetween(root, lo, hi, 64)
-		for _, c2 := range fsCands {
-			if filepath.Clean(c2) == filepath.Clean(path) {
-				continue
+	candidates := c.durationCandidates(myFP.duration, path)
+	if len(candidates) == 0 && root != "" && myFP.duration <= 0 {
+		// 没有时长索引（或本文件时长读不出来）时的退路。窗口比旧的 ±20%
+		// 宽，因为后面还要过声纹比对这一关，误纳的候选只是多花 0.4s。
+		if fi, serr := os.Stat(path); serr == nil && fi.Size() > 0 {
+			lo := fi.Size() / 2
+			hi := fi.Size() * 2
+			fsCands, _ := findFilesBySizeBetween(root, lo, hi, 64)
+			for _, p := range fsCands {
+				if !isSelf(p, path) {
+					candidates = append(candidates, p)
+				}
 			}
-			candidates = append(candidates, c2)
 		}
 	}
 
@@ -456,18 +444,54 @@ func (c *Checker) checkFingerprint(ctx context.Context, path string, opts Option
 			return "", false, ctx.Err()
 		default:
 		}
-		ifcand, dur, err := c.runFPCalc(cand)
-		if err != nil || ifcand == "" {
+		if isSelf(cand, path) {
 			continue
 		}
-		if myDur > 0 && dur > 0 && absi(myDur-dur) > 5 {
-			continue // ±5s 误差宽松阈值（fpcalc 解码差异）
+		candFP, cerr := subFingerprint(ctx, c.fpcalcPath, cand)
+		if cerr != nil {
+			continue // 候选解不出来：不是匹配，跳过
 		}
-		if ifcand == myFP {
+		if sameTrack(myFP, candFP) {
 			return relOrSelf(cand, root), true, nil
 		}
 	}
 	return "", false, nil
+}
+
+// durationToleranceSeconds is how far apart two durations may be and still
+// be considered the same track. fpcalc reports the decoded length, which
+// encoders round differently (a track can gain or lose a fraction of a
+// second, and some containers pad), so exact equality is too strict.
+const durationToleranceSeconds = 5
+
+// durationCandidates returns library audio files whose indexed duration is
+// within durationToleranceSeconds of target. Returns nil when target is
+// unknown or the index has no durations yet — the caller then falls back.
+func (c *Checker) durationCandidates(target int, _ string) []string {
+	if target <= 0 || c.db == nil {
+		return nil
+	}
+	lo := int64(target - durationToleranceSeconds)
+	hi := int64(target + durationToleranceSeconds)
+	var paths []string
+	err := c.db.Table("music_folder").
+		Where("file_type = ?", musicFileType).
+		// duration > 0 excludes rows the index task has not reached yet.
+		// Without it every unindexed row is duration=0, and a 0-0 window
+		// would match the entire library for any file under 5s long.
+		Where("duration > 0 AND duration BETWEEN ? AND ?", lo, hi).
+		Limit(hashCandidateLimit).
+		Pluck("path", &paths).Error
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if abs := resolveUnderRoot(c.musicRoot, p); abs != "" {
+			out = append(out, abs)
+		}
+	}
+	return out
 }
 
 // fpcalcAvailable 懒求一次：超时无 fpcalc 时以后永远跳过本层。
@@ -480,60 +504,6 @@ func (c *Checker) fpcalcAvailable() bool {
 		}
 	})
 	return !c.fpcalcDisabled
-}
-
-// runFPCalc 跑 fpcalc -json audioPath 取 fingerprint + duration。
-// 这代码与 internal/plugin/acoustid/server.go runFPCalc 等价（不抽公共，避免
-// 循环依赖）；出错一律返回 "" 不影响主流程。
-func (c *Checker) runFPCalc(audioPath string) (string, int, error) {
-	if c.fpcalcDisabled || c.fpcalcPath == "" {
-		return "", 0, errors.New("fpcalc disabled")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, c.fpcalcPath, "-json", audioPath)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", 0, err
-	}
-	// 简化：直接 strings.Cut 取 fingerprint/duration 字段（避免引 json 包）。
-	fp := extractJSONField(string(out), "fingerprint")
-	dur := extractJSONField(string(out), "duration")
-	d := 0
-	fmt.Sscanf(dur, "%d", &d)
-	return fp, d, nil
-}
-
-// extractJSONField 极简字符串抽取：fpcalc -json 输出形如
-// {"duration":187.123,"fingerprint":"AQAB..."}
-func extractJSONField(s, key string) string {
-	k := "\"" + key + "\":"
-	i := strings.Index(s, k)
-	if i < 0 {
-		return ""
-	}
-	s = s[i+len(k):]
-	// 数字类型
-	if s != "" && (s[0] >= '0' && s[0] <= '9' || s[0] == '-') {
-		j := 0
-		if s[0] == '-' {
-			j = 1
-		}
-		for j < len(s) && (s[j] >= '0' && s[j] <= '9' || s[j] == '.') {
-			j++
-		}
-		return s[:j]
-	}
-	// 字符串类型
-	if strings.HasPrefix(s, "\"") {
-		s = s[1:]
-		j := strings.IndexByte(s, '"')
-		if j < 0 {
-			return ""
-		}
-		return s[:j]
-	}
-	return ""
 }
 
 // findFilesBySizeBetween 在 root 下递归查找 size 在 [lo, hi] 的文件，

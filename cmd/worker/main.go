@@ -148,6 +148,17 @@ func main() {
 	}()
 
 	log.Printf("[worker] starting asynq, concurrency=%d queues=%v", *concurrency, *queues)
+
+	// 6) Kick off the duration index. The fingerprint stage of duplicate
+	// detection picks candidates by track length, and this is what fills
+	// that column in. Enqueued from here rather than from the gateway so a
+	// fresh deployment converges without anyone clicking a button, and
+	// Unique keeps a restart from stacking runs: the task itself skips
+	// rows that already carry a duration, so a repeat is nearly free.
+	if err := enqueueFpIndex(); err != nil {
+		log.Printf("[worker] WARNING: could not enqueue %s: %v", tasks.TypeFpIndex, err)
+	}
+
 	if err := srv.Run(mux); err != nil {
 		log.Fatalf("[worker] asynq terminated with error: %v", err)
 	}
@@ -181,6 +192,33 @@ type taskHandlerDeps struct {
 	DBDriver  string
 	MusicRoot string
 	Bus       events.Bus
+}
+
+// enqueueFpIndex schedules the duration indexer, deduped for an hour so
+// restarts do not queue a run each time. A failure here is not fatal: the
+// fingerprint stage falls back to a size-filtered disk walk, which is slower
+// and misses large re-encodes, but every other stage is unaffected.
+func enqueueFpIndex() error {
+	client := asynq.NewClient(queue.ClientOpts())
+	defer client.Close()
+
+	task, err := tasks.NewTypedTask(tasks.TypeFpIndex, &tasks.FpIndexPayload{},
+		asynq.Queue("default"),
+		asynq.MaxRetry(1),
+		asynq.Unique(1*time.Hour),
+		// The run decodes every unindexed track, which for a large library
+		// is minutes of work. A short timeout would kill it partway.
+		asynq.Timeout(30*time.Minute),
+	)
+	if err != nil {
+		return err
+	}
+	_, err = client.Enqueue(task)
+	if err == asynq.ErrDuplicateTask {
+		log.Printf("[worker] %s already scheduled; nothing to do", tasks.TypeFpIndex)
+		return nil
+	}
+	return err
 }
 
 // wireTaskHandlers registers every task type this worker consumes.
@@ -238,6 +276,14 @@ func wireTaskHandlers(mux *asynq.ServeMux, d taskHandlerDeps) {
 		// written to tags. See docs/plans/Unfinished-Features.md § C.2.
 		{tasks.TypeApplyParsedFilenames, func() {
 			tasks.NewApplyParsedFilenamesMux(mux, tasks.HandlerFunc(tasks.HandleApplyParsedFilenames))
+		}},
+		// Duration indexer (index:fp_duration). Fills music_folder.duration
+		// so the fingerprint stage can pick duplicate candidates by track
+		// length instead of by byte size — a re-encode changes a file's size
+		// by up to 25x while barely moving its length. This is the one
+		// consumer of fpcalc inside the worker image.
+		{tasks.TypeFpIndex, func() {
+			tasks.NewFpIndexMux(mux, &tasks.FpIndexHandler{DB: gormDB})
 		}},
 	}
 	for _, r := range registrations {

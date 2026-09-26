@@ -23,6 +23,10 @@ const (
 	TypeDownloadGeneric      = "download:generic" // unified download type — payload.Source dispatches to the matching DownloadSource
 	TypeClearMusic           = "db:clear"
 	TypeApplyParsedFilenames = "tag:apply_parsed_filenames" // C.2 bulk-apply worker; payload = ApplyParsedFilenamesPayload
+	// TypeFpIndex fills in music_folder.duration, which duplicate detection
+	// uses to pick fingerprint-stage candidates by length rather than by
+	// byte size. Safe to enqueue repeatedly; it skips indexed rows.
+	TypeFpIndex = "index:fp_duration"
 )
 
 // --- Payloads ---
@@ -55,6 +59,11 @@ type DownloadPayload struct {
 }
 
 type ClearMusicPayload struct{}
+
+// FpIndexPayload is the carrier for TypeFpIndex. It is empty today; the
+// fields exist so a future incremental run (a path range, a resume token) can
+// be added without changing the wire format.
+type FpIndexPayload struct{}
 
 // ApplyParsedFilenamesPayload is the carrier for TypeApplyParsedFilenames.
 // Shape mirrors cache.ParsedResult 1:1 so JSON wire-format round-trips
@@ -203,6 +212,16 @@ func NewApplyParsedFilenamesMux(mux *asynq.ServeMux, h Handler) {
 			var p ApplyParsedFilenamesPayload
 			err := Decode(data, &p)
 			return &p, err
+		},
+		h: h,
+	}).ProcessTask)
+}
+
+// NewFpIndexMux registers the duration indexer.
+func NewFpIndexMux(mux *asynq.ServeMux, h Handler) {
+	mux.HandleFunc(TypeFpIndex, (&asynqAdapter{
+		decode: func([]byte) (interface{}, error) {
+			return &FpIndexPayload{}, nil
 		},
 		h: h,
 	}).ProcessTask)
