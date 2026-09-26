@@ -8,6 +8,23 @@
 # youtube-only yt-dlp install on it. compose passes `args: PLUGIN: <name>`
 # which overrides the default in both stages.
 
+# Which of the two runtime bases below to build on. compose sets
+# runtime_fpcalc for acoustid and leaves the default for the rest.
+#
+# This is a global ARG, so it has to be declared before the first FROM: an ARG
+# is only usable in a FROM line while it is in global scope, and a
+# stage-scoped one silently does not expand.
+#
+# A build ARG rather than an `if` inside a RUN on purpose. Only acoustid needs
+# fpcalc, and giving the other seven the 88 MB base would be absurd — but
+# selecting the package inside the RUN does not achieve the sharing either.
+# A layer's digest covers the command text, not just the files it leaves
+# behind: two Dockerfiles whose `apk add` lines produce byte-identical /usr/lib
+# still land in different layers when one of them is written as
+# `if [ ... ]; then apk add ...; fi`, and the same 88 MB is stored again. An
+# unreferenced FROM is not built, so only the chosen base costs anything.
+ARG RUNTIME_BASE=runtime_plain
+
 FROM golang:alpine AS builder
 
 ARG PLUGIN=netease
@@ -30,7 +47,8 @@ COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /plugin ./cmd/plugins/${PLUGIN}
 
-FROM alpine:3.20
+FROM fpcalbase AS runtime_fpcalc
+FROM alpine:3.20 AS runtime_plain
 # Only the youtube plugin shells out to yt-dlp (search + download with
 # optional --extract-audio transcode, see internal/plugin/youtube/server.go).
 # Since the 2026 refactor the worker delegates its download:generic youtube
@@ -53,21 +71,23 @@ FROM alpine:3.20
 # The acoustid plugin shells out to fpcalc (chromaprint) — see
 # internal/plugin/acoustid/server.go::NewServer, which LookPath's it and sets
 # disabled=true when absent, making every FetchId3ByTitle return zero songs.
-# Until this install existed the plugin was a permanent no-op in Docker even
-# though the feature matrix listed it as implemented. chromaprint costs
-# ~92 MB here because it pulls the ffmpeg libav* decoder stack (unlike the
-# worker image, which already has ffmpeg, so there it is only +96 KB). That
-# cost lands on this one plugin image; the other six stay ~13 MB.
+# Until it was installed the plugin was a permanent no-op in Docker even
+# though the feature matrix listed it as implemented. It builds on
+# runtime_fpcalc (Dockerfile.base) rather than installing the package here,
+# which is what lets it share one stored copy of the 88 MB with the gateway
+# and the worker instead of keeping a second one.
+ARG PLUGIN=netease
+FROM ${RUNTIME_BASE} AS runtime
 ARG PLUGIN=netease
 # REVIEW.md P3-10. Latest stable at the time of writing; Alpine 3.20 ships
 # Python 3.12, which yt-dlp supports.
 ARG YTDLP_VERSION=2026.8.19
-RUN apk add --no-cache ca-certificates tzdata \
-    && if [ "${PLUGIN}" = "acoustid" ]; then \
-         apk add --no-cache chromaprint \
-         && fpcalc -version; \
-       fi \
-    && if [ "${PLUGIN}" = "youtube" ]; then \
+RUN apk add --no-cache ca-certificates tzdata
+# The youtube branch is the only one that installs ffmpeg itself, and it
+# needs the real binary — yt-dlp's --extract-audio post-processor execs it.
+# The acoustid plugin gets fpcalc from the base above rather than here, so
+# this layer stays untouched for it.
+RUN if [ "${PLUGIN}" = "youtube" ]; then \
          apk add --no-cache python3 py3-pip ffmpeg \
          && pip3 install --no-cache-dir --break-system-packages \
               "yt-dlp[default]==${YTDLP_VERSION}" \

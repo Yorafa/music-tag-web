@@ -112,6 +112,40 @@ func TestFingerprintFindsReEncodedDuplicate(t *testing.T) {
 	}
 }
 
+// A heavily degraded re-encode is the case that forces a per-bit distance.
+//
+// At a low bitrate the encoder perturbs many subfingerprints by a couple of
+// bits each rather than replacing a few outright. Measured per bit that
+// still scores high; measured per *element* — treating any single differing
+// bit as condemning the whole 32-bit value — the same audio scores around
+// 0.80 and would be rejected. So this test is what fails if the comparison
+// is ever changed back to an element-wise one.
+func TestFingerprintFindsHeavilyDegradedReEncode(t *testing.T) {
+	requireFpcalc(t)
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed; cannot produce a re-encoded fixture")
+	}
+
+	root := t.TempDir()
+	original := testaudio.SeedWAV(t, root, "original.wav", matchTestSeconds)
+	low := filepath.Join(root, "low-bitrate.ogg")
+	if out, err := exec.Command(ffmpeg, "-loglevel", "error", "-y",
+		"-i", original, "-c:a", "libopus", "-b:a", "12k", low).CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg could not produce a low-bitrate fixture: %v (%s)", err, out)
+	}
+
+	gdb := fingerprintDB(t, map[string]int64{low: matchTestSeconds})
+	c := New(gdb, root)
+	c.SetMusicRoot(root)
+
+	got := c.Check(context.Background(), original, Options{MusicRoot: root, DisableMeta: true})
+	if got.Verdict != VerdictDuplicate {
+		t.Fatalf("Verdict = %v (MatchField %q, Run %v); a 12kbps re-encode of the "+
+			"same audio is still the same song", got.Verdict, got.MatchField, got.Run)
+	}
+}
+
 // The safety half, and the more important one. Check()'s caller treats
 // VerdictDuplicate as "refuse the write", so a stage that over-matches
 // silently eats the user's tagging work. Two different pieces of audio of
@@ -237,5 +271,5 @@ func indexedDuration(t *testing.T, fpcalcPath, path string) int64 {
 	if err != nil {
 		t.Fatalf("fpcalc on %s: %v", filepath.Base(path), err)
 	}
-	return int64(fp.duration)
+	return int64(fp.Duration())
 }

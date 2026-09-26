@@ -183,71 +183,45 @@ func TestServer_FetchId3ByTitle_MultiRecordingFlattens(t *testing.T) {
 	}
 }
 
-// ─── runFPCalc / runFPCalcText pure helpers via fake binary ───────────────
+// ─── fpcalc invocation ─────────────────────────────────────────────────────
+//
+// These four used to cover runFPCalc / runFPCalcText. Both are gone: the
+// parsing lives in internal/fingerprint now, and the text-mode fallback went
+// with them — fpcalc has supported -json since 1.5 and every image here
+// ships 1.5 or newer, so the fallback only ever ran against a hypothetical
+// old binary. Its presence is exactly what let a broken -json path ship
+// unnoticed, pointing at an endpoint that 404s.
+//
+// What is asserted here instead is the thing the plugin is actually
+// responsible for: that a file it cannot read is a logged no-op rather than
+// an error, and that it does not block the rest of the fan-out.
 
-func TestRunFPCalcText_ParsesDurationAndFingerprint(t *testing.T) {
-	dir := t.TempDir()
-	fakePath := writeFakeFpcalc(t, dir, "DURATION=240\nFINGERPRINT=AQAAEE\n")
-	fp, dur, err := runFPCalcText(fakePath, "/some/audio.mp3")
+// A file fpcalc cannot decode must come back as an empty response, not an
+// error: this plugin is one of several in a fan-out, and one broken source
+// must not fail the whole scrape.
+func TestFetchId3ByTitle_UnreadableFileIsAnEmptyNoOp(t *testing.T) {
+	srv := newServerWithFakeFpcalc(t, "DURATION=120\nFINGERPRINT=AQAAAA==\n")
+	srv.disabled = false
+	// A script that always fails stands in for "fpcalc cannot open this".
+	srv.fpcalc = writeFailingFpcalc(t)
+
+	resp, err := srv.FetchId3ByTitle(context.Background(), &pb.FetchId3Request{Title: "/nope.flac"})
 	if err != nil {
-		t.Fatalf("runFPCalcText: %v", err)
+		t.Errorf("FetchId3ByTitle returned %v; a single unreadable file must not "+
+			"fail the whole fan-out", err)
 	}
-	if fp != "AQAAEE" {
-		t.Errorf("fp = %q, want AQAAEE", fp)
-	}
-	if dur != 240 {
-		t.Errorf("dur = %d, want 240", dur)
+	if len(resp.Songs) != 0 {
+		t.Errorf("Songs = %+v, want empty", resp.Songs)
 	}
 }
 
-func TestRunFPCalcText_NoFingerprintReturnsError(t *testing.T) {
-	dir := t.TempDir()
-	// Emit only DURATION → parser bails with "no fingerprint".
-	fakePath := writeFakeFpcalc(t, dir, "DURATION=42\n")
-	if _, _, err := runFPCalcText(fakePath, "/x"); err == nil {
-		t.Error("expected error when fingerprint missing; got nil")
+func writeFailingFpcalc(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "fpcalc-fail.sh")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write failing fpcalc: %v", err)
 	}
-}
-
-func TestRunFPCalcText_NonZeroExitReturnsError(t *testing.T) {
-	// The script runs `exit 1` directly — no exec redirection trick, which
-	// would short-circuit on the inner script's exit code and mask the
-	// non-zero exit path we want to exercise.
-	bareFail := t.TempDir() + "/fail.sh"
-	if err := os.WriteFile(bareFail, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
-		t.Fatalf("write fail script: %v", err)
-	}
-	if _, _, err := runFPCalcText(bareFail, "/x"); err == nil {
-		t.Error("expected error when fpcalc exits non-zero; got nil")
-	}
-}
-
-func TestRunFPCalc_JsonBranchTakesPrecedence(t *testing.T) {
-	// runFPCalc tries -json first; a script that detects -json and emits
-	// the JSON shape should win over the text fallback.
-	dir := t.TempDir()
-	jsonBody := `{"duration":123,"fingerprint":"json-branch-fp"}`
-	script := "#!/bin/sh\n" +
-		"if [ \"$1\" = \"-json\" ]; then\n" +
-		"  echo '" + jsonBody + "'\n" +
-		"  exit 0\n" +
-		"fi\n" +
-		"echo DURATION=999\n" +
-		"echo FINGERPRINT=text-branch-fp\n"
-	scriptPath := filepath.Join(dir, "fpcalc-json-aware.sh")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-	fp, dur, err := runFPCalc(scriptPath, "/any")
-	if err != nil {
-		t.Fatalf("runFPCalc: %v", err)
-	}
-	if fp != "json-branch-fp" {
-		t.Errorf("fp = %q, want json-branch-fp (json path wins)", fp)
-	}
-	if dur != 123 {
-		t.Errorf("dur = %d, want 123", dur)
-	}
+	return p
 }
 
 // ─── match(): the request we actually put on the wire ──────────────────────
@@ -374,12 +348,33 @@ func newServerWithFakeFpcalc(t *testing.T, stdout string) *Server {
 	return srv
 }
 
-// writeFakeFpcalc writes a portable sh script under dir that prints stdout
-// (one echo per non-empty line). Returns the script path.
+// writeFakeFpcalc writes a portable sh script under dir that answers the way
+// the real binary does: `fpcalc -json <file>` prints one JSON object, and
+// any other invocation prints the DURATION=/FINGERPRINT= text form.
+//
+// It has to branch on the mode, because that is the whole point: the plugin
+// only ever asks for -json, so a fake that ignored the argument would have
+// kept passing after the -json path was pointed at a 404.
+//
+// Returns the script path.
 func writeFakeFpcalc(t *testing.T, dir, stdout string) string {
 	t.Helper()
+	dur, fp := "0", ""
+	for _, line := range strings.Split(stdout, "\n") {
+		switch {
+		case strings.HasPrefix(line, "DURATION="):
+			dur = strings.TrimPrefix(line, "DURATION=")
+		case strings.HasPrefix(line, "FINGERPRINT="):
+			fp = strings.TrimPrefix(line, "FINGERPRINT=")
+		}
+	}
+
 	var sb strings.Builder
 	sb.WriteString("#!/bin/sh\n")
+	sb.WriteString("if [ \"$1\" = \"-json\" ]; then\n")
+	sb.WriteString("  printf '{\"duration\":" + dur + ",\"fingerprint\":\"" + fp + "\"}'\n")
+	sb.WriteString("  exit 0\n")
+	sb.WriteString("fi\n")
 	if stdout != "" {
 		for _, line := range strings.Split(stdout, "\n") {
 			if line == "" {

@@ -35,7 +35,7 @@
 | 网易云 / 酷狗 / 酷我 / 咪咕 / QQ 搜索 + FetchId3 | ✅ | 各 plugin `server.go` 中的 `Search` + `FetchId3ByTitle` |
 | MusicBrainz lookup | ✅ | `internal/plugin/musicbrainz/server.go`（不支持歌词，`SupportsLyric=false`） |
 | AcoustID 指纹匹配 | ✅ | `internal/plugin/acoustid/server.go`（`fpcalc` shell-out → `POST api.acoustid.org/v2/lookup`，结果为空时优雅降级）。需 `ACOUSTID_API_KEY`（可回退到官方公共测试 key，会过期）。声纹比对在 fan-out 里与其它源平级，失败只记日志不阻断 |
-| 重复文件检测 · 声纹层（跨编码） | ✅ | `internal/dedup/fingerprint.go`。按 `music_folder.duration` 选候选（同一首歌换编码大小可差 25 倍，按大小选会漏掉最典型的 flac/mp3 重压），再按 Chromaprint **子指纹位距离** 判同，阈值 0.90。实测同一首歌 7 种编码相似度 0.995+，无关音频 0.511。`music_folder.duration` 由 `index:fp_duration` 任务一次性填充（worker 启动时自举，每首约 0.4s，只跑一次） |
+| 重复文件检测 · 声纹层（跨编码） | ✅ | `internal/dedup/fingerprint.go`（阈值策略）+ `internal/fingerprint`（fpcalc 调用与子指纹位距离，三个调用方共用）。按 `music_folder.duration` 选候选（同一首歌换编码大小可差 25 倍，按大小选会漏掉最典型的 flac/mp3 重压），再按 **子指纹位距离** 判同，阈值 0.90。实测同一首歌 7 种编码相似度 0.995+，无关音频 0.511。`music_folder.duration` 由 `index:fp_duration` 任务一次性填充（worker 启动时自举，每首约 0.4s，只跑一次） |
 | 搜索源动态列表（`GET /api/sources/`） | ✅ | `internal/gateway/handler/source.go` 中 `ListSources` + `frontend/src/store/useSourceStore.ts` |
 | 用户源启用 / 关闭（`localStorage` 持久化） | ✅ | `frontend/src/store/useSourceStore.ts` `persist` -> `localStorage["app.enabledSources"]` |
 | 来源偏好设置页 | ✅ | `frontend/src/components/settings/SettingsModal.tsx` |

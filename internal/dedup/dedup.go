@@ -26,14 +26,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 
 	"gorm.io/gorm"
 
+	"go-music-tag/internal/fingerprint"
 	"go-music-tag/internal/tag"
 )
 
@@ -422,8 +423,8 @@ func (c *Checker) checkFingerprint(ctx context.Context, path string, opts Option
 	}
 	root := c.musicRoot
 
-	candidates := c.durationCandidates(myFP.duration, path)
-	if len(candidates) == 0 && root != "" && myFP.duration <= 0 {
+	candidates := c.durationCandidates(myFP.Duration(), path)
+	if len(candidates) == 0 && root != "" && myFP.Duration() <= 0 {
 		// 没有时长索引（或本文件时长读不出来）时的退路。窗口比旧的 ±20%
 		// 宽，因为后面还要过声纹比对这一关，误纳的候选只是多花 0.4s。
 		if fi, serr := os.Stat(path); serr == nil && fi.Size() > 0 {
@@ -497,11 +498,16 @@ func (c *Checker) durationCandidates(target int, _ string) []string {
 // fpcalcAvailable 懒求一次：超时无 fpcalc 时以后永远跳过本层。
 func (c *Checker) fpcalcAvailable() bool {
 	c.fpcalcOnce.Do(func() {
-		if p, err := exec.LookPath("fpcalc"); err == nil {
-			c.fpcalcPath = p
-		} else {
+		p, err := fingerprint.LookPath()
+		if err != nil {
 			c.fpcalcDisabled = true
+			// Logged, because a skipped stage and a stage that found
+			// nothing produce the same Result, and the first one used to be
+			// invisible.
+			log.Printf("[dedup] fingerprint stage disabled: %v", err)
+			return
 		}
+		c.fpcalcPath = p
 	})
 	return !c.fpcalcDisabled
 }

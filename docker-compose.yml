@@ -10,10 +10,35 @@
 # =============================================================================
 
 services:
+  # Shared runtime base for the three images that fingerprint audio.
+  #
+  # This is not a service anyone talks to. It exists so Dockerfile.gateway,
+  # Dockerfile.worker and the acoustid plugin can all `FROM` it, which is what
+  # makes the 88 MB of ffmpeg libraries that chromaprint drags in a single
+  # stored layer instead of three. See Dockerfile.base for why repeating the
+  # same `apk add` line three times does not achieve that.
+  #
+  # It is started rather than left out because `additional_contexts:
+  # service:fpcalc-base` cannot resolve a service that a profile has
+  # excluded, and putting it behind a profile would mean the documented
+  # one-liner `docker compose up -d --build` stopped working. The container
+  # holds no data, listens on nothing and does nothing; `command: sleep
+  # infinity` is only there to give it a reason to stay up.
+  fpcalc-base:
+    image: music-tag-web-fpcalc-base
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+    command: ["sleep", "infinity"]
+    container_name: go-music-fpcalc-base
+    restart: unless-stopped
+
   gateway:
     build:
       context: .
       dockerfile: Dockerfile.gateway
+      additional_contexts:
+        fpcalbase: "service:fpcalc-base"
     container_name: go-music-gateway
     # gateway 现在直接对外提供 API + 静态资源 + 媒体服务；宿主机侧端口经
     # 环境变量 GATEWAY_PORT（默认 9150）映射。容器内端口保持 8001，因为
@@ -110,6 +135,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
+      additional_contexts:
+        fpcalbase: "service:fpcalc-base"
     container_name: go-music-worker
     volumes:
       - ./music:/app/media:rw
@@ -395,8 +422,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.plugin
+      additional_contexts:
+        fpcalbase: "service:fpcalc-base"
       args:
         PLUGIN: acoustid
+        # The only plugin that needs fpcalc; see Dockerfile.base.
+        RUNTIME_BASE: runtime_fpcalc
     container_name: go-music-acoustid
     # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
     # be two copies of one number kept in sync by hand — compose passed no

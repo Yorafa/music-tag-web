@@ -1,18 +1,15 @@
 package tasks
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"os/exec"
-	"strconv"
-	"strings"
+	"log"
 	"sync"
-	"time"
 
 	"gorm.io/gorm"
 
 	"go-music-tag/internal/audioext"
+	"go-music-tag/internal/fingerprint"
 )
 
 // FpIndexHandler fills in music_folder.duration for library audio.
@@ -53,9 +50,6 @@ type fpIndexRow struct {
 const (
 	defaultFpIndexWorkers = 4
 	defaultFpIndexBatch   = 50
-	// fpIndexTimeout bounds one fpcalc run. fpcalc decodes the entire file,
-	// so this has to accommodate long tracks; 60s is roughly a 15-minute one.
-	fpIndexTimeout = 60 * time.Second
 )
 
 func (h *FpIndexHandler) ProcessTask(ctx context.Context, t Task) error {
@@ -64,11 +58,13 @@ func (h *FpIndexHandler) ProcessTask(ctx context.Context, t Task) error {
 	}
 	fpcalcPath := h.FPcalcPath
 	if fpcalcPath == "" {
-		p, err := exec.LookPath("fpcalc")
+		p, err := fingerprint.LookPath()
 		if err != nil {
 			// Not an error worth retrying: without the binary there is no
 			// index to build, and stage 3 already degrades to skipping
 			// itself. Returning nil keeps this out of the dead-letter queue.
+			log.Printf("[fpindex] no fpcalc on PATH; music_folder.duration stays empty "+
+				"and the fingerprint stage falls back to a size-filtered disk walk: %v", err)
 			return nil
 		}
 		fpcalcPath = p
@@ -103,7 +99,7 @@ func (h *FpIndexHandler) ProcessTask(ctx context.Context, t Task) error {
 		go func() {
 			defer wg.Done()
 			for row := range jobs {
-				dur, derr := probeDuration(ctx, fpcalcPath, row.Path)
+				secs, derr := fingerprint.DurationOf(ctx, fpcalcPath, row.Path)
 				mu.Lock()
 				if derr != nil {
 					failed++
@@ -121,7 +117,7 @@ func (h *FpIndexHandler) ProcessTask(ctx context.Context, t Task) error {
 				}
 				if uerr := h.DB.WithContext(ctx).Table("music_folder").
 					Where("path = ?", row.Path).
-					Update("duration", dur).Error; uerr != nil {
+					Update("duration", int64(secs)).Error; uerr != nil {
 					mu.Lock()
 					failed++
 					mu.Unlock()
@@ -186,52 +182,6 @@ func (h *FpIndexHandler) pendingFiles() ([]fpIndexRow, error) {
 		}
 	}
 	return out, nil
-}
-
-// probeDuration runs fpcalc -raw and returns the duration in whole seconds.
-//
-// Only the first line is needed here, so the read stops at the fingerprint
-// line rather than pulling ~3.8KB of subfingerprints per file through the
-// pipe for a value that sits in DURATION=.
-func probeDuration(ctx context.Context, fpcalcPath, path string) (int64, error) {
-	runCtx, cancel := context.WithTimeout(ctx, fpIndexTimeout)
-	defer cancel()
-
-	// #nosec G204 -- fpcalcPath comes from LookPath, not from a request.
-	cmd := exec.CommandContext(runCtx, fpcalcPath, "-raw", path)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return 0, err
-	}
-	if err := cmd.Start(); err != nil {
-		return 0, err
-	}
-	defer func() { _ = cmd.Wait() }()
-
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "DURATION=") {
-			continue
-		}
-		secs, perr := strconv.ParseFloat(strings.TrimPrefix(line, "DURATION="), 64)
-		if perr != nil {
-			return 0, fmt.Errorf("fpindex: bad DURATION line %q: %w", line, perr)
-		}
-		// Stop reading. Closing stdout makes fpcalc see EPIPE on its next
-		// write, which is fine — we already have the number, and for a long
-		// track the remaining subfingerprints are most of the work.
-		d := int64(secs)
-		if d < 0 {
-			d = 0
-		}
-		return d, nil
-	}
-	if serr := scanner.Err(); serr != nil {
-		return 0, serr
-	}
-	return 0, fmt.Errorf("fpindex: fpcalc produced no DURATION line for %s", path)
 }
 
 // compile-time assertion that the handler satisfies the task contract.

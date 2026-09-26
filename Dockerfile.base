@@ -1,0 +1,41 @@
+# Shared runtime base for the three images that fingerprint audio:
+# gateway (dedup's fingerprint stage), worker (the duration indexer), and
+# the acoustid plugin.
+#
+# # Why this file exists
+#
+# chromaprint is 88 MB of /usr/lib, almost all of it the ffmpeg stack it links
+# against. It cannot be trimmed: libavcodec.so hard-links every codec it was
+# built with via DT_NEEDED, so deleting the encoders that fingerprinting never
+# calls — libx265 alone is 19 MB — leaves fpcalc refusing to start with
+# "Error loading shared library". The only way to have it three times for the
+# price of once is to not build it three times.
+#
+# It could not simply be the same `apk add` line in three Dockerfiles. A
+# layer is identified by the content of the filesystem diff it produces, and
+# apk stamps freshly created symlinks with the current time, so two runs of
+# an identical install differ by a few seconds of mtime and land in
+# different layers. Measured: the file lists were byte-identical and the layer
+# digests were not, which is how the same 88 MB ended up stored twice.
+#
+# Building it once here and having the three images FROM it is what actually
+# collapses them to a single copy. Referenced through
+# `additional_contexts: fpcalbase: service:fpcalc-base` in docker-compose.yml,
+# so `docker compose up -d --build` still builds everything in the right
+# order without a separate manual step.
+FROM alpine:3.20
+
+# Byte-identical to the runtime installs in Dockerfile.gateway and
+# Dockerfile.worker; keeping the three in sync is not required any more (this
+# layer is now the only copy) but it keeps a rebuild from producing a
+# surprise diff.
+RUN apk add --no-cache ca-certificates tzdata chromaprint
+
+# Asserted at build time, in this layer, so a build that somehow loses the
+# binary fails loudly. Every consumer degrades to returning nothing when
+# fpcalc is missing — the dedup stage skips itself, the indexer writes no
+# durations, the plugin returns zero songs — and all three of those look
+# exactly like "there was nothing to find".
+RUN fpcalc -version
+
+ENV TZ=Asia/Shanghai

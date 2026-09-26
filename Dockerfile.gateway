@@ -48,23 +48,25 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /gateway ./cmd/gateway
 
 # Stage 3: runtime
-FROM alpine:3.20
+FROM fpcalbase
+# fpcalbase is Dockerfile.base, wired in through
+# `additional_contexts: fpcalbase: service:fpcalc-base` in docker-compose.yml.
+# It carries /usr/bin/fpcalc, which dedup's stage 3 shells out to. Without it
+# Checker.fpcalcAvailable() is false and the whole fingerprint stage is
+# skipped — silently, unless the log is read, since the stage is optional by
+# design. The image carries the binary and nothing else from the suite (no
+# fpcalc usage beyond that one call, no AcoustID client), but the Alpine
+# package pulls the ffmpeg decode libraries it links against, so this is most
+# of the image's size: 88 MB of /usr/lib, against 12 MB for the six plugins
+# that do not fingerprint anything.
 #
-# chromaprint provides /usr/bin/fpcalc, which dedup's stage 3 shells out to.
-# Without it Checker.fpcalcAvailable() is false and the whole fingerprint
-# stage is skipped — silently, since the stage is optional by design and
-# nothing logged that it had been disabled. The image carries the binary and
-# nothing else from the suite (no fpcalc usage beyond the one call, no
-# AcoustID client), but the Alpine package pulls the ffmpeg decode libraries
-# it links against, so this is most of the image's size.
-#
-# Gateway only. The worker does not import internal/dedup at all any more
-# (the tag:batch_auto chain that used it was deleted), so adding it there
-# would be ~90 MB for a code path that cannot run.
-#
-# The package lives in Alpine's community repository, which the base image's
-# /etc/apk/repositories already lists for this release.
-RUN apk add --no-cache ca-certificates tzdata chromaprint
+# Those 88 MB cannot be trimmed — libavcodec.so hard-links every codec it was
+# built with, so deleting the encoders fingerprinting never calls (libx265
+# alone is 19 MB) leaves fpcalc refusing to start. They can, however, be
+# stored once: the worker and the acoustid plugin need the identical package
+# for the same reason, and a shared base is what makes that true. See
+# Dockerfile.base for why repeating the same `apk add` line three times does
+# not.
 ENV TZ=Asia/Shanghai
 
 # REVIEW.md P3-2: run unprivileged. The gateway hosts the unauthenticated

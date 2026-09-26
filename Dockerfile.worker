@@ -17,19 +17,20 @@ COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /worker ./cmd/worker
 
-FROM alpine:3.20
-# Pure-Go runtime: the only yt-dlp consumer is the youtube plugin (the
-# worker's download:generic task delegates the exec over gRPC via
-# plugin.DownloadSource), so python3 / yt-dlp / ffmpeg live exclusively in
-# the youtube plugin image (see Dockerfile.plugin).
+FROM fpcalbase
+# fpcalbase is Dockerfile.base, wired in through
+# `additional_contexts: fpcalbase: service:fpcalc-base` in docker-compose.yml.
 #
-# chromaprint IS needed here: the worker runs the duration indexer
-# (index:fp_duration), which shells out to fpcalc once per library track.
-# It is not here for tag I/O — the gateway and worker both do that in pure Go
-# via go.senan.xyz/taglib. The Alpine package pulls ffmpeg's decode libraries
-# in with it, which is where most of the added weight goes.
-RUN apk add --no-cache ca-certificates tzdata chromaprint
-RUN fpcalc -version
+# It carries /usr/bin/fpcalc for one reason: the worker runs the duration
+# indexer (index:fp_duration), which shells out once per library track. It is
+# not here for tag I/O — the gateway and worker both do that in pure Go via
+# go.senan.xyz/taglib — and it is not here for downloads, since the only
+# yt-dlp consumer is the youtube plugin, which the worker's download:generic
+# task reaches over gRPC.
+#
+# Sharing the base with the gateway and the acoustid plugin is what keeps
+# this at one stored copy of ffmpeg's libraries rather than three. See
+# Dockerfile.base.
 ENV TZ=Asia/Shanghai
 
 # REVIEW.md P3-2: run unprivileged. The worker writes into the music

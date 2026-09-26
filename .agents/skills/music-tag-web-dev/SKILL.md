@@ -40,8 +40,8 @@ Self-hosted Docker 化音乐元数据批量编辑工具。支持 FLAC/APE/WAV/AI
 | Tag I/O | `bogem/id3v2` + `dhowden/tag` (pure Go, no FFI) |
 | Auth | JWT in-memory + bcrypt; fail-closed defaults |
 | Encryption | gRPC TLS optional (`GRPC_USE_TLS=1` + `GRPC_TLS_CA_FILE`) |
-| Deploy | `docker compose up -d --build` starts gateway + worker + 8 gRPC plugins + redis |
-| Image size | ~560 MB total: gateway 131 MB, worker 33 MB, six name-search plugins 21.5 MB each, acoustid 114 MB, youtube 199 MB. Both gateway and worker carry `chromaprint` (fpcalc) for the fingerprint dedup stage |
+| Deploy | `docker compose up -d --build` starts gateway + worker + 8 gRPC plugins + redis, plus `fpcalc-base` (a build-only base image; its container does nothing) |
+| Image size | gateway 131 MB, worker 126 MB, acoustid 115 MB, youtube 199 MB, six name-search plugins 21.5 MB each. gateway/worker/acoustid all `FROM` the shared `fpcalc-base`, so chromaprint's 88 MB of ffmpeg libraries is stored once |
 
 ### Frontend (`frontend/`)
 

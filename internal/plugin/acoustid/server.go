@@ -4,7 +4,9 @@
 //   - 不是搜索源：title 字段实际是 **音频文件完整路径**，调 fpcalc 生成 fingerprint 后 POST api.acoustid.org。
 //   - SupportsSearch=false（handler 走 fetch_id3_by_title）。
 //   - fpcalc 二进制缺失时静默降级返回空，警示日志，让聚合源 (smart_tag) 可继续工作。
-//   - fpcalc v1.5+ 支持 -json 输出；老版本（v1.4 等）自动 fallback 到文本行解析。
+//   - fpcalc 的调用与输出解析在 internal/fingerprint，与 dedup 声纹层共用一份。
+//     这里用压缩指纹（-json），因为那是 web API 接受的形式；dedup 用的是
+//     子指纹列表（-raw），两者不能互相比较，也不能互换。
 package acoustid
 
 import (
@@ -17,11 +19,10 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
-	"os/exec"
-	"strings"
 	"time"
 
 	pb "go-music-tag/api/proto/tagplugin"
+	"go-music-tag/internal/fingerprint"
 )
 
 const apiURL = "https://api.acoustid.org/v2/lookup"
@@ -52,12 +53,11 @@ func NewServer() *Server {
 	if s.apiKey == defaultAPIKey {
 		log.Printf("[acoustid] %s not set; using the shared public test key, which AcoustID may expire. Register at https://acoustid.org/login", envAPIKey)
 	}
-	s.fpcalc = "fpcalc"
-	if path, err := exec.LookPath("fpcalc"); err == nil {
+	if path, err := fingerprint.LookPath(); err == nil {
 		s.fpcalc = path
 	} else {
 		s.disabled = true
-		log.Printf("[acoustid] fpcalc not on PATH; every lookup will return empty")
+		log.Printf("[acoustid] %v; every lookup will return empty", err)
 	}
 	return s
 }
@@ -86,15 +86,18 @@ func (s *Server) FetchId3ByTitle(ctx context.Context, req *pb.FetchId3Request) (
 	if req.Title == "" {
 		return &pb.FetchId3Response{}, nil
 	}
-	fp, duration, err := runFPCalc(s.fpcalc, req.Title)
+	// The packed form, because that is what the AcoustID web API accepts.
+	// The subfingerprint list the dedup stage compares is a different thing
+	// and lives in internal/fingerprint alongside this call.
+	fp, err := fingerprint.Compress(ctx, s.fpcalc, req.Title)
 	if err != nil {
 		// 最常见的原因是容器没挂音乐库，fpcalc 打不开文件。
 		log.Printf("[acoustid] fpcalc failed for %s: %v", req.Title, err)
 		return &pb.FetchId3Response{}, nil
 	}
-	matches, err := s.match(ctx, fp, duration)
+	matches, err := s.match(ctx, fp.Data, fp.Duration)
 	if err != nil {
-		log.Printf("[acoustid] match request failed for %s (fp len=%d dur=%d): %v", req.Title, len(fp), duration, err)
+		log.Printf("[acoustid] match request failed for %s (fp len=%d dur=%d): %v", req.Title, len(fp.Data), fp.Duration, err)
 		return &pb.FetchId3Response{}, nil
 	}
 	out := make([]*pb.Song, len(matches))
@@ -108,54 +111,6 @@ func (s *Server) FetchId3ByTitle(ctx context.Context, req *pb.FetchId3Request) (
 
 func (s *Server) FetchLyric(_ context.Context, _ *pb.FetchLyricRequest) (*pb.FetchLyricResponse, error) {
 	return &pb.FetchLyricResponse{}, nil
-}
-
-// ─── fpcalc ────────────────────────────────────────────────────────────────
-
-// runFPCalc 优先 fpcalc v1.5+ 的 -json 模式；旧版走文本模式 fallback。
-func runFPCalc(fpcalcPath, audioPath string) (string, int, error) {
-	cmd := exec.Command(fpcalcPath, "-json", audioPath)
-	out, err := cmd.Output()
-	if err == nil {
-		var parsed struct {
-			Duration    float64 `json:"duration"`
-			Fingerprint string  `json:"fingerprint"`
-		}
-		if jerr := json.Unmarshal(out, &parsed); jerr == nil && parsed.Fingerprint != "" {
-			return parsed.Fingerprint, int(parsed.Duration), nil
-		}
-	}
-	return runFPCalcText(fpcalcPath, audioPath)
-}
-
-// runFPCalcText 解析 fpcalc 默认文本输出：DURATION=N\nFINGERPRINT=...
-func runFPCalcText(fpcalcPath, audioPath string) (string, int, error) {
-	cmd := exec.Command(fpcalcPath, audioPath)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", 0, fmt.Errorf("fpcalc: %w", err)
-	}
-	var (
-		fp  string
-		dur int
-	)
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "FINGERPRINT="):
-			fp = strings.TrimPrefix(line, "FINGERPRINT=")
-		case strings.HasPrefix(line, "DURATION="):
-			if s := strings.TrimPrefix(line, "DURATION="); s != "" {
-				var d float64
-				fmt.Sscanf(s, "%f", &d)
-				dur = int(d)
-			}
-		}
-	}
-	if fp == "" {
-		return "", 0, fmt.Errorf("fpcalc text: no fingerprint (output=%q)", string(out))
-	}
-	return fp, dur, nil
 }
 
 // ─── match ────────────────────────────────────────────────────────────────
