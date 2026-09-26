@@ -162,7 +162,7 @@ Route groups:
 - `POST /api/download/` — generic download enqueue (source-routed; class A 加入库)
 - `GET /api/stream/` — audio proxy streaming (+ `?as_attachment=1` for browser download)
 - `GET /api/sources/` — dynamic source list
-- `GET /api/clear_celery/` — clear task queue
+- `POST /api/clear_async_tasks/` — clear task queue（曾名 `/api/clear_celery/`，已改名）
 - `GET /api/active_queue/` — queue status
 - `GET /api/full_scan_folder/` — full recursive scan
 - `POST /api/check_duplicate/` — read-only dedup scan over an explicit path list (逐行返回，单个失败不拖垮整批)

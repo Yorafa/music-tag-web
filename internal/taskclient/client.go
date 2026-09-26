@@ -37,7 +37,7 @@ func Client() *asynq.Client {
 	return client
 }
 
-// Inspector is the asynq Inspector for /api/active_queue/ + /api/clear_celery/.
+// Inspector is the asynq Inspector for /api/active_queue/ + /api/clear_async_tasks/.
 func Inspector() *asynq.Inspector {
 	ensure()
 	return inspector
@@ -110,7 +110,7 @@ func EnqueueContext(ctx context.Context, task *asynq.Task, opts ...asynq.Option)
 	return c.EnqueueContext(ctx, task, opts...)
 }
 
-// CancelAll cancels every in-flight task (used by /api/clear_celery/).
+// CancelAll cancels every in-flight task (used by /api/clear_async_tasks/).
 // asynq v0.24.x does not expose Inspector.CancelAll. Instead we delete every
 // pending task in every queue we care about (best-effort walk over the known
 // queues). Active tasks finish naturally.

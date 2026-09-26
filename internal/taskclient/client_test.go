@@ -86,7 +86,7 @@ func TestEnqueueContext_RespectsCancellation(t *testing.T) {
 	}
 }
 
-// TestCancelAll_ClearsEveryQueue backs /api/clear_celery/. The queue names
+// TestCancelAll_ClearsEveryQueue backs /api/clear_async_tasks/. The queue names
 // here are a hand-maintained list in CancelAll, and a typo there means the
 // operator clicks "clear" and a queue silently survives.
 func TestCancelAll_ClearsEveryQueue(t *testing.T) {

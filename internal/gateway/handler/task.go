@@ -10,9 +10,14 @@ import (
 	"go-music-tag/internal/tasks"
 )
 
-// ClearAsyncTasks handles GET /api/clear_celery/ — cancels every active
-// pending task via asynq Inspector. Mirrors Django's `clear_celery()` which
-// calls `celery.app.control.purge()`.
+// ClearAsyncTasks handles POST /api/clear_async_tasks/ — cancels every
+// active pending task via asynq Inspector.
+//
+// The route was /api/clear_celery/ until the queue was renamed off the
+// Python name; it still mirrors the upstream Django view `clear_celery()`,
+// which called `celery.app.control.purge()`. The endpoint kept the old path
+// while the handler, the taskclient call and the frontend function were all
+// renamed, so the URL was the one place in the chain still speaking Celery.
 func ClearAsyncTasks(c *gin.Context) {
 	taskclient.Init()
 	n, err := taskclient.CancelAll()
@@ -24,7 +29,8 @@ func ClearAsyncTasks(c *gin.Context) {
 }
 
 // ActiveQueue handles GET /api/active_queue/ — returns workers, queues,
-// active and pending task counts. Mirrors Django's Celery inspect API.
+// active and pending task counts. Mirrors the upstream Django Celery
+// inspect API.
 func ActiveQueue(c *gin.Context) {
 	taskclient.Init()
 	insp := taskclient.Inspector()

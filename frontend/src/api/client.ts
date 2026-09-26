@@ -244,11 +244,11 @@ export interface DeleteFilesReport {
   failed: number;
 }
 
-/** POST /api/clear_celery/ — deletes every pending asynq task.
+/** POST /api/clear_async_tasks/ — deletes every pending asynq task.
  *  Destructive, hence POST (REVIEW.md P1-1). Same interceptor rationale
  *  as getActiveQueue above. */
 export async function clearAsyncTasks() {
-  const { data } = await api.post('clear_celery/');
+  const { data } = await api.post('clear_async_tasks/');
   return data;
 }
 

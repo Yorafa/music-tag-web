@@ -159,3 +159,47 @@ func TestSetup_SPAAndStaticAssets(t *testing.T) {
 		t.Fatalf("/api miss body=%q", w.Body.String())
 	}
 }
+
+// TestSetup_TaskQueueRoutes pins the queue endpoints after the rename off
+// the Python name.
+//
+// Both halves matter. The handler (ClearAsyncTasks), the taskclient call and
+// the frontend function (clearAsyncTasks) were already renamed while the URL
+// stayed /api/clear_celery/ — the one link in the chain still speaking
+// Celery. And this is a hard cut: no alias was kept, so the old path has to
+// be asserted GONE. A test that only checked the new path would still pass if
+// someone re-added the old one, which is the state we deliberately left.
+func TestSetup_TaskQueueRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("STATIC_DIR", t.TempDir())
+
+	r := gin.New()
+	Setup(r, &config.Config{
+		MusicDir:  t.TempDir(),
+		JWTSecret: "test-secret",
+	}, nil)
+
+	registered := map[string]bool{}
+	for _, route := range r.Routes() {
+		registered[route.Method+" "+route.Path] = true
+	}
+
+	if !registered["POST /api/clear_async_tasks/"] {
+		t.Error("POST /api/clear_async_tasks/ is not registered")
+	}
+	if !registered["GET /api/active_queue/"] {
+		t.Error("GET /api/active_queue/ is not registered")
+	}
+	// The old path must 404, not silently keep working.
+	if registered["POST /api/clear_celery/"] {
+		t.Error("POST /api/clear_celery/ is still registered; the rename was meant to be a cut, not an alias")
+	}
+
+	// Both destructive/queue routes are POST-only. A GET on the clearing
+	// route would be reachable by an induced click on a crafted link
+	// (SameSite=Lax still sends the cookie on a top-level navigation) —
+	// the reason router.go registers it under authed.POST.
+	if registered["GET /api/clear_async_tasks/"] {
+		t.Error("GET /api/clear_async_tasks/ is registered; it must be POST-only")
+	}
+}

@@ -123,7 +123,7 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// cross-origin form/fetch to pass a preflight, which we do not
 		// satisfy for these routes. The frontend client already POSTs
 		// these three; /task2/ has no in-app caller and is POST-only now.
-		authed.POST("/clear_celery/", handler.ClearAsyncTasks)
+		authed.POST("/clear_async_tasks/", handler.ClearAsyncTasks)
 		authed.GET("/active_queue/", handler.ActiveQueue) // read-only
 		authed.POST("/full_scan_folder/", handler.FullScanFolder)
 		// Incremental scan. The handler and the worker-side registration
