@@ -36,7 +36,7 @@
 | 前端 | React 19 + Vite 7 + TypeScript + Tailwind 4 + shadcn/ui + Zustand |
 | 鉴权 | JWT in-memory + bcrypt；fail-closed 默认值检测 |
 | 加密 | gRPC TLS 可选（env `GRPC_USE_TLS=1` + 可选 `GRPC_TLS_CA_FILE`） |
-| 部署 | 单条 `docker compose up -d --build` 拉起 gateway + worker + 8 gRPC plugin + redis（nginx 已合并进 gateway，不再有独立服务；React SPA 已烘进 gateway 镜像，不需要 host 侧先 build） |
+| 部署 | 单条 `docker compose up -d --build` 拉起 gateway + worker + 8 gRPC plugin + redis，共 11 个容器（nginx 已合并进 gateway，不再有独立服务；React SPA 已烘进 gateway 镜像，不需要 host 侧先 build）。另有 `fpcalc-base` 是 `scale: 0` 的构建用服务：镜像会构建，但不创建容器 |
 | Docker image | gateway 131 MB、worker 126 MB、6 个按曲名搜索的插件各 21.5 MB、acoustid 插件 115 MB、youtube 插件 199 MB（yt-dlp + ffmpeg）。gateway / worker / acoustid 共用一个 `fpcalc-base` 基础镜像（102 MB，其中 88 MB 是 chromaprint 拉进来的 ffmpeg 库），所以那 88 MB 只存一份 |
 
 完整 operator 视角的安全默认值见 [`SECURITY.md`](SECURITY.md)；plugable plugin 设计草图见 [`docs/plugable-plugins.md`](docs/plugable-plugins.md)。
