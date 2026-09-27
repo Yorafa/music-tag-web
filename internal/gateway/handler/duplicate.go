@@ -288,17 +288,30 @@ type deleteReport struct {
 	Failed  int         `json:"failed"`
 }
 
+// renameAside is os.Rename behind a variable so a test can make it fail the
+// way a real deployment makes it fail.
+//
+// This is not a hypothetical: DATA_DIR and MUSIC_DIR are separate mounts in
+// the default compose layout, so a rename between them returns EXDEV. A test
+// with one temp dir is one device and can never produce that, which is how
+// RestoreTrash shipped a plain os.Rename that failed with "invalid
+// cross-device link" on every file in production while its Go test passed.
+//
+// The alternative — an integration test on two real mounts — is not runnable
+// in `go test`, and the alternative before that, a per-call rename parameter,
+// cannot reach a caller that goes through the HTTP handler.
+var renameAside = os.Rename
+
 // moveAside renames src into destDir, falling back to copy+remove when the
 // two are on different filesystems (EXDEV) — which they are here whenever
 // DATA_DIR and MUSIC_DIR are separate mounts, i.e. the default compose
 // layout. Without the fallback, DeleteFiles would work in `go test` (one
 // temp dir) and fail in every real deployment.
 //
-// The rename is a parameter so a test can inject the EXDEV that a single
-// temp dir can never produce. The alternative — an integration test on two
-// real mounts — is not runnable in `go test`.
+// The rename is also a parameter so a test can inject the EXDEV directly,
+// without going through the package-level seam above.
 func moveAside(src, dest string) error {
-	return moveAsideWith(src, dest, os.Rename)
+	return moveAsideWith(src, dest, renameAside)
 }
 
 func moveAsideWith(src, dest string, rename func(string, string) error) error {

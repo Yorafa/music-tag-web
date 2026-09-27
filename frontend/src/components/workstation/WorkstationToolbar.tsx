@@ -12,6 +12,7 @@ import {
   Copy,
   ScanSearch,
   Tags,
+  ArchiveRestore,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -33,6 +34,7 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { ParseFilenamesModal } from '@/components/scraper/ParseFilenamesModal';
 import { RenameFromTagsDialog } from '@/components/workstation/RenameFromTagsDialog';
+import { TrashDialog } from '@/components/workstation/TrashDialog';
 import { BatchEditDialog } from '@/components/workstation/BatchEditDialog';
 import { skippedNotesFromUpdate } from '@/utils/skippedNotes';
 import { useWorklistStore, type WorklistGrouping } from '@/store/useWorklistStore';
@@ -109,6 +111,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   const [isDeletingDup, setIsDeletingDup] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
 
   // Scrape settings
   const [selectedSources, setSelectedSources] = useState<MusicSource[]>([
@@ -768,6 +771,19 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           <span>删除选中{hasSelection ? ` (${deleteTargets.length})` : ''}</span>
         </Button>
 
+        {/* Where the files those two buttons removed went. Without this the
+            "可恢复" in their confirm dialogs is a promise the UI cannot keep. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setTrashOpen(true)}
+          className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground"
+          title="查看并恢复已删除的文件"
+        >
+          <ArchiveRestore className="w-3.5 h-3.5" />
+          <span>回收站</span>
+        </Button>
+
         {/* Scan local buttons */}
       </div>
 
@@ -953,6 +969,8 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
       {/* Delete confirmation. Names every file, says plainly that the
           originals are kept, and states that the delete is recoverable —
           because the honest description of a quarantine is not "删除". */}
+      <TrashDialog open={trashOpen} onOpenChange={setTrashOpen} />
+
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>

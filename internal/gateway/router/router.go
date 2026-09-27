@@ -154,6 +154,11 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// content. It moves to DATA_DIR/.trash rather than unlinking,
 		// and logs an audit row — see handler/duplicate.go for why.
 		authed.POST("/delete_files/", handler.DeleteFiles)
+		// ...and these two are the other half of that promise: without them the
+		// trash is a dot-directory only reachable by docker exec, which makes
+		// "recoverable" true on disk and false in practice.
+		authed.GET("/trash/", handler.ListTrash)
+		authed.POST("/trash/restore/", handler.RestoreTrash)
 		// Task record list
 		// Operation history audit log endpoints
 		authed.GET("/operation_logs/", handler.ListOperationLogs)

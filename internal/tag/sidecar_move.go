@@ -27,9 +27,19 @@ type SidecarMove struct {
 // client pointing a row at a path it cannot verify. A sidecar that fails
 // to move is reported so the caller can warn; the audio stays renamed.
 //
-// Covers (`cover-<album>.<ext>`) are keyed by ALBUM, not by file name, so
-// they only need to travel when the directory changes — a pure base-name
-// rename leaves them correctly in place.
+// Two classes travel, and the difference is what they are keyed by:
+//
+//   - Track-scoped (`<base>.lrc`) follows the file even on a pure base-name
+//     rename, because it is named after the track.
+//   - Album-scoped (covers, album.nfo, cue sheets) only travels when the
+//     DIRECTORY changes, because the file names say nothing about which
+//     track they belong to. A base-name rename leaves them correctly in
+//     place.
+//
+// Before album-scoped files were carried at all, a tidy left `album.nfo`
+// behind in the old directory while the audio moved out — and since the
+// pruner refuses to remove a directory holding any file, that stranded .nfo
+// is exactly what kept the emptied directory alive and undeletable.
 func MoveSidecars(oldPath, newPath string) []SidecarMove {
 	var moves []SidecarMove
 
@@ -39,16 +49,91 @@ func MoveSidecars(oldPath, newPath string) []SidecarMove {
 		moves = append(moves, *m)
 	}
 
-	// Covers are named after the album, not the track, so they only
-	// travel when the directory changes. A base-name rename leaves them
+	// Album-scoped files are named after the album, not the track, so they
+	// only travel when the directory changes. A base-name rename leaves them
 	// exactly where they belong.
+	//
+	// The check is a fast path, not the correctness guard: both helpers skip
+	// a from==to move, so calling them with oldDir == newDir would be a no-op.
+	// It is kept because a base-name rename is the common case (从标签改名) and
+	// this way it costs no ReadDir of the album folder.
 	oldDir, newDir := filepath.Dir(oldPath), filepath.Dir(newPath)
 	if oldDir != newDir {
-		for _, m := range moveCovers(oldDir, newDir) {
-			moves = append(moves, m)
-		}
+		moves = append(moves, moveCovers(oldDir, newDir)...)
+		moves = append(moves, moveAlbumMetadata(oldDir, newDir)...)
 	}
 
+	return moves
+}
+
+// albumMetaNames are the album-scoped files that are part of the music rather
+// than application state, matched case-insensitively and in full. `album.nfo`
+// is the Jellyfin/Plex convention; without it a reorganise splits an album's
+// metadata away from its audio.
+var albumMetaNames = map[string]bool{
+	"album.nfo": true,
+}
+
+// cueExt marks a cue sheet: one file describing a whole album's track list,
+// conventionally named after the album or after track 1. It is album-scoped
+// whatever it is called, so the extension is the test.
+const cueExt = ".cue"
+
+// bareCoverBases are the cover names that carry no album suffix. `cover.jpg`
+// and `folder.jpg` are as standard as `cover-<album>.jpg`, and a tidy that
+// carried the third while stranding the first two is not carrying the cover.
+var bareCoverBases = map[string]bool{
+	"cover":  true,
+	"folder": true,
+}
+
+// isAlbumMetaSidecar reports whether name is an album-scoped file that belongs
+// with the audio. Deliberately a short, explicit list rather than a pattern:
+// everything here is moved out of the user's directory on a routine
+// operation, so a name nobody has a reason to expect moving should not move.
+func isAlbumMetaSidecar(name string) bool {
+	if strings.HasPrefix(name, ".") || strings.ContainsAny(name, `/\`) {
+		return false
+	}
+	lower := strings.ToLower(name)
+	if albumMetaNames[lower] {
+		return true
+	}
+	if strings.EqualFold(filepath.Ext(lower), cueExt) {
+		return true
+	}
+	base := strings.TrimSuffix(lower, filepath.Ext(lower))
+	return bareCoverBases[base] && coverExts[strings.TrimPrefix(filepath.Ext(lower), ".")]
+}
+
+// moveAlbumMetadata carries the album-scoped non-cover files (album.nfo, cue
+// sheets) from oldDir to newDir.
+//
+// When several tracks from one directory are reorganised into DIFFERENT
+// directories, these files can only follow one of them — the first move takes
+// them and the rest find nothing. That is the same trade-off moveCovers has
+// always made, and duplicating a metadata file per destination would be worse
+// than picking one: two .nfo files claiming to describe the same album is a
+// mess a user has to unpick by hand.
+func moveAlbumMetadata(oldDir, newDir string) []SidecarMove {
+	entries, err := os.ReadDir(oldDir)
+	if err != nil {
+		// A folder we cannot list simply has nothing to carry. The caller
+		// already moved the audio, so this is not worth a warning.
+		return nil
+	}
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
+		return nil
+	}
+	var moves []SidecarMove
+	for _, e := range entries {
+		if e.IsDir() || !isAlbumMetaSidecar(e.Name()) {
+			continue
+		}
+		if m := moveSidecarFile(filepath.Join(oldDir, e.Name()), filepath.Join(newDir, e.Name())); m != nil {
+			moves = append(moves, *m)
+		}
+	}
 	return moves
 }
 

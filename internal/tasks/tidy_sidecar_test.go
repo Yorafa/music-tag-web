@@ -36,7 +36,7 @@ func TestTidyOne_CarriesSidecars(t *testing.T) {
 		"cover-MyAlbum.jpg": "JPEGDATA",
 		"cover-MyAlbum.png": "PNGDATA",
 		"cover-OtherAl.jpg": "JPEGDATA",
-		"album.nfo":         "unrelated",
+		"album.nfo":         "album metadata",
 		"notacover-Xyz.jpg": "unrelated",
 	} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
@@ -55,7 +55,13 @@ func TestTidyOne_CarriesSidecars(t *testing.T) {
 		t.Fatalf("the audio file did not move: %v", err)
 	}
 
-	for _, name := range []string{"song.lrc", "cover-MyAlbum.jpg", "cover-MyAlbum.png", "cover-OtherAl.jpg"} {
+	// album.nfo is album-scoped metadata and belongs with the audio, so it
+	// travels too. It used to be asserted as "unrelated" and left behind —
+	// which is what stranded it in the old directory and stopped the pruner
+	// from ever removing that directory. See internal/tag/sidecar_move.go.
+	for _, name := range []string{
+		"song.lrc", "cover-MyAlbum.jpg", "cover-MyAlbum.png", "cover-OtherAl.jpg", "album.nfo",
+	} {
 		if _, err := os.Stat(filepath.Join(dstDir, name)); err != nil {
 			t.Errorf("%s did not follow the track into the new folder: %v", name, err)
 		}
@@ -64,8 +70,8 @@ func TestTidyOne_CarriesSidecars(t *testing.T) {
 		}
 	}
 
-	// Files that are not sidecars of this track must be left alone.
-	for _, name := range []string{"album.nfo", "notacover-Xyz.jpg"} {
+	// Files that are not album metadata must be left alone.
+	for _, name := range []string{"notacover-Xyz.jpg"} {
 		if _, err := os.Stat(filepath.Join(root, name)); err != nil {
 			t.Errorf("%s was swept up by the carry: %v", name, err)
 		}

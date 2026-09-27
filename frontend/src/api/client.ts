@@ -249,6 +249,74 @@ export interface DeleteFilesReport {
   failed: number;
 }
 
+/** GET /api/trash/ — what 删除选中 / 删除重复 removed, and where it came from.
+ *
+ *  The delete path moves files to `DATA_DIR/.trash/<timestamp>/` rather than
+ *  unlinking them, and the confirm dialog promises they are recoverable. This
+ *  endpoint is the other half of that promise: without it the trash is a
+ *  dot-directory only reachable by `docker exec`, which makes "recoverable"
+ *  true on disk and false in practice.
+ *
+ *  Batches come back newest first. There is no purge endpoint on purpose —
+ *  whoever wants the disk space can remove the directory on the host, where
+ *  the action is visible to them. */
+export interface TrashFile {
+  /** Path relative to MUSIC_DIR: where the file was, and where a restore
+   *  puts it back. */
+  rel_path: string;
+  size: number;
+  modified_at: string;
+  is_audio: boolean;
+  content_type: string;
+}
+
+export interface TrashBatch {
+  id: string;
+  deleted_at: string;
+  files: TrashFile[];
+  total_size: number;
+}
+
+export interface TrashListing {
+  batches: TrashBatch[];
+  total_files: number;
+  truncated: boolean;
+  total_size: number;
+  root: string;
+}
+
+export async function listTrash(): Promise<TrashListing> {
+  const { data } = await api.get('trash/');
+  return unwrapEnvelope<TrashListing>(data, 'trash');
+}
+
+export interface RestoreReport {
+  results: Array<{
+    rel_path: string;
+    status: string;
+    reason?: string;
+    restored_to?: string;
+  }>;
+  restored: number;
+  failed: number;
+}
+
+/** POST /api/trash/restore/ — put files back where they came from.
+ *
+ *  Refuses rather than overwrites when the destination already exists, so
+ *  `exists` in the result is a real state the UI has to show, not an error to
+ *  swallow. */
+export async function restoreFromTrash(
+  batchId: string,
+  relPaths: string[],
+): Promise<RestoreReport> {
+  const { data } = await api.post('trash/restore/', {
+    batch_id: batchId,
+    rel_paths: relPaths,
+  });
+  return unwrapEnvelope<RestoreReport>(data, 'trash_restore');
+}
+
 /** POST /api/clear_async_tasks/ — deletes every pending asynq task.
  *  Destructive, hence POST (REVIEW.md P1-1). Same interceptor rationale
  *  as getActiveQueue above. */

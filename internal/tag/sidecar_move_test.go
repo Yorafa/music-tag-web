@@ -152,8 +152,11 @@ func TestMoveSidecars_IgnoresNonSidecarFiles(t *testing.T) {
 		"cover-.jpg",            // no album segment
 		"cover-MyAlbum.exe",     // not an image
 		"notacover-MyAlbum.jpg", // wrong prefix
-		"album.nfo",             // unrelated
 		"cover-MyAlbum.jpg.bak", // wrong extension
+		"notes.txt",             // not album metadata
+		"myalbum.nfo.bak",       // not the .nfo convention
+		"album.jpg",             // not one of the bare cover names
+		"song.mp3.bak",          // leftover temp
 	} {
 		if err := os.WriteFile(filepath.Join(oldDir, name), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
@@ -172,5 +175,131 @@ func TestMoveSidecars_IgnoresNonSidecarFiles(t *testing.T) {
 	}
 	if len(newDirEntries) == 0 {
 		t.Fatal("fixture setup failed")
+	}
+}
+
+// The reason album-scoped files are carried at all. A tidy moved the audio out
+// of a directory and left album.nfo behind; the pruner then refused to remove
+// that directory, because its rule is "no file may remain" — so one stranded
+// metadata file kept an emptied directory alive indefinitely. Observed on a
+// real library: 17/ and 17 (Explicit)/ survived every 清理残留 pass holding
+// nothing but album.nfo.
+func TestMoveSidecars_AlbumMetadataFollowsADirectoryChange(t *testing.T) {
+	oldDir := t.TempDir()
+	newDir := filepath.Join(t.TempDir(), "artist", "album")
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(oldDir, "song.mp3")
+	if err := os.WriteFile(oldPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"album.nfo",
+		"MyAlbum.cue",
+		"folder.jpg",
+		"cover.jpg",
+		"cover-MyAlbum.jpg",
+	} {
+		if err := os.WriteFile(filepath.Join(oldDir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Rename(oldPath, filepath.Join(newDir, "song.mp3")); err != nil {
+		t.Fatal(err)
+	}
+	if fails := moveFailures(MoveSidecars(oldPath, filepath.Join(newDir, "song.mp3"))); len(fails) != 0 {
+		t.Fatalf("MoveSidecars reported %d failures: %v", len(fails), fails)
+	}
+
+	for _, name := range []string{
+		"album.nfo", "MyAlbum.cue", "folder.jpg", "cover.jpg", "cover-MyAlbum.jpg",
+	} {
+		if _, err := os.Stat(filepath.Join(newDir, name)); err != nil {
+			t.Errorf("%s did not follow the audio: %v", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(oldDir, name)); err == nil {
+			t.Errorf("%s is still stranded in the old directory", name)
+		}
+	}
+	// And the old directory is now genuinely empty, which is the whole point.
+	entries, err := os.ReadDir(oldDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("old directory still holds %v — the pruner would refuse to remove it", names)
+	}
+}
+
+// A base-name rename must NOT drag album-scoped files across: nothing about
+// the directory changed, so they are already in the right place.
+func TestMoveSidecars_BaseNameRenameLeavesAlbumMetadataAlone(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old name.mp3")
+	newPath := filepath.Join(dir, "new name.mp3")
+	if err := os.WriteFile(oldPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"album.nfo", "folder.jpg"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Rename(oldPath, newPath); err != nil {
+		t.Fatal(err)
+	}
+	MoveSidecars(oldPath, newPath)
+
+	for _, name := range []string{"album.nfo", "folder.jpg"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("%s moved on a base-name rename; it is album-scoped, not track-scoped: %v", name, err)
+		}
+	}
+}
+
+// A directory holding one file nobody expects to move stays put. The list is
+// explicit on purpose: this runs over the user's whole library on a routine
+// operation, so the burden of proof is on adding a name, not on omitting one.
+func TestMoveSidecars_LeavesUnlistedFilesBehind(t *testing.T) {
+	oldDir := t.TempDir()
+	newDir := filepath.Join(t.TempDir(), "moved")
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(oldDir, "song.mp3")
+	if err := os.WriteFile(oldPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"album.jpg",         // not a bare cover name
+		"album.nfo.bak",     // not the convention
+		"track.srt",         // subtitles, not a sidecar we claim
+		"discogs.log",       // a log, not metadata
+		".hidden-album.nfo", // dotfile, never moved
+	} {
+		if err := os.WriteFile(filepath.Join(oldDir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Rename(oldPath, filepath.Join(newDir, "song.mp3")); err != nil {
+		t.Fatal(err)
+	}
+	MoveSidecars(oldPath, filepath.Join(newDir, "song.mp3"))
+
+	entries, err := os.ReadDir(newDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "song.mp3" {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("new directory holds %v; only the audio should have travelled", names)
 	}
 }
