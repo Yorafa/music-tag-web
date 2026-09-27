@@ -209,7 +209,6 @@ export function CloudSearchView() {
                   sourceList,
                   fileName,
                 );
-                const isDlSource = song.source === 'youtube';
                 const gradIdx = gradientIdx(`${song.name}-${song.artist}`);
                 // The plugins send album_img, not cover — reading song.cover
                 // here is why every card showed a letter placeholder.
@@ -322,8 +321,17 @@ export function CloudSearchView() {
                           <span className="hidden lg:inline text-[11px]">入库</span>
                         </Button>
 
-                        {/* Download to Browser Action */}
-                        {downloadUrl && !isDlSource && (
+                        {/* Download to Browser Action.
+                            No per-source exclusion: a YouTube row carries
+                            no `url` at all (the plugin returns id + cover
+                            only), so resolveDownloadUrl falls through to
+                            the /api/stream/ proxy, which is the one path
+                            that actually works for it — the gateway
+                            enqueues a yt-dlp task, long-polls, and answers
+                            with Content-Disposition: attachment. Hiding
+                            the button for YouTube therefore left those
+                            rows with no way to download at all. */}
+                        {downloadUrl && (
                           <a
                             href={downloadUrl}
                             download={fileName}

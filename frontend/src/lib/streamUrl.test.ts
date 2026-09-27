@@ -140,6 +140,46 @@ describe('resolveDownloadUrl', () => {
       '/api/stream/?src=youtube&id=abc&as_attachment=1&filename=Artist%20-%20Title.ogg',
     );
   });
+
+  // Regression: CloudSearchView used to hide the download-to-browser
+  // button for youtube (`downloadUrl && !isDlSource`), on the assumption
+  // that a YouTube row could not be downloaded directly. It can. A
+  // youtube search row carries NO `url` at all — the plugin returns id,
+  // name, artist and cover only — so the resolver falls through to the
+  // /api/stream/ proxy, and the gateway answers that with
+  // `Content-Disposition: attachment` after running yt-dlp. Verified
+  // end-to-end against a live gateway: 200, 4_960_069 bytes,
+  // filename="周杰伦 - 晴天.ogg". Hiding the button left those rows with
+  // no browser download at all.
+  it('gives a YouTube row (which has no url) a working download URL', () => {
+    const youtubeRow = {
+      kind: 'plugin',
+      source: 'youtube',
+      songId: 'DYptgVvkVLQ',
+    } as PlayerSource;
+    // `undefined`, not '': the field is absent from the response body.
+    const result = resolveDownloadUrl(
+      youtubeRow,
+      undefined,
+      ALL_SOURCES,
+      audioDownloadBasename('周杰倫 Jay Chou', '晴天【Official MV】', 'ogg'),
+    );
+    expect(result).not.toBeNull();
+    expect(result).toContain('src=youtube');
+    expect(result).toContain('id=DYptgVvkVLQ');
+    expect(result).toContain('as_attachment=1');
+    expect(result).toContain('filename=');
+  });
+
+  it('still returns none for a metadata-only source, so the button hides', () => {
+    expect(
+      resolveDownloadUrl(
+        { kind: 'plugin', source: 'musicbrainz', songId: 'x' } as PlayerSource,
+        undefined,
+        ALL_SOURCES,
+      ),
+    ).toBeNull();
+  });
 });
 
 describe('audioDownloadBasename', () => {

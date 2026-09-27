@@ -23,6 +23,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Folder,
+  FolderTree,
   ChevronRight,
   Home,
   ArrowLeft,
@@ -44,8 +45,17 @@ import { useLibraryStore } from '@/store/useLibraryStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import {
   PATH_ALIAS,
+  formatDisplayPath,
   joinParts,
 } from '@/utils/path';
+import {
+  appendToPath,
+  directAudioNames,
+  folderRowsOf,
+  parentOf,
+  wholeDirLabel,
+  wholeDirSelectable,
+} from '@/components/scraper/dirPicker';
 import { cn } from '@/lib/utils';
 import type { FileNode } from '@/types';
 
@@ -60,59 +70,11 @@ interface DirPickerDrawerProps {
   existingDirs?: string[];
 }
 
-interface FolderRow {
-  /** Relative path under MUSIC_DIR including this folder's name. */
-  relPath: string;
-  /** Display name (last path segment). */
-  name: string;
-}
-
-/** Convert a raw children array from /api/file_list/ into the
- *  folder-row subset we render. We only list directories here —
- *  audio files are irrelevant to dir-picking, and the dedicated
- *  audio extension filter lives in expandDirs.ts.
- *
- *  `currentDir` is the directory whose /api/file_list/ response
- *  produced `treeData`. Folded into each row's `relPath` so the
- *  selected-set keys and the chips display carry the full path
- *  under MUSIC_DIR — which is what enqueueDirs needs. Without
- *  the prefix every nested selection would be a bare folder name
- *  (e.g. '流行' instead of '华语/流行') and expandDirsToAudioFiles
- *  would fail the /api/file_list/ lookup, returning no files. */
-function folderRowsOf(
-  treeData: FileNode[] | undefined,
-  currentDir: string,
-): FolderRow[] {
-  const root = treeData?.[0];
-  const children = root?.children ?? [];
-  return children
-    .filter((c) => c.icon === 'icon-folder')
-    .map((c) => ({
-      relPath: appendToPath(currentDir, c.name),
-      name: c.name,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
-
 /** Map from absolute path under MUSIC_DIR (e.g. 'foo/bar') to the
  *  FileNode[] the backend returned for that directory's /api/file_list/
  *  call. Persisted in component state so navigating back doesn't
  *  re-fetch. */
 type TreeCache = Record<string, FileNode[] | undefined>;
-
-/** Compose two path segments into one relPath, never producing
- *  double-slashes. '' (root) + 'foo' → 'foo'; 'foo' + 'bar' → 'foo/bar'. */
-function appendToPath(base: string, name: string): string {
-  return base ? `${base}/${name}` : name;
-}
-
-/** Strip the last segment of a relPath: 'foo/bar/baz' → 'foo/bar';
- *  '' → '' (root has no parent); 'foo' → ''. */
-function parentOf(relPath: string): string {
-  const parts = relPath.split('/').filter(Boolean);
-  parts.pop();
-  return parts.join('/');
-}
 
 export function DirPickerDrawer({
   open,
@@ -166,6 +128,18 @@ export function DirPickerDrawer({
 
   const rowsForCurrent = useMemo(
     () => folderRowsOf(treeCache[currentDir], currentDir),
+    [treeCache, currentDir],
+  );
+
+  // The directory being browsed is itself selectable, which is the only
+  // way to reach audio sitting directly in it (see dirPicker.ts). Hidden
+  // when it would enqueue nothing, so an inert checkbox never shows up.
+  const canPickWholeDir = useMemo(
+    () => wholeDirSelectable(treeCache[currentDir], currentDir),
+    [treeCache, currentDir],
+  );
+  const directAudio = useMemo(
+    () => directAudioNames(treeCache[currentDir]),
     [treeCache, currentDir],
   );
 
@@ -297,12 +271,37 @@ export function DirPickerDrawer({
                 <div className="text-center py-8 text-xs text-muted-foreground">
                   加载中…
                 </div>
-              ) : rowsForCurrent.length === 0 ? (
+              ) : rowsForCurrent.length === 0 && !canPickWholeDir ? (
                 <div className="text-center py-8 text-xs text-muted-foreground">
                   当前目录下没有子目录
                 </div>
               ) : (
-                rowsForCurrent.map((row) => {
+                <>
+                {canPickWholeDir && (
+                  <label
+                    className={cn(
+                      'flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors text-sm mb-1 cursor-pointer',
+                      selected.has(currentDir)
+                        ? 'bg-primary/10 text-foreground'
+                        : 'hover:bg-accent',
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.has(currentDir)}
+                      onChange={() => toggleSelected(currentDir)}
+                      className="w-3.5 h-3.5 rounded border-border accent-primary shrink-0 cursor-pointer"
+                    />
+                    <FolderTree className="w-4 h-4 text-primary shrink-0" />
+                    <span className="truncate">{wholeDirLabel(currentDir)}</span>
+                    {directAudio.length > 0 && (
+                      <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                        本层 {directAudio.length} 个音频
+                      </span>
+                    )}
+                  </label>
+                )}
+                {rowsForCurrent.map((row) => {
                   const isSelected = selected.has(row.relPath);
                   return (
                     <div
@@ -343,7 +342,8 @@ export function DirPickerDrawer({
                       </button>
                     </div>
                   );
-                })
+                })}
+                </>
               )}
             </div>
           </ScrollArea>
@@ -361,7 +361,7 @@ export function DirPickerDrawer({
                     variant="secondary"
                     className="gap-1 pr-1 font-mono"
                   >
-                    <span className="truncate max-w-[180px]">{relPath}</span>
+                    <span className="truncate max-w-[180px]">{formatDisplayPath(relPath)}</span>
                     <button
                       type="button"
                       onClick={() => removeChip(relPath)}
