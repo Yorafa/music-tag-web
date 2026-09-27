@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
-# Build the Pages demo locally and serve it.
+# Build the Pages showcase locally and serve it.
 #
-# The bundle is patched to /music-tag-web/... and the service worker can
-# only intercept requests inside its own scope, so the site has to be
-# served UNDER that prefix. Serving dist-pages/ directly gives you a blank
-# page with a bundle asking for /music-tag-web/assets/... that 404s. That
-# is what the symlink below is for.
+# The site is the real frontend build; every /api/* request fails, which
+# is the point — there is no backend on a static host and the showcase
+# exists to be looked at. The only thing injected is a small script that
+# puts a placeholder token in localStorage, because App.tsx renders
+# LoginPage or HomePage and nothing else, so without it the visitor never
+# sees the app.
+#
+# It still has to be served UNDER the /music-tag-web prefix, because that
+# is where vite's --base puts the asset URLs. Serving dist-pages/ at the
+# root gives you a page whose assets 404.
 #
 #   ./demo/serve.sh [port]     # default 8000
 #
-# Then open http://127.0.0.1:<port>/music-tag-web/ — log in with any
-# username and password, /api/token/ is mocked.
-#
-# Use 127.0.0.1, not your LAN IP: Service Workers require a secure
-# context, and plain HTTP over the LAN does not qualify. The page tells
-# the visitor so instead of just failing the login.
+# Then open http://<host>:<port>/music-tag-web/ — no login, no credentials.
+# Unlike the previous worker-based version this works over plain HTTP, so
+# the LAN address works too.
 set -euo pipefail
 
 PORT="${1:-8000}"
@@ -25,18 +27,15 @@ cd "$ROOT"
 echo "==> building frontend (vite, base=$BASE)"
 (cd frontend && npx vite build --base="$BASE" --outDir=../dist-pages --emptyOutDir)
 
-echo "==> rewriting /api/ and /media/ literals into the bundle"
-node demo/patch-bundle.mjs dist-pages "$BASE"
-
-echo "==> injecting the service worker registration"
-node demo/inject-sw.mjs dist-pages "$BASE"
+echo "==> injecting showcase entry script"
+node demo/inject-demo.mjs dist-pages
 
 echo "==> preparing docroot .pages-serve/$BASE"
 mkdir -p .pages-serve
 ln -sfn "$ROOT/dist-pages" ".pages-serve$BASE"
 
 echo
-echo "    http://127.0.0.1:$PORT$BASE/     (any username/password)"
+echo "    http://127.0.0.1:$PORT$BASE/     (no login needed)"
 echo "    Ctrl-C to stop"
 echo
 exec python3 -m http.server "$PORT" --bind 0.0.0.0 --directory .pages-serve

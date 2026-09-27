@@ -27,9 +27,10 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     env:
-      # GitHub Pages serves a project site from /<repo>/, so every absolute
-      # path in the build (asset URLs, and the /api/ + /media/ literals the
-      # demo worker has to intercept) needs this prefix.
+      # GitHub Pages serves a project site from /<repo>/, so asset URLs in
+      # the build need this prefix. Nothing else does: the /api/ literals
+      # in the bundle stay root-absolute and are left to fail, because a
+      # showcase has no backend to point them at.
       PAGES_BASE: /${{ github.event.repository.name }}
     steps:
       - name: Checkout
@@ -65,16 +66,12 @@ jobs:
         working-directory: frontend
         run: npx vite build --base="$PAGES_BASE" --outDir=../dist-pages --emptyOutDir
 
-      - name: Rewrite absolute API paths under the Pages base
-        # baseURL:'/api/' and friends are root-absolute with no runtime
-        # override, so on a project Pages site they escape the service
-        # worker's scope. The script counts every replacement and exits
-        # non-zero if none land — a silent no-op here would publish a page
-        # that 404s on every request with no error anywhere.
-        run: node demo/patch-bundle.mjs dist-pages "$PAGES_BASE"
-
-      - name: Inject demo service worker
-        run: node demo/inject-sw.mjs dist-pages "$PAGES_BASE"
+      - name: Inject showcase entry script
+        # App.tsx renders LoginPage or HomePage and nothing else, so a
+        # showcase published without a token in storage is a login form.
+        # The script exits non-zero if its own output does not contain the
+        # token key, because that failure is otherwise invisible.
+        run: node demo/inject-demo.mjs dist-pages
 
       - name: Verify artifact
         run: |
@@ -85,14 +82,30 @@ jobs:
             echo "::error::empty build output — refusing to publish"
             exit 1
           fi
-          for required in dist-pages/index.html dist-pages/sw.js dist-pages/register-sw.js; do
-            if [ ! -f "$required" ]; then
-              echo "::error::missing $required"
-              exit 1
-            fi
-          done
-          # The demo must stay self-contained: every asset is bundled, so
-          # an external stylesheet or script means link rot waiting to
+          if [ ! -f dist-pages/index.html ]; then
+            echo "::error::missing dist-pages/index.html"
+            exit 1
+          fi
+          # The entry script is the whole difference between "a page you
+          # can look at" and "a login form", so assert it survived the
+          # build rather than trusting the previous step's exit code.
+          if ! grep -q 'auth.accessToken' dist-pages/index.html; then
+            echo "::error::showcase entry script missing from index.html"
+            exit 1
+          fi
+          # Nothing may intercept requests any more: a service worker
+          # would quietly start answering /api/* and the showcase would
+          # present invented data as if it were real.
+          if [ -f dist-pages/sw.js ] || [ -f dist-pages/mockServiceWorker.js ]; then
+            echo "::error::worker script in artifact — the showcase must not serve data"
+            exit 1
+          fi
+          if grep -rq 'serviceWorker' dist-pages/; then
+            echo "::error::artifact still references serviceWorker — the showcase must not intercept requests"
+            exit 1
+          fi
+          # The showcase must stay self-contained: every asset is bundled,
+          # so an external stylesheet or script means link rot waiting to
           # happen on a public page.
           if grep -rqE '<(script|link)[^>]+(src|href)=["'"'"']https?://' dist-pages/; then
             echo "::error::external asset reference found — the Pages build must stay self-contained"
