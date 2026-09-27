@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Play, Pause, Volume2, VolumeX, Mic2 } from 'lucide-react';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
+import { recordOperationLog } from '@/api/client';
 import { sourceErrorMessage } from '@/lib/streamUrl';
 import { NowPlaying } from '@/components/player/NowPlaying';
 import { LyricsView } from '@/components/player/LyricsView';
@@ -153,7 +154,18 @@ export function PlayerBar() {
     const track = usePlayerStore.getState().currentTrack;
     if (!track) return;
     const sourceName = track.source.kind === 'plugin' ? track.source.source : undefined;
-    useNoticeStore.getState().push(sourceErrorMessage(sourceName), 'warn');
+    const msg = sourceErrorMessage(sourceName);
+    useNoticeStore.getState().push(msg, 'warn');
+    // Same rationale as PlayButton's catch: the native <audio> error surface
+    // (e.g. a /media 404 mid-playback) has no server-side audit hook, so
+    // record it here. Fire-and-forget; a failed audit POST must not surface
+    // a second toast on top of the playback failure the user already saw.
+    void recordOperationLog({
+      action: 'playback_failed',
+      target: track.id,
+      status: 'failed',
+      error_msg: audioErr?.message || msg,
+    }).catch(() => {});
   };
 
   // Duration mirror. VBR MP3s (e.g. "Jocelyn Flores") report duration =

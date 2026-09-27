@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"errors"
+
 	"github.com/gin-gonic/gin"
 
 	"go-music-tag/internal/audit"
@@ -41,6 +43,53 @@ func ListOperationLogs(c *gin.Context) {
 		"page":      page,
 		"page_size": pageSize,
 	})
+}
+
+// clientRecordableActions whitelists the actions a browser client is allowed
+// to write via RecordOperationLog. Server-side operations (update_id3,
+// auto_scrape, …) are recorded by their own handlers and must never be
+// forgeable from the client, so only client-observable events that no
+// server handler can see live here. Playback preflight/stream failures are
+// the motivating case: the file 404s on the /media static route (which has
+// no per-request audit hook), so the only place that knows the play attempt
+// failed is the browser.
+var clientRecordableActions = map[string]bool{
+	audit.ActionPlaybackFailed: true,
+}
+
+// RecordOperationLog handles POST /api/operation_logs/record/ — lets the
+// frontend persist a client-observed event into the operation audit log so
+// it is inspectable alongside server-side operations. The action is
+// whitelisted (see clientRecordableActions) to keep this from becoming an
+// arbitrary log-injection endpoint.
+func RecordOperationLog(c *gin.Context) {
+	var req struct {
+		Action   string `json:"action"`
+		Target   string `json:"target"`
+		Status   string `json:"status"`
+		Details  string `json:"details"`
+		ErrorMsg string `json:"error_msg"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Failure(c, "invalid body: "+err.Error())
+		return
+	}
+	if !clientRecordableActions[req.Action] {
+		Failure(c, "action not recordable: "+req.Action)
+		return
+	}
+	status := req.Status
+	if status == "" {
+		status = audit.StatusFailed
+	}
+
+	var opErr error
+	if req.ErrorMsg != "" {
+		opErr = errors.New(req.ErrorMsg)
+	}
+
+	entry := audit.Log(c.Request.Context(), req.Action, req.Target, "", status, 1, req.Details, opErr)
+	SuccessData(c, gin.H{"id": entry.ID})
 }
 
 // ClearOperationLogs handles POST /api/operation_logs/clear/ — clears audit logs.

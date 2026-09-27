@@ -9,6 +9,7 @@ import {
   Image as ImageIcon,
   Trash2,
   Flame,
+  PlayCircle,
   CheckCircle2,
   XCircle,
   AlertTriangle,
@@ -83,6 +84,15 @@ export const ACTION_CONFIG: Record<string, ActionConfigItem> = {
     label: '彻底删除',
     icon: Flame,
     color: 'bg-red-500/10 text-red-400 border-red-500/30',
+  },
+  // 播放失败 — client-recorded. The file 404s on the un-audited /media
+  // static route (or native <audio> errors on a stream), so the browser is
+  // the only place that sees a play attempt fail; it POSTs the failure here
+  // so the audit log is a superset of user-visible playback errors.
+  playback_failed: {
+    label: '播放失败',
+    icon: PlayCircle,
+    color: 'bg-orange-500/10 text-orange-400 border-orange-500/30',
   },
 };
 

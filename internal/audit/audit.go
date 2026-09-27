@@ -36,6 +36,14 @@ const (
 	// page can answer "what did someone permanently delete, and when" —
 	// which is the question a restore-capable delete cannot answer.
 	ActionTrashPurge = "trash_purge"
+	// ActionPlaybackFailed records a client-side playback failure — the
+	// /media static route and the streaming proxy return a bare HTTP status
+	// (e.g. 404 for a library file that is indexed in the DB but missing on
+	// disk) that surfaces only as a frontend toast. Without this, the failure
+	// is invisible in the audit log and cannot be inspected after the toast
+	// auto-dismisses. Recorded by the client via RecordOperationLog, so unlike
+	// the other actions here it is the one action a browser can create.
+	ActionPlaybackFailed = "playback_failed"
 )
 
 // Status 常量定义操作结果状态。

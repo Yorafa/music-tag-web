@@ -699,3 +699,18 @@ export async function clearOperationLogs(days?: number): Promise<{
   return data;
 }
 
+/** Persist a client-observed event into the backend operation audit log so
+ *  it shows up in the audit view alongside server-side operations. The only
+ *  current caller is playback failure (the file 404s on the un-audited
+ *  /media static route, so the browser is the only place that sees it).
+ *  The backend whitelists which actions a client may record. */
+export async function recordOperationLog(params: {
+  action: string;
+  target: string;
+  status?: string;
+  details?: string;
+  error_msg?: string;
+}): Promise<void> {
+  await api.post('operation_logs/record/', params);
+}
+

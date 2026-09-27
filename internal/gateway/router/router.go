@@ -167,6 +167,10 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// Operation history audit log endpoints
 		authed.GET("/operation_logs/", handler.ListOperationLogs)
 		authed.POST("/operation_logs/clear/", handler.ClearOperationLogs)
+		// Lets the browser persist a client-observed failure (e.g. a
+		// playback 404 off the un-audited /media static route) into the
+		// audit log. Action-whitelisted server-side; see RecordOperationLog.
+		authed.POST("/operation_logs/record/", handler.RecordOperationLog)
 	}
 
 	// --- Static media + SPA (public) ---

@@ -3,6 +3,7 @@ import { Play, Pause, Loader2 } from 'lucide-react';
 import { usePlayerStore, type PlayerTrack } from '@/store/usePlayerStore';
 import { useSourceStore } from '@/store/useSourceStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
+import { recordOperationLog } from '@/api/client';
 import {
   resolveStreamUrl,
   metadataOnlyMessage,
@@ -98,6 +99,17 @@ export function PlayButton({ track, size = 'sm', className }: Props) {
           ? err.message
           : sourceErrorMessage(sourceName);
       pushToast(msg, 'warn');
+      // Mirror the failure into the backend audit log. The /media static
+      // route that 404s here has no server-side audit hook, so the browser
+      // is the only place that knows the play attempt failed. Fire-and-forget
+      // and swallow its own error — a failed audit POST must not surface a
+      // second toast on top of the playback failure the user already saw.
+      void recordOperationLog({
+        action: 'playback_failed',
+        target: track.id,
+        status: 'failed',
+        error_msg: msg,
+      }).catch(() => {});
       setIsBuffering(false);
     } finally {
       setArming(false);
