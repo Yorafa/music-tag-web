@@ -58,6 +58,7 @@ func fileSizeOf(t *testing.T, p string) int64 {
 // audio, and they must get a duration or the fingerprint stage never
 // considers them.
 func TestFpIndexHandler_IndexesDownloadedRowsInTheLibrary(t *testing.T) {
+	requireFpcalcForIndex(t)
 	gdb := newFpIndexDB(t)
 	dir := t.TempDir()
 
