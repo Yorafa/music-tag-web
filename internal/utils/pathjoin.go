@@ -128,6 +128,51 @@ func SafeRelPath(p string) (string, error) {
 	return cleaned, nil
 }
 
+// ResolveUnderRoot turns p into an absolute path inside root, accepting
+// EITHER form the same codebase uses for "a path that names a library
+// file": root-relative ("17/song.ogg") or absolute ("/app/media/17/song.ogg").
+//
+// It exists because UnderRoot above already had to accept both forms, and
+// the resolver did not. TidyFolder was where that gap bit: its payload
+// carries `music_paths` straight from the worklist rows, whose documented
+// contract is root-relative (utils/expandDirs.ts: "Relative path under
+// MUSIC_DIR ... the same string SafeJoin(MUSIC_DIR, fullPath) would
+// resolve to"), while tidySource demanded an absolute path via SafeAbs.
+// Every file was refused with `SafeAbs: "17/song.ogg" is not absolute`, the
+// rename never happened, and — because the audit row is only written on
+// success — the operation left no trace in the audit log either. The user
+// was told "已提交目录整理异步任务" and nothing else.
+//
+// The client cannot fix this by sending absolute paths: /app/media is a
+// container path the frontend never learns (there is no config endpoint
+// for it), so relative is the only form it can produce.
+//
+// Composition, not new logic: an absolute p goes through SafeAbs and a
+// relative one through SafeJoin, so containment is still proved by the
+// same two already-tested primitives. Routing both forms through SafeJoin
+// instead would be wrong — Join treats a leading "/" as a separator, so
+// SafeJoin("/app/media", "/app/media/17/song.ogg") yields
+// "/app/media/app/media/17/song.ogg", which is exactly the double-prefix
+// bug UnderRoot's comment warns about.
+//
+// An empty p means the root itself, matching SafeJoin's documented
+// "operate-on-root" sentinel.
+//
+// An empty root is refused by whichever primitive is reached — both
+// SafeJoin and SafeAbs check it first — so there is no branch here for it.
+// An earlier version had one; mutation testing showed it was equivalent
+// (removing it changed no outcome), which is the same dead-code-shaped
+// branch that was removed from tidySource for the same reason.
+func ResolveUnderRoot(root, p string) (string, error) {
+	if p == "" {
+		return SafeJoin(root, "")
+	}
+	if filepath.IsAbs(p) {
+		return SafeAbs(root, p)
+	}
+	return SafeJoin(root, p)
+}
+
 // UnderRoot reports whether p names something inside root.
 //
 // It exists because "does this row belong to the library?" kept getting

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/hibiken/asynq"
 	"gorm.io/gorm"
 
 	"go-music-tag/internal/audit"
@@ -29,6 +30,18 @@ type TidyFolderHandler struct {
 	DB        *gorm.DB
 	MusicRoot string
 	Bus       events.Bus // optional; nil = no publish
+}
+
+// asynqRetryCount reports how many times the running task has already been
+// retried (0 on the first attempt).
+//
+// Indirected through a var purely so tests can drive the retry path: asynq
+// stores this in a context value whose key is an unexported type in an
+// internal/ package, so a test cannot construct a "this is attempt N" context
+// on its own. Production always goes through asynq.GetRetryCount.
+var asynqRetryCount = func(ctx context.Context) int {
+	n, _ := asynq.GetRetryCount(ctx)
+	return n
 }
 
 func (h *TidyFolderHandler) ProcessTask(ctx context.Context, t Task) error {
@@ -60,10 +73,43 @@ func (h *TidyFolderHandler) ProcessTask(ctx context.Context, t Task) error {
 		// nothing. That is the shape of bug the toolbar comment about
 		// MusicPaths arriving empty already describes once.
 		log.Printf("[tidy] refusing the whole batch: %v", err)
+		// And audited, not just logged: the audit log is the one place
+		// the operator looks to answer "what happened to my files", and
+		// this row is the only trace a refused batch leaves there. Before
+		// this, a tidy that moved nothing produced NO audit row at all —
+		// which is how the path-form bug below went unnoticed for so
+		// long: every file was refused, the user saw a success toast, and
+		// the operation history stayed empty.
+		//
+		// First attempt only. The refusal is permanent (a path outside the
+		// library stays outside it), so asynq will retry this task up to
+		// MaxRetry(5) times and every retry would otherwise append another
+		// identical row — one user action, six log entries. The task still
+		// returns err so the task record ends up failed rather than
+		// completed; only the duplicate logging is suppressed.
+		if asynqRetryCount(ctx) == 0 {
+			audit.Log(ctx, audit.ActionTidyFolder, p.RootPath, "worker", audit.StatusFailed,
+				len(p.MusicPaths), map[string]interface{}{
+					"root_path":  p.RootPath,
+					"requested":  len(p.MusicPaths),
+					"refused":    "root_path is outside the library",
+					"first_dir":  p.FirstDir,
+					"second_dir": p.SecondDir,
+				}, err)
+		}
 		return err
 	}
 	p.RootPath = root
 
+	// Per-file outcomes. Successes audit themselves inside tidyOne (one row
+	// per moved file, which is the granularity the operation log is for);
+	// failures are collected here and summarised into ONE row, because a
+	// 500-track batch where every file failed would otherwise bury the log
+	// under 500 near-identical entries.
+	var (
+		failed    int
+		firstErrs []string
+	)
 	for _, musicPath := range p.MusicPaths {
 		select {
 		case <-ctx.Done():
@@ -77,11 +123,34 @@ func (h *TidyFolderHandler) ProcessTask(ctx context.Context, t Task) error {
 		src, sErr := h.tidySource(musicPath)
 		if sErr != nil {
 			log.Printf("[tidy] %s: %v", musicPath, sErr)
+			failed++
+			if len(firstErrs) < 5 {
+				firstErrs = append(firstErrs, fmt.Sprintf("%s: %v", filepath.Base(musicPath), sErr))
+			}
 			continue
 		}
 		if err := h.tidyOne(ctx, src, p); err != nil {
 			log.Printf("[tidy] %s: %v", musicPath, err)
+			failed++
+			if len(firstErrs) < 5 {
+				firstErrs = append(firstErrs, fmt.Sprintf("%s: %v", filepath.Base(musicPath), err))
+			}
 		}
+	}
+	if failed > 0 {
+		status := audit.StatusPartial
+		if failed == len(p.MusicPaths) {
+			status = audit.StatusFailed
+		}
+		audit.Log(ctx, audit.ActionTidyFolder, p.RootPath, "worker", status, failed,
+			map[string]interface{}{
+				"root_path":  p.RootPath,
+				"requested":  len(p.MusicPaths),
+				"failed":     failed,
+				"first_dir":  p.FirstDir,
+				"second_dir": p.SecondDir,
+				"examples":   firstErrs,
+			}, nil)
 	}
 	return nil
 }
@@ -93,18 +162,13 @@ func (h *TidyFolderHandler) ProcessTask(ctx context.Context, t Task) error {
 // The read-only consumers (dedup, the pruners) treat an empty root as "no
 // scope configured" so they degrade to a narrower answer, but this one moves
 // files, and without a root there is no way to know what is in bounds — so
-// the answer has to be "no".
-// An unconfigured root refuses everything rather than admitting everything.
-// The read-only consumers (dedup, the pruners) treat an empty root as "no
-// scope configured" so they degrade to a narrower answer, but this one moves
-// files, and without a root there is no way to know what is in bounds — so
 // the answer has to be "no". The explicit check exists for the message;
-// SafeAbs would refuse the empty root too, less clearly.
+// ResolveUnderRoot would refuse the empty root too, less clearly.
 func (h *TidyFolderHandler) tidyRoot(rootPath string) (string, error) {
 	if h.MusicRoot == "" {
 		return "", fmt.Errorf("tidy: no music root configured, refusing to move anything")
 	}
-	abs, err := utils.SafeAbs(h.MusicRoot, rootPath)
+	abs, err := utils.ResolveUnderRoot(h.MusicRoot, rootPath)
 	if err != nil {
 		return "", fmt.Errorf("tidy: root_path %q is outside the library: %w", rootPath, err)
 	}
@@ -113,21 +177,23 @@ func (h *TidyFolderHandler) tidyRoot(rootPath string) (string, error) {
 
 // tidySource resolves one payload path against the music root.
 //
-// SafeAbs rather than SafeJoin, for the same reason as everywhere else: a
-// path in a payload is absolute, so an absolute path outside the library is
-// something the caller has no business naming and is refused outright. A
-// relative path is refused too, rather than joined onto the root — in a
-// payload that moves files, "which directory did you mean" is not a question
-// worth guessing at.
+// Both forms are accepted, because both are what this codebase actually
+// produces for "a library file": music_folder rows are stored absolute, and
+// the worklist rows the frontend sends are root-relative (see
+// utils.ResolveUnderRoot for why the client cannot send the absolute form).
+// An absolute path outside the library is still refused outright, and a
+// relative one that climbs out is still refused by SafeJoin's containment
+// check — this only widens WHICH inputs are understood, not what is
+// reachable.
 //
 // No explicit empty-root check, because there is no case left for it to
 // handle: tidyRoot runs first and fails the whole task when MusicRoot is
-// unset, and SafeAbs refuses an empty root anyway. An earlier version had
-// the branch, and mutation testing showed it was unreachable — tidyRoot had
-// already returned, so the branch could only ever be dead code pretending to
-// be a decision.
+// unset, and ResolveUnderRoot refuses an empty root anyway. An earlier
+// version had the branch, and mutation testing showed it was unreachable —
+// tidyRoot had already returned, so the branch could only ever be dead code
+// pretending to be a decision.
 func (h *TidyFolderHandler) tidySource(musicPath string) (string, error) {
-	abs, err := utils.SafeAbs(h.MusicRoot, musicPath)
+	abs, err := utils.ResolveUnderRoot(h.MusicRoot, musicPath)
 	if err != nil {
 		return "", fmt.Errorf("not in the library: %w", err)
 	}

@@ -134,7 +134,11 @@ export function OperationLogsTab() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
-    <div className="space-y-3">
+    // flex column + min-h-0 so the log list can absorb the leftover height and
+    // push the pagination bar to the bottom edge. Without this the root was a
+    // plain space-y-3 stack, so with only a handful of records the pagination
+    // row floated in the middle of the card.
+    <div className="flex-1 flex flex-col min-h-0 gap-3">
       {/* Top Filter Bar */}
       <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center justify-between">
         <div className="flex flex-wrap gap-1.5 items-center flex-1">
@@ -244,7 +248,7 @@ export function OperationLogsTab() {
           </p>
         </div>
       ) : (
-        <div className="space-y-1.5 max-h-[45vh] overflow-y-auto pr-0.5">
+        <div className="flex-1 min-h-0 space-y-1.5 overflow-y-auto pr-0.5">
           {logs.map((item) => {
             const actionCfg = ACTION_CONFIG[item.action] || {
               label: item.action,
