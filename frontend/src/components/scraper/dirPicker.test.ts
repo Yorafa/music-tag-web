@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   appendToPath,
   directAudioNames,
+  fileRowsOf,
   folderRowsOf,
   isAudioName,
   parentOf,
@@ -30,6 +31,54 @@ function listing(children: Array<Partial<FileNode>>): FileNode[] {
 
 const folder = (name: string) => ({ name, icon: 'icon-folder' });
 const audio = (name: string) => ({ name, icon: 'icon-audio' });
+
+describe('fileRowsOf', () => {
+  // The reported case: the picker listed subdirectories only, so a folder
+  // of loose tracks looked empty and the only way to reach one of those
+  // tracks was to add the whole directory.
+  it('lists the files in the browsed directory, with the dir folded in', () => {
+    const rows = fileRowsOf(
+      listing([folder('Miles Davis'), audio('So What.flac'), { name: 'cover.jpg', icon: 'icon-image' }]),
+      'Jazz',
+    );
+    expect(rows.map((r) => r.relPath)).toEqual([
+      'Jazz/So What.flac',
+      'Jazz/cover.jpg',
+    ]);
+  });
+
+  it('puts the selectable audio above the files that are only decoration', () => {
+    const rows = fileRowsOf(
+      listing([
+        { name: 'aaa.jpg', icon: 'icon-image' },
+        audio('zzz.flac'),
+      ]),
+      '',
+    );
+    // A checkbox that adds nothing is worse than no checkbox, so the rows
+    // the user can act on must not be the ones they have to scroll to.
+    expect(rows.map((r) => r.selectable)).toEqual([true, false]);
+  });
+
+  it('marks non-audio files as not selectable', () => {
+    const rows = fileRowsOf(
+      listing([{ name: 'cover.jpg', icon: 'icon-image' }, { name: 'a.lrc', icon: 'icon-file' }]),
+      '',
+    );
+    expect(rows.every((r) => r.selectable === false)).toBe(true);
+  });
+
+  it('excludes directories, including one named like an audio file', () => {
+    // 'Bootleg.flac/' passes isAudioName; treating it as a file would
+    // enqueue a path that cannot resolve to anything.
+    expect(fileRowsOf(listing([folder('Bootleg.flac')]), '')).toEqual([]);
+  });
+
+  it('returns [] for an empty or missing listing', () => {
+    expect(fileRowsOf(listing([]), '')).toEqual([]);
+    expect(fileRowsOf(undefined, '')).toEqual([]);
+  });
+});
 
 describe('appendToPath / parentOf', () => {
   it('never produces a double slash', () => {

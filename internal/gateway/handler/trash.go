@@ -28,10 +28,16 @@ import (
 //
 //	GET  /api/trash/          list batches and their files
 //	POST /api/trash/restore/   put files back
+//	POST /api/trash/purge/     destroy them for good
 //
 // There is no purge. Purging is irreversible and irreversible-by-API is the
 // thing this feature exists to undo; whoever wants the disk space can remove
 // the directory on the host, where the action is visible to them.
+//
+// (Superseded: PurgeTrash was added on request. It exists, and it is the one
+// call in this product that cannot be taken back — so it requires an explicit
+// `confirm: true` the restore path does not, and it writes an audit row marked
+// `irreversible`.)
 
 // trashBatch is one deletion run. The directory name is the timestamp the
 // delete handler stamped it with, so it doubles as the id.
@@ -354,4 +360,146 @@ type restoreReport struct {
 	Results  []restoreRow `json:"results"`
 	Restored int          `json:"restored"`
 	Failed   int          `json:"failed"`
+}
+
+// PurgeTrash handles POST /api/trash/purge/ — the one irreversible operation
+// this product performs on the user's data, so it is the one that requires the
+// client to say `confirm: true` rather than merely omitting a field.
+//
+// The flag is not ceremony. A restore only ever moves a file to a place the
+// user can see and a purge only ever removes one from a listing they are
+// looking at, but both are one HTTP call away from each other, and a client
+// that wires the wrong button — or a retry that re-sends a body it already
+// sent — must not be able to destroy data by accident. The UI asks for
+// confirmation separately; this is the server refusing to be the only thing
+// standing between a mistake and a deleted file.
+//
+// Body: {"batch_id": "...", "rel_paths": [...], "confirm": true}
+// An empty rel_paths purges the whole batch, which is the only way to remove
+// a batch directory itself.
+func PurgeTrash(c *gin.Context) {
+	var req struct {
+		BatchID  string   `json:"batch_id" binding:"required"`
+		RelPaths []string `json:"rel_paths"`
+		Confirm  bool     `json:"confirm"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Failure(c, "invalid request: "+err.Error())
+		return
+	}
+	if !req.Confirm {
+		Failure(c, "彻底删除不可撤销，需要显式确认")
+		return
+	}
+	if !validTrashBatchID(req.BatchID) {
+		Failure(c, "非法的批次 ID")
+		return
+	}
+
+	batchDir := filepath.Join(utils.DataDir(), ".trash", req.BatchID)
+	if info, err := os.Stat(batchDir); err != nil || !info.IsDir() {
+		Failure(c, "回收站里没有这个批次")
+		return
+	}
+
+	// Whole batch: Remove the directory itself so an emptied batch stops being
+	// listed. Refused if anything unexpected is still in there, which also
+	// means a stale listing cannot be used to sweep a batch that has since
+	// gained files.
+	if len(req.RelPaths) == 0 {
+		entries, err := os.ReadDir(batchDir)
+		if err != nil {
+			Failure(c, "读取回收站批次失败: "+err.Error())
+			return
+		}
+		// os.RemoveAll rather than os.Remove: this is the purge, and its whole
+		// contract is "this is gone". os.Remove would refuse a batch holding a
+		// file the listing did not show, which is safer but is a different
+		// endpoint's behaviour.
+		if err := os.RemoveAll(batchDir); err != nil {
+			Failure(c, "彻底删除失败: "+err.Error())
+			return
+		}
+		audit.Log(c.Request.Context(), audit.ActionDeleteFiles, req.BatchID, "admin", audit.StatusSuccess,
+			len(entries), map[string]interface{}{
+				"purged":       len(entries),
+				"batch_id":     req.BatchID,
+				"whole_batch":  true,
+				"requested_by": "trash_purge",
+				"irreversible": true,
+			}, nil)
+		SuccessData(c, purgeReport{Purged: len(entries)})
+		return
+	}
+
+	results := make([]purgeRow, 0, len(req.RelPaths))
+	purged, failed := 0, 0
+	for _, rel := range req.RelPaths {
+		row := purgeRow{RelPath: rel}
+		// The same containment rule as restore, and for the same reason: rel
+		// is attacker-controlled and decides what gets destroyed. A purge that
+		// can reach outside .trash is a remote delete for anyone who can POST.
+		target, err := utils.SafeJoin(batchDir, rel)
+		if err != nil {
+			row.Status, row.Reason = "refused", "回收站内的路径不合法"
+			failed++
+			results = append(results, row)
+			continue
+		}
+		info, err := os.Lstat(target)
+		if err != nil {
+			row.Status, row.Reason = "missing", "回收站里没有这个文件"
+			failed++
+			results = append(results, row)
+			continue
+		}
+		// A directory in a batch means a rel_path was crafted to name one. The
+		// whole-batch path above is the only way to remove directories, and it
+		// is explicit about doing so.
+		if info.IsDir() {
+			row.Status, row.Reason = "refused", "只能逐个删除文件，删除整个批次请用「彻底删除此批次」"
+			failed++
+			results = append(results, row)
+			continue
+		}
+		if err := os.Remove(target); err != nil {
+			row.Status, row.Reason = "failed", err.Error()
+			failed++
+			results = append(results, row)
+			continue
+		}
+		row.Status = "purged"
+		purged++
+		results = append(results, row)
+	}
+
+	status := audit.StatusSuccess
+	if failed > 0 && purged > 0 {
+		status = audit.StatusPartial
+	} else if purged == 0 {
+		status = audit.StatusFailed
+	}
+	audit.Log(c.Request.Context(), audit.ActionDeleteFiles, req.BatchID, "admin", status,
+		purged+failed, map[string]interface{}{
+			"purged":       purged,
+			"failed":       failed,
+			"batch_id":     req.BatchID,
+			"rel_paths":    req.RelPaths,
+			"requested_by": "trash_purge",
+			"irreversible": true,
+		}, nil)
+
+	SuccessData(c, purgeReport{Results: results, Purged: purged, Failed: failed})
+}
+
+type purgeRow struct {
+	RelPath string `json:"rel_path"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+type purgeReport struct {
+	Results []purgeRow `json:"results,omitempty"`
+	Purged  int        `json:"purged"`
+	Failed  int        `json:"failed"`
 }

@@ -64,6 +64,46 @@ function isAudioExt(name: string): boolean {
   return AUDIO_EXTS.includes(ext);
 }
 
+/** What one entry of a user's selection actually is.
+ *
+ *  A selection entry used to be a directory and nothing else, so a loose
+ *  audio file could not be queued on its own: /api/file_list/ on a file
+ *  path lists nothing and the entry expanded to zero rows, which the user
+ *  saw as a silent no-op. */
+export type SelectionKind = 'file' | 'dir';
+
+/** Classify one selection entry by its name, which is what decides the
+ *  kind: MUSIC_DIR has no directory whose name ends in an audio
+ *  extension in any library this app manages, and a file that ISN'T audio
+ *  is not selectable in the first place. */
+export function selectionKind(path: string): SelectionKind {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  return isAudioExt(name) ? 'file' : 'dir';
+}
+
+/** The containing directory of a relPath; '' for a top-level entry. */
+function parentPath(relPath: string): string {
+  const i = relPath.lastIndexOf('/');
+  return i === -1 ? '' : relPath.slice(0, i);
+}
+
+/** A single selected file as the one ExpandedFile it expands to.
+ *
+ *  `sourceDir` is the directory it sits in, so the dir-granular dedupe and
+ *  the "已收录 N 个目录" count still talk about real directories rather
+ *  than inventing one per file. The FileNode is synthetic: the picker
+ *  already had the real one, but expandDirs works from paths alone (it is
+ *  also called with paths the picker never saw), and every consumer of
+ *  ExpandedFile reads only `file.name`. */
+function fileEntry(fullPath: string): ExpandedFile {
+  const name = fullPath.slice(fullPath.lastIndexOf('/') + 1);
+  return {
+    file: { id: 0, name, title: name, icon: 'icon-audio', state: '' },
+    fullPath,
+    sourceDir: parentPath(fullPath),
+  };
+}
+
 /** Build the relative path of a child node under `currentPath`. The
  *  backend's `file_list` response nests `FileNode.children` recursively,
  *  so callers walk into subdirs by visiting `currentPath/child.name`.
@@ -126,6 +166,8 @@ async function expandOne(
  *
  *  Edge cases:
  *  - `dirs` empty → returns `[]` without any HTTP call.
+ *  - An entry that names an audio FILE (the directory picker's per-file
+ *    rows) expands to that one file, with no HTTP call at all.
  *  - A directory does not exist (404) or backend errors on it → silently
  *    skipped; other directories still expand.
  *  - Same directory listed twice → both passes run and both contribute
@@ -141,6 +183,12 @@ export async function expandDirsToAudioFiles(
   // backend, not by RTT, so parallelism wouldn't help and just
   // complicates error handling.
   for (const dir of dirs) {
+    // A file the user ticked in the picker is already the answer; asking
+    // the backend to list it as a directory would return nothing.
+    if (selectionKind(dir) === 'file') {
+      out.push(fileEntry(dir));
+      continue;
+    }
     await expandOne(dir, dir, out);
   }
   return out;

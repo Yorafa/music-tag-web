@@ -84,7 +84,7 @@ interface WorklistState {
    *  like "已收录 5 个新增、跳过 2 个已存在". */
   enqueueDirs: (
     dirs: string[],
-  ) => Promise<{ added: number; skipped: number }>;
+  ) => Promise<{ added: number; skipped: number; files: number }>;
 
   /** Toggle one row in/out of selection. Idempotent; the caller may
    *  pass any row fullPath — the store resolves to a no-op if the id
@@ -303,7 +303,7 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
       return { collapsedGroups: next };
     });
   },    enqueueDirs: async (dirs) => {
-      if (dirs.length === 0) return { added: 0, skipped: 0 };
+      if (dirs.length === 0) return { added: 0, skipped: 0, files: 0 };
       const expanded = await expandDirsToAudioFiles(dirs);
 
       // Per-file dedupe, shared with useLibraryStore. The old rule dropped a
@@ -341,8 +341,11 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
         // says it is reporting. The old pair mixed units — files for
         // `added`, dirs for `skipped` — so the two numbers could not be
         // compared against the number of directories the user ticked.
+        // `files` is the row count, which is the unit a user who ticked
+        // three loose files actually cares about.
         added: addedDirs,
         skipped: skippedDirs,
+        files: fresh.length,
       };
     },
 

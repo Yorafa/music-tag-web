@@ -41,7 +41,6 @@ import { useWorklistStore, type WorklistGrouping } from '@/store/useWorklistStor
 import { useNoticeStore } from '@/store/useNoticeStore';
 import {
   tidyFolder,
-  fetchId3ByTitle,
   batchUpdateId3,
   pruneEmptyFolders,
   previewPruneEmpty,
@@ -60,22 +59,15 @@ import {
 } from '@/components/detail/renameResult';
 import { dedupeFlag, isDedupeEnabled, setDedupeEnabled } from '@/utils/dedupe';
 import { deleteTargetsFor } from '@/components/workstation/duplicateBadge';
+import { SOURCES } from '@/components/common/tagSources';
+import { searchAcrossSources } from '@/api/scrapeSources';
+import { bestCandidate } from '@/components/detail/candidates';
 import { cn } from '@/lib/utils';
 import type { MusicSource } from '@/types';
 
 interface Props {
   onOpenDirPicker: () => void;
 }
-
-const SOURCES: { id: MusicSource; name: string }[] = [
-  { id: 'netease', name: '网易云音乐' },
-  { id: 'qmusic', name: 'QQ 音乐' },
-  { id: 'kugou', name: '酷狗音乐' },
-  { id: 'kuwo', name: '酷我音乐' },
-  { id: 'migu', name: '咪咕音乐' },
-  { id: 'musicbrainz', name: 'MusicBrainz' },
-  { id: 'acoustid', name: 'AcoustID 声纹' },
-];
 
 export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   const rows = useWorklistStore((s) => s.rows);
@@ -201,23 +193,23 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         row.musicInfo?.title || row.fileName.replace(/\.[^/.]+$/, '').trim();
 
       try {
-        const primarySource = selectedSources[0] || 'smart_tag';
-        const res = await fetchId3ByTitle(
+        // Every ticked source, not just the first. The picker let the user
+        // choose four sources and the request asked one of them, so a
+        // track that only 咪咕 had was reported as a failure no matter how
+        // the sources were set. Merged round-robin by rank, so the best
+        // result of any source can be the one that wins.
+        const { candidates } = await searchAcrossSources(
           queryTitle,
-          primarySource,
+          selectedSources.length > 0 ? selectedSources : ['smart_tag'],
           row.fullPath,
         );
-
-        const candidates = res?.data ?? [];
-        if (candidates.length === 0 || !autoApplyFirstMatch) {
+        const best = bestCandidate(candidates);
+        if (!best || !autoApplyFirstMatch) {
           setStatus(row.fullPath, 'failed');
           failCount++;
           continue;
         }
-        matched.set(
-          row.fullPath,
-          scrapedMusicInfo(candidates[0], queryTitle),
-        );
+        matched.set(row.fullPath, scrapedMusicInfo(best, queryTitle));
       } catch {
         setStatus(row.fullPath, 'failed');
         failCount++;

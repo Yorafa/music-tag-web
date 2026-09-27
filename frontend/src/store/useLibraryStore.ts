@@ -101,7 +101,7 @@ interface LibraryState {
   dirs: string[];
   /** In-memory search filter applied by getFiltered(). */
   query: string;
-  enqueueDirs(dirs: string[]): Promise<{ added: number; skipped: number }>;
+  enqueueDirs(dirs: string[]): Promise<{ added: number; skipped: number; files: number }>;
   search(s: string): void;
   remove(id: string): void;
   clear(): void;
@@ -127,10 +127,10 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   query: '',
 
   enqueueDirs: async (dirs) => {
-    if (dirs.length === 0) return { added: 0, skipped: 0 };
+    if (dirs.length === 0) return { added: 0, skipped: 0, files: 0 };
 
     const expanded = await expandDirsToAudioFiles(dirs);
-    if (expanded.length === 0) return { added: 0, skipped: 0 };
+    if (expanded.length === 0) return { added: 0, skipped: 0, files: 0 };
 
     // Per-file dedupe, shared with useWorklistStore so the two modes cannot
     // drift. The old rule dropped a source dir's whole batch as soon as one
@@ -196,6 +196,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       // directories, and the previous pair mixed files with dirs.
       added: addedDirs,
       skipped: skippedDirs,
+      files: fresh.length,
     };
   },
 

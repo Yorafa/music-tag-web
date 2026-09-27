@@ -7,7 +7,7 @@
 //
 // Lives in components/detail/ rather than components/workstation/ because
 // it is no longer owned by the scraper: 音乐库 opens the same dialog.
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   Save,
   Sparkles,
@@ -29,6 +29,11 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { TAB_BAR_CLASS } from '@/components/detail/tabBar';
+import { CandidateCard } from '@/components/detail/CandidateCard';
+import { SourcePickerDialog } from '@/components/detail/SourcePickerDialog';
+import { CANDIDATES_PER_PAGE, paginateCandidates } from '@/components/detail/candidates';
+import { CANDIDATE_FETCH_LIMIT, SOURCES } from '@/components/common/tagSources';
+import { searchAcrossSources } from '@/api/scrapeSources';
 import { useWorklistStore } from '@/store/useWorklistStore';
 import { useLibraryStore } from '@/store/useLibraryStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
@@ -58,6 +63,13 @@ interface Props {
    *  dialog was open, so the empty state is a guard, not a screen. */
   row: DetailTarget | null;
 }
+
+/** What a first-time scrape asks. The three big Chinese catalogues plus
+ *  MusicBrainz: enough coverage that a miss is usually the track's fault,
+ *  not the source set's, and the picker is one click away for anything
+ *  else. AcoustID is deliberately absent — it reads the audio rather than
+ *  the title, so it belongs to the 指纹 tab. */
+const DEFAULT_SCRAPE_SOURCES: MusicSource[] = ['netease', 'qmusic', 'musicbrainz'];
 
 function getInitialFormData(row: DetailTarget): Partial<MusicTagInfo> {
   const info = row.musicInfo ?? {};
@@ -101,9 +113,15 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
   const [activeTab, setActiveTab] = useState<'tags' | 'candidates' | 'lyrics' | 'cover' | 'audio'>('tags');
   const [formData, setFormData] = useState<Partial<MusicTagInfo>>(() => getInitialFormData(row));
   const [candidates, setCandidates] = useState<SongInfo[]>([]);
+  const [page, setPage] = useState(1);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [selectedSource, setSelectedSource] = useState<MusicSource>('smart_tag');
+  // Which sources the last search asked. Kept as state rather than a
+  // constant so the picker can start from them: re-running a search with
+  // the same sources is the common case, and re-picking them every time is
+  // the friction that stops people retrying with a different source.
+  const [scrapeSources, setScrapeSources] = useState<MusicSource[]>(DEFAULT_SCRAPE_SOURCES);
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState(() => formData.title || row.fileName.replace(/\.[^/.]+$/, '').trim());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -127,28 +145,79 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
     }
   }, [row]);
 
-  // Search candidate matches from cloud sources
-  const handleSearchCandidates = useCallback(async (customQuery?: string) => {
-    const query = customQuery || searchQuery || formData.title || row.fileName.replace(/\.[^/.]+$/, '');
-    if (!query) return;
+  // Search candidate matches across the sources the user picked. The old
+  // version searched one hardcoded source and told the user nothing about
+  // it, so "no candidates" was indistinguishable from "wrong source".
+  const handleSearchCandidates = useCallback(
+    async (customQuery?: string, sources?: MusicSource[], limit?: number) => {
+      const query =
+        customQuery ||
+        searchQuery ||
+        formData.title ||
+        row.fileName.replace(/\.[^/.]+$/, '');
+      if (!query) return;
+      const chosen = sources && sources.length > 0 ? sources : scrapeSources;
 
+      setLoadingCandidates(true);
+      setSourcePickerOpen(false);
+      try {
+        const { candidates: list, emptySources, failedSources, error } =
+          await searchAcrossSources(query, chosen, row.fullPath, limit);
+        setCandidates(list);
+        setPage(1);
+        if (list.length > 0) {
+          useNoticeStore.getState().push(`找到 ${list.length} 个匹配候选`, 'info');
+        } else {
+          useNoticeStore.getState().push('未找到相关音源，可尝试更换关键词或音源', 'warn');
+        }
+        // A source that failed is a different fact from a source that found
+        // nothing, and the user cannot retry a source they were never told
+        // had failed.
+        if (failedSources.length > 0) {
+          useNoticeStore
+            .getState()
+            .push(`${failedSources.length} 个音源检索失败：${error ?? '未知原因'}`, 'warn');
+        } else if (list.length === 0 && emptySources.length > 0) {
+          useNoticeStore
+            .getState()
+            .push(`${emptySources.length} 个音源均未返回结果`, 'warn');
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        useNoticeStore.getState().push(`检索失败: ${msg}`, 'error');
+      } finally {
+        setLoadingCandidates(false);
+      }
+    },
+    [row, searchQuery, formData.title, scrapeSources],
+  );
+
+  /** 指纹 tab: fingerprint the audio with AcoustID alone. Kept separate
+   *  from handleSearchCandidates because it is a different question — it
+   *  reads the file, so it is not one of the title sources the picker
+   *  offers. */
+  const handleFingerprintSearch = useCallback(async () => {
     setLoadingCandidates(true);
+    setActiveTab('candidates');
     try {
-      const res = await fetchId3ByTitle(query, selectedSource, row.fullPath);
+      const res = await fetchId3ByTitle(row.fullPath, 'acoustid', row.fullPath, CANDIDATE_FETCH_LIMIT);
       const list = res?.data ?? [];
       setCandidates(list);
-      if (list.length > 0) {
-        useNoticeStore.getState().push(`找到 ${list.length} 个匹配候选`, 'info');
-      } else {
-        useNoticeStore.getState().push('未找到相关音源，可尝试更换关键词或音源', 'warn');
-      }
+      setPage(1);
+      useNoticeStore
+        .getState()
+        .push(
+          list.length > 0 ? `声纹识别到 ${list.length} 个候选` : '声纹未匹配到任何候选',
+          list.length > 0 ? 'info' : 'warn',
+        );
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      useNoticeStore.getState().push(`检索失败: ${msg}`, 'error');
+      useNoticeStore
+        .getState()
+        .push(`声纹识别失败: ${e instanceof Error ? e.message : String(e)}`, 'error');
     } finally {
       setLoadingCandidates(false);
     }
-  }, [row, searchQuery, formData.title, selectedSource]);
+  }, [row.fullPath]);
 
   // Apply candidate metadata
   const handleApplyCandidate = (c: SongInfo) => {
@@ -291,6 +360,13 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
 
   const coverSrc = resolveCoverSrc(formData);
 
+  // Derived, so a re-search that returns fewer candidates cannot leave the
+  // tab on a page number that no longer exists.
+  const candidatePage = useMemo(
+    () => paginateCandidates(candidates, page, CANDIDATES_PER_PAGE),
+    [candidates, page],
+  );
+
   return (
     // No bg-* here on purpose. The design system layers surfaces by
     // altitude (index.css: surface-1 = main work area, surface-3 = dialog
@@ -376,11 +452,15 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
             variant="outline"
             onClick={() => {
               setActiveTab('candidates');
-              handleSearchCandidates();
+              // Opens the source picker rather than searching straight
+              // away. Which sources get asked is the one decision that
+              // decides whether a scrape finds anything, and it used to be
+              // made invisibly, on the user's behalf, by a constant.
+              setSourcePickerOpen(true);
             }}
             disabled={loadingCandidates}
             className="h-9 px-3 text-sm gap-1.5 border-primary/40 text-primary hover:bg-primary/10"
-            title="全网并发刮削多源候选"
+            title="选择音源后全网并发刮削候选"
             >
             <Sparkles className={`w-4 h-4 ${loadingCandidates ? 'animate-spin' : ''}`} />
             <span>智能刮削</span>
@@ -541,21 +621,47 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
 
         {/* Tab 2: Scrape Candidates */}
         <TabsContent value="candidates" className="flex-1 flex flex-col min-h-0 m-0 p-0">
-          <div className="px-6 py-4 border-b border-border bg-surface-2/60 flex items-center gap-2 shrink-0">
-            <Input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSearchCandidates()}
-              placeholder="输入歌名/关键字检索..."
-              className="h-9 text-sm flex-1 bg-background"
-            />
-            <Button
-              onClick={() => handleSearchCandidates()}
-              disabled={loadingCandidates}
-              className="h-9 px-3"
+          <div className="px-6 py-3 border-b border-border bg-surface-2/60 space-y-2 shrink-0">
+            <div className="flex items-center gap-2">
+              <Input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearchCandidates()}
+                placeholder="输入歌名/关键字检索..."
+                className="h-9 text-sm flex-1 bg-background"
+              />
+              <Button
+                onClick={() => handleSearchCandidates()}
+                disabled={loadingCandidates}
+                className="h-9 px-3"
+                title={`用选中的 ${scrapeSources.length} 个音源检索`}
               >
-              <Search className={`w-4 h-4 ${loadingCandidates ? 'animate-spin' : ''}`} />
-            </Button>
+                <Search className={`w-4 h-4 ${loadingCandidates ? 'animate-spin' : ''}`} />
+              </Button>
+            </div>
+            {/* Which sources the search above will ask. The bare search
+                button used to hide this entirely, which made an empty
+                result impossible to act on: the fix (a different keyword,
+                a different source) was invisible from here. */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] text-muted-foreground shrink-0">音源</span>
+              {SOURCES.filter((s) => scrapeSources.includes(s.id)).map((s) => (
+                <Badge
+                  key={s.id}
+                  variant="secondary"
+                  className="h-4 px-1.5 text-[10px] font-normal"
+                >
+                  {s.name}
+                </Badge>
+              ))}
+              <button
+                type="button"
+                onClick={() => setSourcePickerOpen(true)}
+                className="text-[10px] text-primary hover:underline shrink-0"
+              >
+                更换
+              </button>
+            </div>
           </div>
 
           <ScrollArea className="flex-1 p-4">
@@ -570,89 +676,53 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
                 <p>点击上方搜索或「智能刮削」检索候选</p>
               </div>
             ) : (
+              <>
               <div className="space-y-2">
-                {candidates.map((c, i) => {
-                  // Two different claims, never merged into one number.
-                  //
-                  // `score` is a confidence in the audio and only AcoustID
-                  // sets it, so when it is present it is worth showing. The
-                  // old code multiplied a title-similarity sum by 20 to
-                  // manufacture a percentage, which displayed a flat 40% for
-                  // every candidate of a normal scrape — and 85% (a literal
-                  // in the fallback) for the ones the backend never scored
-                  // at all. A number that is always the same, or invented
-                  // when missing, is worse than saying what is actually
-                  // known.
-                  const confidence =
-                    typeof c.score === 'number' && c.score > 0
-                      ? Math.round(c.score * 100)
-                      : null;
-                  const titleFact =
-                    c.title_match === 'exact'
-                      ? '标题完全匹配'
-                      : c.title_match === 'partial'
-                        ? '标题部分匹配'
-                        : null;
-                  return (
-                    <div
-                      key={`${c.id}-${i}`}
-                      className="p-4 rounded-xl border border-border/70 bg-surface-2/60 hover:bg-surface-2 hover:border-primary/50 transition-all space-y-3"
-                    >
-                      <div className="flex items-start gap-2.5">
-                        <div className="w-12 h-12 rounded-lg overflow-hidden bg-muted shrink-0 ring-1 ring-border/50">
-                          {c.album_img ? (
-                            <img src={c.album_img} alt="" className="w-full h-full object-cover" />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center bg-primary/10 text-primary text-sm font-bold">
-                              {(c.name || '?').charAt(0)}
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="flex-1 min-w-0 space-y-0.5">
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="text-sm font-semibold text-foreground truncate">
-                              {c.name}
-                            </span>
-                            <Badge variant="outline" className="text-[10px] px-1.5 h-4 uppercase font-mono">
-                              {c.source || 'cloud'}
-                            </Badge>
-                          </div>
-                          <p className="text-xs text-muted-foreground truncate">
-                            {c.artist || '未知'} · {c.album || '单曲'}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-2 border-t border-border/40">
-                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                          {confidence ? (
-                            <>
-                              <Fingerprint className="w-3 h-3" />
-                              <span>声纹匹配</span>
-                              {/* A confidence is a measurement, not a success state, so it gets no colour. The old green was a raw palette value with no dark-mode counterpart: it rendered as the same fixed green in both themes while everything around it followed the design tokens. */}
-                              <span className="font-mono font-bold text-foreground">
-                                {confidence}%
-                              </span>
-                            </>
-                          ) : titleFact ? (
-                            <span>{titleFact}</span>
-                          ) : (
-                            <span className="italic">未按音频校验</span>
-                          )}
-                        </div>
-                        <Button
-                          variant="secondary"
-                          onClick={() => handleApplyCandidate(c)}
-                          className="h-8 px-3 text-xs text-primary hover:bg-primary hover:text-primary-foreground font-semibold"
-                          >
-                          应用此标签
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
+                {candidatePage.items.map((c, i) => (
+                  <CandidateCard
+                    key={`${c.source ?? ''}-${c.id}-${i}`}
+                    candidate={c}
+                    onApply={handleApplyCandidate}
+                  />
+                ))}
               </div>
+              {/* Paging, not a longer scroll. Fifteen candidates in one
+                  scroll is a list nobody compares; five at a time with a
+                  position indicator is one they can read against the
+                  count they were told about. */}
+              {candidatePage.pageCount > 1 && (
+                <div className="flex items-center justify-between gap-2 pt-3 mt-1 border-t border-border/40">
+                  <span className="text-[11px] text-muted-foreground font-mono">
+                    第 {candidatePage.page} / {candidatePage.pageCount} 页 · 共{' '}
+                    {candidatePage.total} 个候选
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      disabled={candidatePage.page <= 1}
+                      className="h-7 px-2 text-xs"
+                    >
+                      上一页
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setPage((p) =>
+                          Math.min(candidatePage.pageCount, p + 1),
+                        )
+                      }
+                      disabled={candidatePage.page >= candidatePage.pageCount}
+                      className="h-7 px-2 text-xs"
+                    >
+                      下一页
+                    </Button>
+                  </div>
+                </div>
+              )}
+              </>
             )}
           </ScrollArea>
         </TabsContent>
@@ -734,11 +804,8 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
             </p>
             <Button
               variant="outline"
-              onClick={() => {
-                setSelectedSource('acoustid');
-                setActiveTab('candidates');
-                handleSearchCandidates(row.fullPath);
-              }}
+              onClick={handleFingerprintSearch}
+              disabled={loadingCandidates}
               className="w-full h-9 text-sm text-primary border-primary/40"
               >
               计算声纹并在线识别
@@ -757,6 +824,24 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* Mounted only while open: its source selection is draft state, and
+          keeping it mounted would let a cancelled dialog leave half-changed
+          sources behind for the next search. */}
+      {sourcePickerOpen && (
+        <SourcePickerDialog
+          open={sourcePickerOpen}
+          onOpenChange={setSourcePickerOpen}
+          initialSources={scrapeSources}
+          initialQuery={searchQuery || formData.title || ''}
+          loading={loadingCandidates}
+          onSearch={(sources, query) => {
+            setScrapeSources(sources);
+            setSearchQuery(query);
+            void handleSearchCandidates(query, sources, CANDIDATE_FETCH_LIMIT);
+          }}
+        />
+      )}
     </aside>
   );
 }

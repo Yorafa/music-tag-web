@@ -17,11 +17,15 @@ import (
 // 关键差异：
 //   - resource == "acoustid"：title 替换为 full_path（Django 一致行为）
 //   - resource == "smart_tag"：并发多源 fan-out + 打分 + 去重（对齐 SmartTagClient.fetch_id3_by_title）
+//   - limit：仅对 smart_tag 生效，缺省 DefaultSmartCandidateLimit，上限
+//     MaxSmartCandidateLimit。分页是客户端行为，但服务端先把结果截断到 15
+//     的话，"查看更多" 翻到第 4 页也只能看到同一批 15 条。
 func FetchID3ByTitle(c *gin.Context) {
 	var req struct {
 		Title    string `json:"title" binding:"required"`
 		Resource string `json:"resource" binding:"required"`
 		FullPath string `json:"full_path"`
+		Limit    int    `json:"limit"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Failure(c, "invalid request")
@@ -35,7 +39,7 @@ func FetchID3ByTitle(c *gin.Context) {
 	}
 
 	if req.Resource == "smart_tag" {
-		songs, err := SmartTagSearch(c.Request.Context(), title, req.FullPath)
+		songs, err := SmartTagSearchLimit(c.Request.Context(), title, req.FullPath, candidateLimit(req.Limit))
 		if err != nil {
 			Failure(c, err.Error())
 			return
@@ -220,6 +224,29 @@ func smartTagSources() []string {
 	return out
 }
 
+// DefaultSmartCandidateLimit / MaxSmartCandidateLimit bound how much of a
+// fan-out the gateway will return. The default is the historical top-15, so
+// every existing caller sees exactly what it saw before; the max is the
+// ceiling a client can ask for, because the fan-out cost grows with the
+// number of sources, not with the limit.
+const (
+	DefaultSmartCandidateLimit = 15
+	MaxSmartCandidateLimit     = 100
+)
+
+// candidateLimit clamps a client-supplied limit. Zero or negative means
+// "unspecified", which is the default rather than zero candidates — an
+// omitted field is a client that does not know the field exists.
+func candidateLimit(requested int) int {
+	if requested <= 0 {
+		return DefaultSmartCandidateLimit
+	}
+	if requested > MaxSmartCandidateLimit {
+		return MaxSmartCandidateLimit
+	}
+	return requested
+}
+
 // SmartTagSearch 并发 fan-out 到所有支持 title-search 的 tag 源，再打分 + 去重 + 取 top-15。
 //
 // 对齐 Django SmartTagClient.fetch_id3_by_title：
@@ -230,6 +257,13 @@ func smartTagSources() []string {
 //   - 替代 Stage A 之前的硬编码 `sourcesDefault`：源集现读 plugin registry，
 //     新增内置 plugin 自动加入 fan-out（除非它不支持 title search）。
 func SmartTagSearch(ctx context.Context, title, fullPath string) ([]plugin.Song, error) {
+	return SmartTagSearchLimit(ctx, title, fullPath, DefaultSmartCandidateLimit)
+}
+
+// SmartTagSearchLimit is SmartTagSearch with a caller-chosen cut-off. The
+// wrapper exists so the three-argument form every existing caller uses keeps
+// its meaning ("the default 15") instead of silently becoming "no limit".
+func SmartTagSearchLimit(ctx context.Context, title, fullPath string, limit int) ([]plugin.Song, error) {
 	if title == "" {
 		return nil, nil
 	}
@@ -316,8 +350,8 @@ func SmartTagSearch(ctx context.Context, title, fullPath string) ([]plugin.Song,
 		keySet[k] = true
 		dedup = append(dedup, sg)
 	}
-	if len(dedup) > 15 {
-		dedup = dedup[:15]
+	if len(dedup) > limit {
+		dedup = dedup[:limit]
 	}
 	return dedup, nil
 }

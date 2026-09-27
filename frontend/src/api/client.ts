@@ -60,11 +60,20 @@ export async function updateId3(musicId3Info: Array<Record<string, unknown>>) {
   return data;
 }
 
-export async function fetchId3ByTitle(title: string, resource: string, fullPath?: string) {
+export async function fetchId3ByTitle(
+  title: string,
+  resource: string,
+  fullPath?: string,
+  limit?: number,
+) {
   const { data } = await api.post('fetch_id3_by_title/', {
     title,
     resource,
     full_path: fullPath || '',
+    // Omitted when the caller has no opinion: the gateway then applies its
+    // own default, which is lower than the detail dialog's page of
+    // candidates. Sending 0 would ask for zero rows.
+    ...(limit && limit > 0 ? { limit } : {}),
   });
   return data;
 }
@@ -315,6 +324,35 @@ export async function restoreFromTrash(
     rel_paths: relPaths,
   });
   return unwrapEnvelope<RestoreReport>(data, 'trash_restore');
+}
+
+export interface PurgeReport {
+  results: Array<{
+    rel_path: string;
+    status: string;
+    reason?: string;
+  }>;
+  purged: number;
+  failed: number;
+}
+
+/** POST /api/trash/purge/ — destroy files in the trash for good.
+ *
+ *  The only irreversible endpoint in the app, hence `confirm`. It is not a
+ *  politeness flag: the handler refuses without it, so a client that wires
+ *  the wrong button cannot destroy the only copy of a file. An empty
+ *  `relPaths` purges the whole batch directory, which is the only way an
+ *  emptied batch ever stops being listed. */
+export async function purgeTrash(
+  batchId: string,
+  relPaths: string[],
+): Promise<PurgeReport> {
+  const { data } = await api.post('trash/purge/', {
+    batch_id: batchId,
+    rel_paths: relPaths,
+    confirm: true,
+  });
+  return unwrapEnvelope<PurgeReport>(data, 'trash_purge');
 }
 
 /** POST /api/clear_async_tasks/ — deletes every pending asynq task.

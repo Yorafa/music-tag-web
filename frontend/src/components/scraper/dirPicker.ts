@@ -23,6 +23,21 @@ export interface FolderRow {
   name: string;
 }
 
+/** One file row: something in the browsed directory that is not a
+ *  directory. Every file is listed, not just audio — the request was to see
+ *  the directory's whole contents — but only audio is selectable, because
+ *  only audio becomes a queue row. A `cover.jpg` that can be ticked and
+ *  then enqueues nothing is a broken-looking control. */
+export interface FileRow {
+  /** Relative path under MUSIC_DIR including the filename. */
+  relPath: string;
+  /** Display name (last path segment). */
+  name: string;
+  /** Whether ticking this row adds the file to the queue. */
+  selectable: boolean;
+  size?: number;
+}
+
 /** Compose two path segments into one relPath, never producing
  *  double-slashes. '' (root) + 'foo' → 'foo'; 'foo' + 'bar' → 'foo/bar'. */
 export function appendToPath(base: string, name: string): string {
@@ -82,6 +97,29 @@ export function directAudioNames(treeData: FileNode[] | undefined): string[] {
     .filter((c) => c.icon !== 'icon-folder' && isAudioName(c.name))
     .map((c) => c.name)
     .sort((a, b) => a.localeCompare(b));
+}
+
+/** The directory's own files, sorted, with the current dir folded into
+ *  each path. Audio before the rest, because the selectable rows are the
+ *  ones the user came here for and burying them under a folder's worth of
+ *  cover art is how they get missed. */
+export function fileRowsOf(
+  treeData: FileNode[] | undefined,
+  currentDir: string,
+): FileRow[] {
+  const children = treeData?.[0]?.children ?? [];
+  return children
+    .filter((c) => c.icon !== 'icon-folder')
+    .map((c) => ({
+      relPath: appendToPath(currentDir, c.name),
+      name: c.name,
+      selectable: isAudioName(c.name),
+      size: c.size,
+    }))
+    .sort((a, b) => {
+      if (a.selectable !== b.selectable) return a.selectable ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
 }
 
 /** Label for the "select the directory you are in" row.

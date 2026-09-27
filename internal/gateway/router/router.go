@@ -159,6 +159,10 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// "recoverable" true on disk and false in practice.
 		authed.GET("/trash/", handler.ListTrash)
 		authed.POST("/trash/restore/", handler.RestoreTrash)
+		// The one irreversible call in the product. It requires an explicit
+		// `confirm: true` in the body precisely because a restore and a purge
+		// are otherwise the same request shape — see handler.PurgeTrash.
+		authed.POST("/trash/purge/", handler.PurgeTrash)
 		// Task record list
 		// Operation history audit log endpoints
 		authed.GET("/operation_logs/", handler.ListOperationLogs)

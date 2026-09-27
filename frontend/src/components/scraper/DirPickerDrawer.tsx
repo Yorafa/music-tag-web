@@ -27,6 +27,7 @@ import {
   ChevronRight,
   Home,
   ArrowLeft,
+  Music,
   X as XIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -40,6 +41,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { getFileList } from '@/api/client';
+import { selectionKind } from '@/utils/expandDirs';
 import { useWorklistStore } from '@/store/useWorklistStore';
 import { useLibraryStore } from '@/store/useLibraryStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
@@ -51,12 +53,14 @@ import {
 import {
   appendToPath,
   directAudioNames,
+  fileRowsOf,
   folderRowsOf,
   parentOf,
   wholeDirLabel,
   wholeDirSelectable,
 } from '@/components/scraper/dirPicker';
 import { cn } from '@/lib/utils';
+import { formatBytes } from '@/utils/formatBytes';
 import type { FileNode } from '@/types';
 
 interface DirPickerDrawerProps {
@@ -131,6 +135,14 @@ export function DirPickerDrawer({
     [treeCache, currentDir],
   );
 
+  // The files sitting in this directory, audio first. They are selectable
+  // on their own now, which is the point: the user who knows they want one
+  // track should not have to take the whole folder to get it.
+  const fileRows = useMemo(
+    () => fileRowsOf(treeCache[currentDir], currentDir),
+    [treeCache, currentDir],
+  );
+
   // The directory being browsed is itself selectable, which is the only
   // way to reach audio sitting directly in it (see dirPicker.ts). Hidden
   // when it would enqueue nothing, so an inert checkbox never shows up.
@@ -181,8 +193,14 @@ export function DirPickerDrawer({
         ? await useWorklistStore.getState().enqueueDirs(selectedArr)
         : await useLibraryStore.getState().enqueueDirs(selectedArr);
 
+    // Two units, because the selection can hold both. "已收录 1 个新增目录"
+    // after ticking three files is true and useless; the file count is what
+    // the user can check against the checkbox column.
+    const onlyFiles = selectedArr.every((p) => selectionKind(p) === 'file');
     useNoticeStore.getState().push(
-      `已收录 ${result.added} 个新增目录、跳过 ${result.skipped} 个重复`,
+      onlyFiles
+        ? `已收录 ${result.files} 个文件`
+        : `已收录 ${result.files} 个文件（${result.added} 个新增目录）、跳过 ${result.skipped} 个重复目录`,
       'info',
     );
     setSelected(new Set());
@@ -208,7 +226,13 @@ export function DirPickerDrawer({
           'data-closed:slide-out-to-bottom sm:data-closed:slide-out-to-right',
         )}
       >
-        <div className="flex flex-col h-[85vh] sm:h-screen">
+        {/* min-w-0 is load-bearing, not tidiness. DialogContent is a
+            `grid`, and a grid track sized `auto` will not shrink below its
+            content's min-content width — one long filename (this library
+            has a 60-character one) pushed the track to 748px inside a
+            448px drawer and moved 确认 off the right edge of the screen,
+            so the drawer's only submit button could not be clicked. */}
+        <div className="flex flex-col h-[85vh] sm:h-screen min-w-0">
           <DialogHeader className="px-4 pt-4 pb-3 border-b border-border">
             <DialogTitle>选择目录</DialogTitle>
             {/* Breadcrumb. Clicking any segment OR the home icon jumps
@@ -273,14 +297,14 @@ export function DirPickerDrawer({
                 </div>
               ) : rowsForCurrent.length === 0 && !canPickWholeDir ? (
                 <div className="text-center py-8 text-xs text-muted-foreground">
-                  当前目录下没有子目录
+                  当前目录下没有子目录，也没有可收录的音频
                 </div>
               ) : (
                 <>
                 {canPickWholeDir && (
                   <label
                     className={cn(
-                      'flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors text-sm mb-1 cursor-pointer',
+                      'flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors text-sm mb-1 cursor-pointer min-w-0',
                       selected.has(currentDir)
                         ? 'bg-primary/10 text-foreground'
                         : 'hover:bg-accent',
@@ -293,7 +317,7 @@ export function DirPickerDrawer({
                       className="w-3.5 h-3.5 rounded border-border accent-primary shrink-0 cursor-pointer"
                     />
                     <FolderTree className="w-4 h-4 text-primary shrink-0" />
-                    <span className="truncate">{wholeDirLabel(currentDir)}</span>
+                    <span className="truncate min-w-0">{wholeDirLabel(currentDir)}</span>
                     {directAudio.length > 0 && (
                       <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
                         本层 {directAudio.length} 个音频
@@ -307,7 +331,7 @@ export function DirPickerDrawer({
                     <div
                       key={row.relPath}
                       className={cn(
-                        'flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors text-sm',
+                        'flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors text-sm min-w-0',
                         isSelected
                           ? 'bg-primary/10 text-foreground'
                           : 'hover:bg-accent',
@@ -343,6 +367,68 @@ export function DirPickerDrawer({
                     </div>
                   );
                 })}
+
+                {/* The directory's own files. The list used to stop at the
+                    subdirectories, so a folder of loose tracks looked
+                    empty: the user could see there were files only by
+                    selecting the whole directory and getting all of them,
+                    which is not the same as choosing one. Non-audio files
+                    are listed but not tickable — a checkbox that adds
+                    nothing is worse than no checkbox. */}
+                {fileRows.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-border/40">
+                    {fileRows.map((row) => {
+                      const isSelected = selected.has(row.relPath);
+                      return (
+                        <div
+                          key={row.relPath}
+                          className={cn(
+                            'flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors text-sm min-w-0',
+                            row.selectable
+                              ? isSelected
+                                ? 'bg-primary/10 text-foreground'
+                                : 'hover:bg-accent'
+                              : 'opacity-60',
+                          )}
+                        >
+                          {row.selectable ? (
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleSelected(row.relPath)}
+                              aria-label={`选中 ${row.name}`}
+                              className="w-3.5 h-3.5 rounded border-border accent-primary shrink-0 cursor-pointer"
+                            />
+                          ) : (
+                            <span
+                              className="w-3.5 shrink-0"
+                              title="非音频文件，不会被收录"
+                            />
+                          )}
+                          <Music
+                            className={cn(
+                              'w-4 h-4 shrink-0',
+                              row.selectable
+                                ? 'text-primary'
+                                : 'text-muted-foreground',
+                            )}
+                          />
+                          <span
+                            className="truncate flex-1 min-w-0"
+                            title={row.relPath}
+                          >
+                            {row.name}
+                          </span>
+                          {typeof row.size === 'number' && row.size > 0 && (
+                            <span className="text-[10px] text-muted-foreground font-mono shrink-0">
+                              {formatBytes(row.size)}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 </>
               )}
             </div>
@@ -352,7 +438,7 @@ export function DirPickerDrawer({
           {selected.size > 0 && (
             <div className="border-t border-border px-3 py-2 max-h-32 overflow-y-auto bg-surface-2">
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5">
-                已选 {selected.size} 个目录
+                已选 {selected.size} 项
               </div>
               <div className="flex flex-wrap gap-1">
                 {Array.from(selected).map((relPath) => (
