@@ -104,6 +104,18 @@ func ListTrash(c *gin.Context) {
 			// One unreadable batch must not hide the rest of the history.
 			continue
 		}
+		// A batch directory with nothing left in it is not a record of
+		// anything: its files were restored or purged, and the directory
+		// survives only because nothing removes it. Listing it puts a row
+		// in the dialog that has no file, no checkbox and nothing to
+		// recover — which reads as "there is something here" when there is
+		// not. The directory is left on disk rather than deleted here,
+		// because a batch that was emptied by a human dropping a file back
+		// in is not ours to destroy; a whole-batch purge removes it when
+		// the user actually asks.
+		if files == 0 {
+			continue
+		}
 		listing.Batches = append(listing.Batches, batch)
 		listing.TotalFiles += files
 		listing.TotalSize += size

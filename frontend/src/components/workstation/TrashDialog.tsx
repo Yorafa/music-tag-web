@@ -65,7 +65,12 @@ export function TrashDialog({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState(false);
+  // WHICH operation is running, not just that one is. A single boolean
+  // made the restore button say 「恢复中…」 while a purge was in flight —
+  // the user watches the button for the action they just chose report the
+  // other one. The two are opposites (one brings a file back, one
+  // destroys it), so the label has to name the right one.
+  const [busy, setBusy] = useState<'restore' | 'purge' | null>(null);
   // What the user has asked to destroy and has NOT yet confirmed. Held as
   // state rather than fired straight from the button: purge is the one
   // action in this app that cannot be undone, so it gets the same two-step
@@ -161,7 +166,7 @@ export function TrashDialog({
 
   const handleRestore = async () => {
     if (restoreTargets.length === 0) return;
-    setBusy(true);
+    setBusy('restore');
     // Group by batch: the endpoint takes one batch_id per call, and firing
     // one request per file would both hammer the API and lose the per-batch
     // result shape.
@@ -199,7 +204,7 @@ export function TrashDialog({
     } catch (e) {
       useNoticeStore.getState().push(`恢复失败：${(e as Error).message}`, 'error');
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -213,7 +218,7 @@ export function TrashDialog({
       req.kind === 'batch'
         ? [[req.batchId, []]]
         : [...pickedByBatch.entries()];
-    setBusy(true);
+    setBusy('purge');
     try {
       let purged = 0;
       const problems: string[] = [];
@@ -242,7 +247,7 @@ export function TrashDialog({
     } catch (e) {
       useNoticeStore.getState().push(`彻底删除失败：${(e as Error).message}`, 'error');
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -293,7 +298,7 @@ export function TrashDialog({
                         onClick={() =>
                           setPendingPurge({ kind: 'batch', batchId: b.id })
                         }
-                        disabled={busy}
+                        disabled={busy !== null}
                         title="彻底删除这个批次的全部文件（不可撤销）"
                         className="inline-flex items-center gap-1 px-1.5 h-5 rounded text-[10px] text-destructive/90 hover:bg-destructive/10 hover:text-destructive transition-colors disabled:opacity-40 shrink-0"
                       >
@@ -308,53 +313,34 @@ export function TrashDialog({
                       </span>
                     </span>
                   </div>
+                  {/* No empty-batch branch: the server omits a batch that
+                      holds nothing, so a row here always has a file in it.
+                      The empty directory is still on disk, and a whole-batch
+                      purge from the header above is what removes it. */}
                   <div className="divide-y divide-border/40 max-h-56 overflow-y-auto">
-                    {b.files.length === 0 ? (
-                      // The old copy here said the files had all been
-                      // restored, which is a guess: the batch can also be
-                      // empty because its files were purged, or because a
-                      // restore overwrote nothing and left them elsewhere.
-                      // A sentence the user cannot verify is worse than
-                      // silence, so the only thing shown is the one action
-                      // that is true of an empty batch.
-                      <div className="px-3 py-2 flex items-center justify-end">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setPendingPurge({ kind: 'batch', batchId: b.id })
-                          }
-                          disabled={busy}
-                          className="inline-flex items-center gap-1 text-[10px] text-destructive/90 hover:text-destructive transition-colors disabled:opacity-40"
+                    {b.files.map((f) => {
+                      const key = `${b.id}\u0000${f.rel_path}`;
+                      return (
+                        <label
+                          key={key}
+                          className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-accent/40"
                         >
-                          <Flame className="w-3 h-3" />
-                          彻底删除空批次
-                        </button>
-                      </div>
-                    ) : (
-                      b.files.map((f) => {
-                        const key = `${b.id}\u0000${f.rel_path}`;
-                        return (
-                          <label
-                            key={key}
-                            className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-accent/40"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={picked.has(key)}
-                              onChange={() => toggle(key)}
-                              className="w-3.5 h-3.5 rounded border-border accent-primary shrink-0 cursor-pointer"
-                            />
-                            <FileIcon f={f} />
-                            <span className="truncate flex-1" title={f.rel_path}>
-                              {f.rel_path}
-                            </span>
-                            <span className="text-[10px] text-muted-foreground font-mono shrink-0">
-                              {formatBytes(f.size)}
-                            </span>
-                          </label>
-                        );
-                      })
-                    )}
+                          <input
+                            type="checkbox"
+                            checked={picked.has(key)}
+                            onChange={() => toggle(key)}
+                            className="w-3.5 h-3.5 rounded border-border accent-primary shrink-0 cursor-pointer"
+                          />
+                          <FileIcon f={f} />
+                          <span className="truncate flex-1" title={f.rel_path}>
+                            {f.rel_path}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground font-mono shrink-0">
+                            {formatBytes(f.size)}
+                          </span>
+                        </label>
+                      );
+                    })}
                   </div>
                 </div>
               ))}
@@ -366,28 +352,28 @@ export function TrashDialog({
           <Button
             variant="outline"
             onClick={() => void load()}
-            disabled={loading || busy}
+            disabled={loading || busy !== null}
             className="text-xs h-8"
           >
             刷新
           </Button>
           <Button
             onClick={handleRestore}
-            disabled={restoreTargets.length === 0 || busy || loading}
+            disabled={restoreTargets.length === 0 || busy !== null || loading}
             className="text-xs h-8"
           >
-            <RotateCcw className={`w-3.5 h-3.5 ${busy ? 'animate-spin' : ''}`} />
-            {busy ? '恢复中…' : `恢复选中 (${restoreTargets.length})`}
+            <RotateCcw className={`w-3.5 h-3.5 ${busy === 'restore' ? 'animate-spin' : ''}`} />
+            {busy === 'restore' ? '恢复中…' : `恢复选中 (${restoreTargets.length})`}
           </Button>
           <Button
             variant="ghost"
             onClick={() => setPendingPurge({ kind: 'picked' })}
-            disabled={pickedByBatch.size === 0 || busy || loading}
+            disabled={pickedByBatch.size === 0 || busy !== null || loading}
             className="text-xs h-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
             title="删除选中的文件，无法再放回"
           >
-            <Flame className="w-3.5 h-3.5" />
-            {`彻底删除选中 (${restoreTargets.length})`}
+            <Flame className={`w-3.5 h-3.5 ${busy === 'purge' ? 'animate-spin' : ''}`} />
+            {busy === 'purge' ? '删除中…' : `彻底删除选中 (${restoreTargets.length})`}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -411,18 +397,18 @@ export function TrashDialog({
             <Button
               variant="outline"
               onClick={() => setPendingPurge(null)}
-              disabled={busy}
+              disabled={busy !== null}
               className="text-xs h-8"
             >
               取消
             </Button>
             <Button
               onClick={handlePurge}
-              disabled={busy || !pendingPurge}
+              disabled={busy !== null || !pendingPurge}
               className="text-xs h-8 bg-destructive text-destructive-foreground hover:bg-destructive/90 font-semibold"
             >
               <Flame className="w-3.5 h-3.5" />
-              {busy ? '删除中…' : '确认删除'}
+              {busy === 'purge' ? '删除中…' : '确认删除'}
             </Button>
           </DialogFooter>
         </DialogContent>

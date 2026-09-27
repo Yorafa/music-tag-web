@@ -127,6 +127,33 @@ func seedTrash(t *testing.T, batchID string, files map[string]string) string {
 	return dir
 }
 
+// A batch whose files have all been restored or purged leaves its directory
+// behind, and that directory is not a record of anything. Listing it put a
+// row in the dialog with no file in it — a history entry the user can read
+// as "there is something to recover here" and act on.
+func TestListTrash_OmitsBatchesThatNoLongerHoldFiles(t *testing.T) {
+	t.Setenv("DATA_DIR", t.TempDir())
+	seedTrash(t, "20260927-115027", map[string]string{"a.ogg": "a"})
+	// Emptied by restoring everything it held: the directory survives, its
+	// contents do not.
+	seedTrash(t, "20260927-120000", map[string]string{})
+
+	env := getTrash(t, trashRouter(t))
+	if !env.Result {
+		t.Fatalf("result = false: %+v", env)
+	}
+	if len(env.Data.Batches) != 1 {
+		t.Fatalf("batches = %d, want only the one with a file in it: %+v",
+			len(env.Data.Batches), env.Data.Batches)
+	}
+	if env.Data.Batches[0].ID != "20260927-115027" {
+		t.Errorf("listed %q, want the batch that still has a file", env.Data.Batches[0].ID)
+	}
+	if env.Data.TotalFiles != 1 {
+		t.Errorf("total_files = %d, want 1", env.Data.TotalFiles)
+	}
+}
+
 // A fresh install has no trash at all. That is an empty trash, not a failure —
 // the dialog opens on first run and must not look broken.
 func TestListTrash_EmptyIsNotAnError(t *testing.T) {
