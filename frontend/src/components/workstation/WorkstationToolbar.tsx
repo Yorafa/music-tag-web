@@ -107,6 +107,8 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   const [dupResultOpen, setDupResultOpen] = useState(false);
   const [dupDeleteOpen, setDupDeleteOpen] = useState(false);
   const [isDeletingDup, setIsDeletingDup] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Scrape settings
   const [selectedSources, setSelectedSources] = useState<MusicSource[]>([
@@ -441,9 +443,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   // mutually-referencing pair. See duplicateBadge.ts::deleteTargetsFor.
   const dupTargets = deleteTargetsFor(
     hasSelection ? rows.filter((r) => selectedIds.includes(r.id)) : rows,
-  );
-
-  const handleDeleteDuplicates = async () => {
+  );  const handleDeleteDuplicates = async () => {
     if (dupTargets.length === 0) return;
     setIsDeletingDup(true);
     try {
@@ -464,6 +464,43 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
       useNoticeStore.getState().push(`删除失败：${(e as Error).message}`, 'error');
     } finally {
       setIsDeletingDup(false);
+    }
+  };
+
+  // Delete the selected rows outright. Same endpoint and same recoverable
+  // trash as the duplicate cleanup above — the only difference is the reason,
+  // so the reason travels in the request rather than being hardcoded
+  // server-side as it used to be ("requested_by": "duplicate_cleanup" on
+  // every call, which made the audit lie the moment a second caller existed).
+  //
+  // Selection-only, never "all rows": deleting a whole library because the
+  // filter happened to be empty is not a mistake this UI should let you make
+  // by accident. 清空 below still empties the LIST, and that one is reversible
+  // by re-adding the directory.
+  const deleteTargets = hasSelection
+    ? rows.filter((r) => selectedIds.includes(r.id))
+    : [];
+
+  const handleDeleteSelected = async () => {
+    if (deleteTargets.length === 0) return;
+    setIsDeleting(true);
+    try {
+      const report = await deleteFiles(deleteTargets.map((r) => r.id), 'worklist');
+      setDeleteOpen(false);
+      // Only rows whose file actually moved leave the list. A `missing` or
+      // `refused` row still has a file behind it, and dropping it would make
+      // the queue disagree with the disk.
+      remove(report.results.filter((x) => x.status === 'deleted').map((x) => x.file_full_path));
+      useNoticeStore
+        .getState()
+        .push(
+          `已删除 ${report.deleted} 个文件${report.failed > 0 ? `，${report.failed} 个未处理` : ''}（已移入回收目录，可恢复）`,
+          report.failed > 0 ? 'warn' : 'info',
+        );
+    } catch (e) {
+      useNoticeStore.getState().push(`删除失败：${(e as Error).message}`, 'error');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -710,6 +747,27 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           </Button>
         )}
 
+        {/* Delete the selected files from disk. Sits next to 删除重复
+            because it is the same operation with a different reason, and
+            next to 移除 because the two look alike and do very different
+            things: 移除 drops a row from this list only, this one takes the
+            file with it. */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setDeleteOpen(true)}
+          disabled={!hasSelection || isDeleting}
+          className="h-8 gap-1 text-xs text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+          title={
+            hasSelection
+              ? `将选中的 ${deleteTargets.length} 个文件移入回收目录（可恢复）`
+              : '请先选择要删除的音乐行'
+          }
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          <span>删除选中{hasSelection ? ` (${deleteTargets.length})` : ''}</span>
+        </Button>
+
         {/* Scan local buttons */}
       </div>
 
@@ -895,6 +953,45 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
       {/* Delete confirmation. Names every file, says plainly that the
           originals are kept, and states that the delete is recoverable —
           because the honest description of a quarantine is not "删除". */}
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base flex items-center gap-2 text-destructive">
+              <Trash2 className="w-4 h-4" />
+              确认删除选中的 {deleteTargets.length} 个文件？
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2.5 py-1 text-xs">
+            <p className="text-muted-foreground">
+              这些文件会从音乐库中移出，与曲库里的其他文件不再一同扫描。
+            </p>
+            <div className="max-h-52 overflow-y-auto rounded border border-border/60 bg-surface-1 divide-y divide-border/40">
+              {deleteTargets.map((r) => (
+                <div key={r.id} className="px-2 py-1.5 flex flex-col">
+                  <span className="truncate font-medium">{r.fileName}</span>
+                  <span className="truncate text-muted-foreground">{r.fullPath}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-muted-foreground">
+              文件不会被真正抹除，而是移入数据目录下的
+              <code className="mx-1 px-1 rounded bg-muted/50 font-mono">.trash/</code>
+              ，需要时可以从服务器恢复。
+            </p>
+          </div>
+          <DialogFooter showCloseButton>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteSelected}
+              disabled={isDeleting || deleteTargets.length === 0}
+              className="text-xs h-8"
+            >
+              {isDeleting ? '删除中…' : `确认删除 ${deleteTargets.length} 个`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={dupDeleteOpen} onOpenChange={setDupDeleteOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>

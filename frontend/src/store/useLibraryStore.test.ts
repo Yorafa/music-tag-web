@@ -90,8 +90,15 @@ describe('useLibraryStore', () => {
     expect(getFileListMock).toHaveBeenCalledTimes(2);
     expect(getFileListMock).toHaveBeenNthCalledWith(1, 'foo');
     expect(getFileListMock).toHaveBeenNthCalledWith(2, 'foo/sub');
-    // b.txt is NOT audio, dropped. a.flac / c.mp3 / d.m4a are audio.
-    expect(res.added).toBe(3);
+    // b.txt is NOT audio, dropped. a.flac / c.mp3 / d.m4a are audio — three
+    // rows, and the row assertion below is what pins that.
+    //
+    // `res.added` counts DIRECTORIES, not files: the drawer's notice reads
+    // 「已收录 N 个新增目录」, and the user ticked one box. It used to report
+    // 3 here, which is how the notice could claim three directories for a
+    // single selection.
+    expect(res.added).toBe(1);
+    expect(res.skipped).toBe(0);
     const rows = useLibraryStore.getState().rows;
     expect(rows.map((r) => r.fileName).sort()).toEqual(['a.flac', 'c.mp3', 'd.m4a']);
     // Each row's fullPath = parent path / name. 'a.flac' lives under 'foo/sub'
@@ -102,20 +109,47 @@ describe('useLibraryStore', () => {
     expect(useLibraryStore.getState().dirs).toEqual(['foo']);
   });
 
-  it('enqueueDirs dedupes by directory granularity on re-add', async () => {
+  it('enqueueDirs reports an unchanged re-add as skipped', async () => {
     // First add: dir 'd1' contains x.wav
     getFileListMock.mockResolvedValueOnce(listResp([fileNode('x.wav', 100)]));
     await useLibraryStore.getState().enqueueDirs(['d1']);
     expect(useLibraryStore.getState().rows.length).toBe(1);
 
-    // Re-add the same dir 'd1' returning the SAME file x.wav → the directory
-    // has overlap with existing rows → the whole dir batch is dropped.
+    // Re-add the same dir 'd1' returning the SAME file x.wav. Every file it
+    // contributed is already held, so the directory counts as skipped and
+    // nothing is duplicated.
     getFileListMock.mockResolvedValueOnce(listResp([fileNode('x.wav', 100)]));
     const res = await useLibraryStore.getState().enqueueDirs(['d1']);
     expect(res.added).toBe(0);
     expect(res.skipped).toBe(1);
     expect(useLibraryStore.getState().rows.length).toBe(1);
     // dirs remains just ['d1'] — no duplicate badge entry.
+    expect(useLibraryStore.getState().dirs).toEqual(['d1']);
+  });
+
+  // The bug this file's dedupe used to have, at store level. A download lands
+  // in a directory the user already added; the directory's OLD files match
+  // first, and the old directory-granularity rule threw the whole batch away
+  // with them — so the new file was never collectable, no matter how many
+  // times the user re-added the directory.
+  it('enqueueDirs picks up a file added to an already-added directory', async () => {
+    getFileListMock.mockResolvedValueOnce(
+      listResp([fileNode('old.wav', 100)]),
+    );
+    await useLibraryStore.getState().enqueueDirs(['d1']);
+    expect(useLibraryStore.getState().rows.length).toBe(1);
+
+    // The directory now holds the old track plus a freshly downloaded one.
+    getFileListMock.mockResolvedValueOnce(
+      listResp([fileNode('old.wav', 100), fileNode('new.ogg', 200)]),
+    );
+    const res = await useLibraryStore.getState().enqueueDirs(['d1']);
+
+    expect(res.added).toBe(1);
+    expect(res.skipped).toBe(0);
+    const rows = useLibraryStore.getState().rows;
+    expect(rows.map((r) => r.fileName).sort()).toEqual(['new.ogg', 'old.wav']);
+    // One badge, not two — the directory was already in the list.
     expect(useLibraryStore.getState().dirs).toEqual(['d1']);
   });
 

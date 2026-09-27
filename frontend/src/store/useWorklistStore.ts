@@ -32,6 +32,7 @@ import {
   expandDirsToAudioFiles,
   type ExpandedFile,
 } from '@/utils/expandDirs';
+import { mergeExpandedDirs } from '@/utils/mergeExpanded';
 import { hydrateTagsBatched } from '@/lib/hydrateTags';
 import { readJson, readString, writeJson, writeString, removeString } from '@/utils/persist';
 import {
@@ -301,27 +302,21 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
       else next.add(groupKey);
       return { collapsedGroups: next };
     });
-  },
+  },    enqueueDirs: async (dirs) => {
+      if (dirs.length === 0) return { added: 0, skipped: 0 };
+      const expanded = await expandDirsToAudioFiles(dirs);
 
-  enqueueDirs: async (dirs) => {
-    if (dirs.length === 0) return { added: 0, skipped: 0 };
-    const expanded = await expandDirsToAudioFiles(dirs);
-
-    // Dedupe at directory granularity: any expanded file whose
-    // fullPath already exists in rows implies its source dir is
-    // already collected — drop the whole re-add.
-    const existingPaths = new Set(get().rows.map((r) => r.fullPath));
-    const dirHasOverlap = new Set<string>();
-    for (const e of expanded) {
-      if (existingPaths.has(e.fullPath)) {
-        dirHasOverlap.add(e.sourceDir);
-      }
-    }
-
-    const fresh = expanded.filter(
-      (e) => !dirHasOverlap.has(e.sourceDir),
-    );
-    const newRows = expandedToRows(fresh);
+      // Per-file dedupe, shared with useLibraryStore. The old rule dropped a
+      // source dir's whole batch as soon as one of its files was already
+      // queued, which meant a directory could never gain a new file — a
+      // freshly downloaded track in an already-added directory stayed
+      // invisible no matter how many times the user re-added it. See
+      // utils/mergeExpanded.ts.
+      const { fresh, addedDirs, skippedDirs } = mergeExpandedDirs(
+        expanded,
+        get().rows.map((r) => r.fullPath),
+      );
+      const newRows = expandedToRows(fresh);
 
     const nextRows = appendAndDedupe(get().rows, newRows);
     set({ rows: nextRows });
@@ -341,13 +336,15 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
     void hydrateTagsBatched(
       newRows.map((r) => ({ id: r.id, fullPath: r.fullPath })),
       (id, info) => useWorklistStore.getState().setMusicInfo(id, info),
-    );
-
-    return {
-      added: newRows.length,
-      skipped: dirHasOverlap.size,
-    };
-  },
+    );      return {
+        // Both counts are directories, which is what the drawer's notice
+        // says it is reporting. The old pair mixed units — files for
+        // `added`, dirs for `skipped` — so the two numbers could not be
+        // compared against the number of directories the user ticked.
+        added: addedDirs,
+        skipped: skippedDirs,
+      };
+    },
 
   toggleSelected: (id) => {
     set((s) => {

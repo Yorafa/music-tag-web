@@ -29,6 +29,7 @@ import {
   expandDirsToAudioFiles,
   type ExpandedFile,
 } from '@/utils/expandDirs';
+import { mergeExpandedDirs } from '@/utils/mergeExpanded';
 import { readJson, writeJson, removeString } from '@/utils/persist';
 import {
   needsMusicInfoRefetch,
@@ -131,20 +132,14 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     const expanded = await expandDirsToAudioFiles(dirs);
     if (expanded.length === 0) return { added: 0, skipped: 0 };
 
-    // Dedupe at directory granularity: if ANY of an expanded file's
-    // fullPath already exists in `rows`, treat that file's entire
-    // source directory as already-collected and drop the whole dir
-    // batch. Mirrors useWorklistStore.enqueueDirs exactly so the two
-    // modes have identical dedupe behaviour (per Plan A/B contract).
-    const existingPaths = new Set(get().rows.map((r) => r.fullPath));
-    const dirHasOverlap = new Set<string>();
-    for (const e of expanded) {
-      if (existingPaths.has(e.fullPath)) {
-        dirHasOverlap.add(e.sourceDir);
-      }
-    }
-
-    const fresh = expanded.filter((e) => !dirHasOverlap.has(e.sourceDir));
+    // Per-file dedupe, shared with useWorklistStore so the two modes cannot
+    // drift. The old rule dropped a source dir's whole batch as soon as one
+    // of its files was already listed, so a directory could never gain a new
+    // file — see utils/mergeExpanded.ts.
+    const { fresh, addedDirs, skippedDirs, addedDirNames } = mergeExpandedDirs(
+      expanded,
+      get().rows.map((r) => r.fullPath),
+    );
     const newRows = expandedToRows(fresh);
 
     // Also dedupe within the returned batch by id (a file might appear
@@ -157,11 +152,11 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       dedupedNewRows.push(r);
     }
 
-    // The set of newly-added source dirs = the input dirs that did NOT
-    // have any overlap with existing rows. These are bookkept in `dirs`
+    // The set of newly-added source dirs = the input dirs that contributed at
+    // least one file the library did not have. These are bookkept in `dirs`
     // for the drawer's existingDirs badges.
     const inputDirSet = new Set(dirs);
-    const freshDirs = dirs.filter((d) => !dirHasOverlap.has(d));
+    const freshDirs = addedDirNames;
 
     const nextRows = [...get().rows, ...dedupedNewRows];
     // Dedupe nextDirs against existing dirs (re-adding the same dir
@@ -197,8 +192,10 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     );
 
     return {
-      added: dedupedNewRows.length,
-      skipped: dirHasOverlap.size,
+      // Directory counts on both sides — the drawer's notice reports
+      // directories, and the previous pair mixed files with dirs.
+      added: addedDirs,
+      skipped: skippedDirs,
     };
   },
 

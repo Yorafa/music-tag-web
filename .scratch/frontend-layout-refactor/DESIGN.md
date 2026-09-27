@@ -95,9 +95,19 @@ The **audio extension whitelist is unified across both modes** (C1 pick). Ration
 ### `DirPickerDrawer` confirmation semantics (B pick — append + dedupe)
 
 When the user opens the drawer a second time, selects `/music/foo` again and adds `/music/bar`:
-- Already-added directories are silently skipped (no destructive clear, no prompt).
-- Only genuinely-new directories are passed to `enqueueDirs`.
-- A summary notice fires: "已收录 3 个新增目录、跳过 2 个重复".
+- No destructive clear, no prompt.
+- Dedupe is **per file**, not per directory. (Revised: the original wording here
+  said already-added *directories* are skipped, which was implemented as
+  "drop a source dir's whole batch if any one of its files is already queued".
+  That makes a directory permanently closed to new files — a youtube download
+  landing in the library root stayed invisible no matter how often the user
+  re-added the root, because the root's older files always matched first.
+  Reproduced in a browser: 4 rows queued, a 5th file downloaded into the same
+  directory, re-add → still 4 rows.) A directory still counts as *skipped* when
+  every file it contributed was already held, so the notice is unchanged for
+  the no-new-files case.
+- A summary notice fires: "已收录 3 个新增目录、跳过 2 个重复" — both numbers are
+  directory counts, matching the wording.
 
 ### DirPickerDrawer UI defaults (subject to ratification during implementation)
 

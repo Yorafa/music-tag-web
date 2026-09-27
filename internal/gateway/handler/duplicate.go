@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -167,6 +168,13 @@ type duplicateReport struct {
 func DeleteFiles(c *gin.Context) {
 	var req struct {
 		FileFullPaths []string `json:"file_full_paths" binding:"required"`
+		// Why the caller is deleting. Recorded in the audit row so the log
+		// distinguishes "this was a duplicate cleanup" from "the user picked
+		// these rows and deleted them" — the same endpoint serves both. It
+		// used to be a hardcoded "duplicate_cleanup" string, which would have
+		// kept asserting a reason nobody gave once a second caller existed.
+		// Bounded because it lands in the audit log verbatim.
+		RequestedBy string `json:"requested_by"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Failure(c, "invalid request")
@@ -180,6 +188,16 @@ func DeleteFiles(c *gin.Context) {
 		Failure(c, fmt.Sprintf("too many paths: %d (max %d)",
 			len(req.FileFullPaths), maxDuplicateCheckPaths))
 		return
+	}
+
+	requestedBy := strings.TrimSpace(req.RequestedBy)
+	if requestedBy == "" {
+		// Older clients omit the field; the log still has to say something
+		// true, and "unspecified" beats inheriting a reason nobody gave.
+		requestedBy = "unspecified"
+	}
+	if len(requestedBy) > 64 {
+		requestedBy = requestedBy[:64]
 	}
 
 	ctx := c.Request.Context()
@@ -251,7 +269,7 @@ func DeleteFiles(c *gin.Context) {
 			"failed":       failed,
 			"trash_dir":    trashDir,
 			"file_paths":   req.FileFullPaths,
-			"requested_by": "duplicate_cleanup",
+			"requested_by": requestedBy,
 		}, nil)
 
 	SuccessData(c, deleteReport{Results: results, Deleted: deleted, Failed: failed})

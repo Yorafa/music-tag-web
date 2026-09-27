@@ -210,12 +210,13 @@ export interface DuplicateReport {
     skipped: number;
     error: number;
   };
-}
-
-/** POST /api/delete_files/ — remove files from the library.
+}/** POST /api/delete_files/ — remove files from the library.
  *
- *  Backs the 「删除重复文件」 action, so it only ever receives paths a
- *  duplicate check already flagged.
+ *  Backs two actions: 「删除重复文件」 (paths a duplicate check flagged) and
+ *  「删除选中文件」 (whatever the user selected). Both go through the same
+ *  recoverable trash; only the stated reason differs, which is why
+ *  `requestedBy` is a parameter — the server used to hardcode
+ *  "duplicate_cleanup" and would have kept claiming that for a manual delete.
  *
  *  The server MOVES each file to `DATA_DIR/.trash/<timestamp>/` rather than
  *  unlinking it, preserving its path relative to MUSIC_DIR — the original
@@ -224,11 +225,15 @@ export interface DuplicateReport {
  *  not need to know this, but the UI does: the confirm dialog says the
  *  files are recoverable rather than claiming a hard delete.
  *
- *  Returns per-row outcomes. A row that was already missing is `missing`,
- *  not a request failure — a cleanup pass routinely races a manual delete. */
-export async function deleteFiles(fileFullPaths: string[]): Promise<DeleteFilesReport> {
+ * Returns per-row outcomes. A row that was already missing is `missing`,
+ * not a request failure — a cleanup pass routinely races a manual delete. */
+export async function deleteFiles(
+  fileFullPaths: string[],
+  requestedBy = 'duplicate_cleanup',
+): Promise<DeleteFilesReport> {
   const { data } = await api.post('delete_files/', {
     file_full_paths: fileFullPaths,
+    requested_by: requestedBy,
   });
   return unwrapEnvelope<DeleteFilesReport>(data, 'delete_files');
 }
