@@ -49,6 +49,12 @@ export function PlayerBar() {
   // load(), which resets currentTime to 0. Comparing the store value to itself
   // makes the src swap fire only on a genuine track change.
   const loadedUrlRef = useRef<string | null>(null);
+  // VBR MP3s report <audio>.duration = Infinity at loadedmetadata until the
+  // browser scans to the real end. We force that scan by seeking far past the
+  // end (see onLoadedMetadata); this flag suppresses the currentTime mirror
+  // during the throwaway seek and records that we owe a reset back to 0 once
+  // durationchange delivers the true finite length.
+  const vbrScanRef = useRef(false);
   // Mobile-only overlay open state. Owned here so the mini player bar
   // and the NowPlaying sheet share one source of truth without a UI
   // store slot. Resets whenever currentTrack goes null (so dismissing a
@@ -91,6 +97,8 @@ export function PlayerBar() {
     if (currentTrack && currentTrack.url) {
       if (loadedUrlRef.current !== currentTrack.url) {
         loadedUrlRef.current = currentTrack.url;
+        // New source: any pending VBR end-scan belonged to the old track.
+        vbrScanRef.current = false;
         el.src = currentTrack.url;
         el.load();
       }
@@ -148,6 +156,57 @@ export function PlayerBar() {
     useNoticeStore.getState().push(sourceErrorMessage(sourceName), 'warn');
   };
 
+  // Duration mirror. VBR MP3s (e.g. "Jocelyn Flores") report duration =
+  // Infinity at loadedmetadata because the header carries no frame count;
+  // the browser only learns the true length after it scans to the end.
+  // formatTime(Infinity) renders "0:00", and without a recovery path the
+  // stale value from the previous track lingers. So: commit only finite
+  // durations, and when we see Infinity, force the scan by seeking past the
+  // end. That fires durationchange with the real finite value, which we then
+  // commit and rewind back to 0.
+  const commitDuration = (el: HTMLAudioElement) => {
+    if (Number.isFinite(el.duration) && el.duration > 0) {
+      setDuration(el.duration);
+      // If a VBR scan was in flight, the seek left currentTime at the end.
+      // Rewind so playback (and the progress bar) start from the top.
+      if (vbrScanRef.current) {
+        vbrScanRef.current = false;
+        try {
+          el.currentTime = 0;
+        } catch {
+          /* seeking may throw if not seekable yet; timeupdate will re-sync */
+        }
+        setCurrentTime(0);
+      }
+      return;
+    }
+    // Non-finite duration: kick off a one-shot end-scan. Seeking to a huge
+    // time is the canonical trick to make the browser compute a VBR length.
+    if (!vbrScanRef.current) {
+      vbrScanRef.current = true;
+      try {
+        el.currentTime = 1e101;
+      } catch {
+        vbrScanRef.current = false;
+      }
+    }
+  };
+
+  const onTimeUpdate = (el: HTMLAudioElement) => {
+    // Swallow the throwaway seek position during a VBR end-scan; committing
+    // it would flash the slider to the track's end.
+    //
+    // The suppression is conditional on the duration STILL being unknown, not
+    // just on the latch being set. Some media (a stalled fetch, a live stream)
+    // never delivers the durationchange that clears the latch, and a bare
+    // boolean would then silence the time mirror for the rest of the session
+    // on this track — a progress bar frozen at 0:00. Tying the suppression to
+    // the actual condition means the moment a finite duration shows up, the
+    // mirror resumes whether or not the rewind in commitDuration ran.
+    if (vbrScanRef.current && !Number.isFinite(el.duration)) return;
+    setCurrentTime(el.currentTime);
+  };
+
   // Slider drag → push currentTime to the audio element directly. We
   // don't use a reactive seek-effect because it would loop with the
   // onTimeUpdate mirror below.
@@ -171,8 +230,9 @@ export function PlayerBar() {
       <audio
         ref={audioRef}
         preload="metadata"
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
-        onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => commitDuration(e.currentTarget)}
+        onDurationChange={(e) => commitDuration(e.currentTarget)}
+        onTimeUpdate={(e) => onTimeUpdate(e.currentTarget)}
         onError={onMediaError}
         // Buffering signal mirrors: onWaiting fires when playback halts
         // because the next frame isn't buffered yet; onCanPlay / onPlaying
