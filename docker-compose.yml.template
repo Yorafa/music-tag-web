@@ -1,5 +1,10 @@
 # =============================================================================
 # Music Tag Web - Go 后端（项目根，gRPC 插件架构）
+#
+# 这是纳入版本控制的 compose 模板。实际运行的 docker-compose.yml 由本文件
+# 复制而来且被 .gitignore 忽略——请在副本里填本地端口/密钥，改动布局时改这里。
+# 首次使用：cp docker-compose.yml.template docker-compose.yml
+#
 # 分布式布局：gateway + worker + 8 个 gRPC 音源插件。
 #
 # 服务清单：
@@ -66,7 +71,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-}
       # 由 handler/auth.go::loadUsers 通过 os.Getenv() 读取。
       # 格式：user:pass[,user:pass...]（生产请使用 bcrypt 哈希）。
-      ADMIN_USERS: ${ADMIN_USERS:-admin:admin} # 首次启动自动生成一对 bcrypt admin:<随机密码>
+      ADMIN_USERS: ${ADMIN_USERS:-} # 留空即自动引导：首次启动生成一对 bcrypt admin:<随机密码>，明文密码打印到启动日志一次
       # 由 middleware/cors.go 通过 os.Getenv() 读取。
       # 空列表将完全屏蔽跨域请求。
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}

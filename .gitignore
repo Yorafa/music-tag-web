@@ -72,3 +72,11 @@ static/dist/
 #    commit; it describes work already landed in the history below it.
 .scratch/
 /REVIEW.md
+
+# Deployment compose file. docker-compose.yml.template is the tracked,
+# canonical source — copy it to docker-compose.yml on each host and fill in
+# real values (or leave the secret vars empty to let the gateway bootstrap
+# them). The working copy holds host-specific overrides and, once someone
+# pins ADMIN_USERS / JWT_SECRET locally, plaintext credentials, so it must
+# never enter git history.
+/docker-compose.yml
