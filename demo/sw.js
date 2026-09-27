@@ -213,6 +213,20 @@ const GENRES = {
   窦唯: ['摇滚', 'Experimental'],
 };
 
+/** Release year per album. Shared by music_id3 and the rename planner so
+ *  the two can never disagree about a file's tags. */
+const ALBUM_YEARS = {
+  'Selected Ambient Works 85-92': '1992',
+  'Selected Ambient Works Volume II': '1994',
+  'Kind of Blue': '1959',
+  'OK Computer': '1997',
+  'Kid A': '2000',
+  'Ambient 1: Music for Airports': '1978',
+  'Discreet Music': '1975',
+  async: '2017',
+  黑梦: '2004',
+};
+
 function findTrack(filePath, fileName) {
   const parts = (filePath || '').split('/').filter(Boolean);
   const albums = LIBRARY[parts[0]];
@@ -221,6 +235,78 @@ function findTrack(filePath, fileName) {
   if (!files) return null;
   const hit = files.find(([n]) => n === fileName);
   return hit ? { artist: parts[0], album: parts[1], entry: hit } : null;
+}
+
+const baseName = (p) => String(p).split('/').filter(Boolean).pop() || '';
+const dirOf = (p) => String(p).split('/').filter(Boolean).slice(0, -1).join('/');
+
+/* ------------------------------------------------------------------ *
+ * rename-from-tags planning (the read-only half of the feature)
+ * ------------------------------------------------------------------ */
+
+/** The tag fields ${...} can name — utils.RenameTemplateFields. */
+const RENAME_FIELDS = [
+  'title', 'artist', 'album', 'albumartist', 'genre',
+  'year', 'tracknumber', 'discnumber',
+];
+
+/** readFileContext's values for one path, in the fixture library. */
+function tagContextFor(path) {
+  const found = findTrack(dirOf(path), baseName(path));
+  if (!found) return null;
+  const { artist, album, entry } = found;
+  const stem = baseName(path).replace(/\.[^.]+$/, '');
+  const num = stem.match(/^(\d+)\s+(.*)$/);
+  const title = num ? num[2] : stem;
+  return {
+    title,
+    artist,
+    album,
+    albumartist: artist,
+    genre: (GENRES[artist] || ['未知'])[0],
+    year: (ALBUM_YEARS[album] || '1990').slice(0, 4),
+    tracknumber: num ? num[1] : '',
+    discnumber: '',
+  };
+}
+
+/** One RenamePlanRow. Mirrors planRename(): unknown field → blocked,
+ *  empty field → reported in `missing` but still renamed, and the file's
+ *  own extension is preserved. */
+function planRenameRow(path, template) {
+  const row = { path, old_name: baseName(path), new_name: '', status: 'ok' };
+  const ctx = tagContextFor(path);
+  if (!ctx) {
+    return { ...row, status: 'failed', detail: '文件不在演示曲库中' };
+  }
+  const bad = [...template.matchAll(/\$\{([^}]*)\}/g)]
+    .map((m) => m[1])
+    .find((k) => !RENAME_FIELDS.includes(k));
+  if (bad !== undefined) {
+    return { ...row, status: 'blocked', detail: `未知字段 ${bad}，可用：${RENAME_FIELDS.join(' / ')}` };
+  }
+  const missing = [];
+  const name = template.replace(/\$\{([^}]*)\}/g, (_, k) => {
+    const v = ctx[k] || '';
+    if (v === '') missing.push(k);
+    return v;
+  }).trim();
+  if (name === '') {
+    return { ...row, status: 'blocked', detail: '模板展开后是空文件名' };
+  }
+  const ext = (baseName(path).match(/\.[^.]+$/) || [''])[0];
+  const newName = name.toLowerCase().endsWith(ext.toLowerCase()) ? name : name + ext;
+  if (missing.length) row.missing = missing;
+  // The real planner also reports no_change / taken; a fixture that only
+  // ever says "ok" would hide the two states the dialog is built around.
+  if (newName === row.old_name) return { ...row, status: 'no_change' };
+  return { ...row, new_name: newName };
+}
+
+function tally(rows) {
+  const t = {};
+  for (const r of rows) t[r.status] = (t[r.status] || 0) + 1;
+  return t;
 }
 
 function musicId3(filePath, fileName) {
@@ -232,18 +318,6 @@ function musicId3(filePath, fileName) {
   const num = stem.match(/^(\d+)\s+(.*)$/);
   const title = num ? num[2] : stem;
   const genre = (GENRES[artist] || ['未知'])[0];
-  const albumYear = {
-    'Selected Ambient Works 85-92': '1992',
-    'Selected Ambient Works Volume II': '1994',
-    'Kind of Blue': '1959',
-    'OK Computer': '1997',
-    'Kid A': '2000',
-    'Ambient 1: Music for Airports': '1978',
-    DiscreetMusic: '1975',
-    Discreet_Music: '1975',
-    async: '2017',
-    黑梦: '2004',
-  }[album.replace(/\s/g, '_')] || album.replace(/\s/g, '_');
   return ok({
     title,
     filename: name,
@@ -464,23 +538,46 @@ async function handle(request, url) {
         reason: i === 1 ? 'SHA-256 一致' : i === 2 ? '声纹匹配 0.91' : '',
       }));
       return ok(rows);
+    }    case 'tag/preview_rename_from_tags/': {
+      // Contract (client.ts:369 + handler/rename_from_tags.go):
+      //   body { paths: string[], template: string }
+      //   → { rows: RenamePlanRow[], tally: Record<string, number>,
+      //       dry_run: true }
+      // Each path is relative to MUSIC_DIR, so it carries its own tags —
+      // there is no directory to look up here, and deriving one from
+      // `file_path` (as this mock used to) silently planned nothing.
+      const paths = body.paths || [];
+      const template = String(body.template || '');
+      if (paths.length === 0) return fail('paths is empty');
+      if (!template.includes('${')) {
+        return fail('模板里没有 ${字段}，照字面重命名会把所有文件改成同一个名字');
+      }
+      const rows = paths.map((p) => planRenameRow(p, template));
+      return ok({ rows, tally: tally(rows), dry_run: true });
     }
 
-    case 'tag/preview_parse_filenames/':
-    case 'tag/preview_rename_from_tags/': {
-      // Both previews answer { results: ParsedPreviewRow[] } AFTER the
-      // client unwraps the envelope (api/envelope.ts). status is per-row.
-      const dirPath = body.file_path || body.dir || '';
-      const children = childrenFor(String(dirPath).split('/').filter(Boolean).slice(0, -1).join('/')) || [];
+    case 'tag/preview_parse_filenames/': {
+      // Contract (client.ts:472): body { paths, options }
+      //   → { token, results: ParsedPreviewRow[] }
+      // The client THROWS when `token` is missing (it guards on it being
+      // truthy to avoid re-firing), so a token is mandatory here.
+      const paths = body.paths || [];
+      if (paths.length === 0) return fail('paths is empty');
       return ok({
-        results: children
-          .filter((c) => c.icon !== 'icon-folder')
-          .map((c, i) => ({
-            file_name: c.name,
-            artist: i % 2 === 0 ? c.name.replace(/\s*-\s*.*/, '') : '',
-            title: i % 2 === 0 ? c.name.replace(/^.*?\s*-\s*/, '') : c.name,
-            status: i === 0 ? 'ok' : 'missing',
-          })),
+        token: 'demo-preview-token',
+        results: paths.map((p, i) => {
+          const found = findTrack(dirOf(p), baseName(p));
+          const stem = baseName(p).replace(/\.[^.]+$/, '');
+          const num = stem.match(/^(\d+)\s+(.*)$/);
+          return {
+            path: p,
+            status: !found ? 'unparsable' : num ? 'ok' : 'ambiguous',
+            title: num ? num[2] : stem,
+            artist: found ? found.artist : '',
+            album: found ? found.album : '',
+            tracknumber: num ? num[1] : '',
+          };
+        }),
       });
     }
 
