@@ -4,12 +4,12 @@ on:
   push:
     branches: [master]
     paths:
-      - 'showcase/**'
+      - 'frontend/**'
+      - 'demo/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
-# Allow the concurrent runs of this workflow to cancel each other:
-# a newer push to master always wins over an in-flight publish.
+# A newer push to master always wins over an in-flight publish.
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -20,12 +20,17 @@ permissions:
   id-token: write
 
 jobs:
-  deploy:
-    name: Deploy showcase to GitHub Pages
+  build:
+    name: Build SPA + deploy to GitHub Pages
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      # GitHub Pages serves a project site from /<repo>/, so every absolute
+      # path in the build (asset URLs, and the /api/ + /media/ literals the
+      # demo worker has to intercept) needs this prefix.
+      PAGES_BASE: /${{ github.event.repository.name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,34 +39,71 @@ jobs:
         id: pages
         uses: actions/configure-pages@v5
 
-      - name: Verify artifact is non-empty
-        # Guard against publishing a blank site: Pages would happily serve
-        # an empty directory and 404 every visitor with no obvious cause.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # Same major as the frontend stage in Dockerfile.gateway, so the
+          # bundle is produced by the same toolchain the image ships.
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck
+        # tsc -b is the first half of the project's own `build` script. Run
+        # it here so a type error fails the deploy instead of shipping.
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Build the real frontend
+        # --base overrides the repo default (/static/dist/) for the Pages
+        # root without editing vite.config.ts; --outDir keeps the Pages
+        # artifact out of static/dist, which the gateway image owns.
+        working-directory: frontend
+        run: npx vite build --base="$PAGES_BASE" --outDir=../dist-pages --emptyOutDir
+
+      - name: Rewrite absolute API paths under the Pages base
+        # baseURL:'/api/' and friends are root-absolute with no runtime
+        # override, so on a project Pages site they escape the service
+        # worker's scope. The script counts every replacement and exits
+        # non-zero if none land — a silent no-op here would publish a page
+        # that 404s on every request with no error anywhere.
+        run: node demo/patch-bundle.mjs dist-pages "$PAGES_BASE"
+
+      - name: Inject demo service worker
+        run: node demo/inject-sw.mjs dist-pages "$PAGES_BASE"
+
+      - name: Verify artifact
         run: |
           set -euo pipefail
-          count=$(find showcase -type f | wc -l)
-          echo "Files in showcase/: $count"
+          count=$(find dist-pages -type f | wc -l)
+          echo "Files in dist-pages/: $count"
           if [ "$count" -eq 0 ]; then
-            echo "::error::showcase/ contains no files — refusing to publish an empty site"
+            echo "::error::empty build output — refusing to publish"
             exit 1
           fi
-          for required in showcase/index.html showcase/style.css showcase/favicon.svg; do
+          for required in dist-pages/index.html dist-pages/sw.js dist-pages/register-sw.js; do
             if [ ! -f "$required" ]; then
-              echo "::error::missing required page file: $required"
+              echo "::error::missing $required"
               exit 1
             fi
           done
-          # The page is intentionally dependency-free: no CDN, no build step.
-          # Fail loudly if someone introduces an external stylesheet or script.
-          if grep -rnE '<(script|link)[^>]+(src|href)=["'"'"']https?://' showcase/; then
-            echo "::error::external asset reference found — showcase must stay self-contained"
+          # The demo must stay self-contained: every asset is bundled, so
+          # an external stylesheet or script means link rot waiting to
+          # happen on a public page.
+          if grep -rqE '<(script|link)[^>]+(src|href)=["'"'"']https?://' dist-pages/; then
+            echo "::error::external asset reference found — the Pages build must stay self-contained"
             exit 1
           fi
+          echo "Artifact looks publishable."
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: showcase
+          path: dist-pages
 
       - name: Deploy to GitHub Pages
         id: deployment

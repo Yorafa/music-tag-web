@@ -45,6 +45,11 @@ static/rest_framework/
 # outDir), it just stays out of git.
 static/dist/
 
+# GitHub Pages build output. Same deal as static/dist/ — the Pages
+# workflow builds it on every push (see .github/workflows/pages.yml) and
+# uploads the artifact, so nothing here belongs in git.
+/dist-pages/
+
 # Local media/data for dev testing — never commit
 /music/
 /data/

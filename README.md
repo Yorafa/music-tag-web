@@ -9,7 +9,7 @@
     <img src="https://img.shields.io/badge/platform-amd64/arm64-pink?style=plastic" alt="docker-platform">
 </div>
 
-🌐 **项目展示页**：<https://yorafa.github.io/music-tag-web/>（纯静态，由 [`.github/workflows/pages.yml`](.github/workflows/pages.yml) 在每次推 `master` 时自动发布）
+🌐 **在线演示**：<https://yorafa.github.io/music-tag-web/>——**就是真实前端**（`frontend/src` 零改动），由 [`.github/workflows/pages.yml`](.github/workflows/pages.yml) 每次推 `master` 自动构建发布。静态托管跑不了 Go 后端，所以 [`demo/sw.js`](demo/sw.js) 在浏览器里拦截 `/api/*` 返回一份 fixture 曲库；登录、目录树、刮削、批量编辑全是真逻辑，**写操作一律不 mock**。用户名密码随便填。
 
 > ⚠️ **本项目 fork 自 [`xhongc/music-tag-web`](https://github.com/xhongc/music-tag-web)**——原 Python/Django 单体代码已**完整重构**为 Go 1.25 + gRPC 微服务插件 + React 19 SPA 架构。本仓库以 GPL V3 协议 fork-publish 独立维护；上游著作权与许可证全文保留在根目录 [`LICENSE`](LICENSE)。重构过程的 rationale 详见底部 [Acknowledgements](#acknowledgements)。
 
@@ -96,7 +96,7 @@ docker compose logs gateway | grep -A 6 FIRST-BOOT
 
 | 文档 | 内容 |
 |---|---|
-| [`showcase/index.html`](showcase/index.html) | 纯静态项目展示页（`showcase/` 目录，GitHub Pages 发布源） |
+| [`demo/`](demo/) | GitHub Pages 演示层：Service Worker + fixture 曲库 + bundle 路径改写脚本 |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | 部署：懒人模式 / 显式 `.env` / volume 与属主 / 旧版本升级 / 故障排查表 |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 本地开发：环境准备、`Makefile`、pre-flight gate（全套命令）、热部署、host 调试、开发期易踩的坑 |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 架构：分层表、容器拓扑、镜像体积与共享层、插件进程模型 |
