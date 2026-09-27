@@ -155,24 +155,40 @@ func (h *TidyFolderHandler) ProcessTask(ctx context.Context, t Task) error {
 	return nil
 }
 
-// tidyRoot resolves a payload's root_path against the configured music root,
+// TidyRoot resolves a tidy task's root_path against the configured music root,
 // refusing anything outside it.
 //
-// An unconfigured root refuses everything rather than admitting everything.
-// The read-only consumers (dedup, the pruners) treat an empty root as "no
-// scope configured" so they degrade to a narrower answer, but this one moves
-// files, and without a root there is no way to know what is in bounds — so
-// the answer has to be "no". The explicit check exists for the message;
-// ResolveUnderRoot would refuse the empty root too, less clearly.
-func (h *TidyFolderHandler) tidyRoot(rootPath string) (string, error) {
-	if h.MusicRoot == "" {
-		return "", fmt.Errorf("tidy: no music root configured, refusing to move anything")
-	}
-	abs, err := utils.ResolveUnderRoot(h.MusicRoot, rootPath)
+// Exported because the gateway runs the SAME check before enqueueing (see
+// handler.TidyFolder): the rejection has to be synchronous, or a typo reads as
+// a success that quietly moved nothing. Two copies of the rule would be free
+// to drift, so there is one.
+//
+// Strictly absolute, unlike the per-file paths. Those are widened to accept
+// the root-relative form because the frontend genuinely cannot send the
+// absolute one; root_path has no such excuse — the dialog asks for it by name,
+// with the library root as its placeholder. Accepting a relative root would
+// let a stray word resolve to <musicRoot>/<word> and quietly build a new
+// nested tree instead of reporting the typo.
+//
+// An unconfigured library root refuses everything rather than admitting
+// everything: this handler MOVES files, and without a root there is no way to
+// know what is in bounds. There is no explicit check for that here —
+// utils.SafeAbs already refuses an empty root, and its message ("root is
+// empty") names the actual fault. An earlier version carried its own branch
+// that only reworded the same refusal; mutation testing showed no behavioural
+// test could kill removing it, which is the signature of a branch that cannot
+// rot but also cannot be verified. The gateway handler does keep an empty-root
+// check of its own, because it is answering an operator rather than a log.
+func TidyRoot(musicRoot, rootPath string) (string, error) {
+	abs, err := utils.SafeAbs(musicRoot, rootPath)
 	if err != nil {
 		return "", fmt.Errorf("tidy: root_path %q is outside the library: %w", rootPath, err)
 	}
 	return abs, nil
+}
+
+func (h *TidyFolderHandler) tidyRoot(rootPath string) (string, error) {
+	return TidyRoot(h.MusicRoot, rootPath)
 }
 
 // tidySource resolves one payload path against the music root.

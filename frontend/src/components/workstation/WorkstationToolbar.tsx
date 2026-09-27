@@ -336,7 +336,14 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         useNoticeStore.getState().push('已提交目录整理异步任务', 'info');
         setTidyOpen(false);
       } else {
-        useNoticeStore.getState().push('目录整理提交失败', 'warn');
+        // Surface the server's reason. "目录整理提交失败" on its own told the
+        // user nothing about WHICH field was wrong, and the root-directory
+        // check the gateway now runs answers 400 with a message naming the
+        // real library root — throwing that away here would leave the fix
+        // unreachable from the UI.
+        useNoticeStore
+          .getState()
+          .push(res?.message || '目录整理提交失败', 'warn');
       }
     } catch {
       useNoticeStore.getState().push('目录整理提交失败', 'error');

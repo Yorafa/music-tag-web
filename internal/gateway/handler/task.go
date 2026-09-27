@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -79,6 +81,29 @@ func TidyFolder(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Failure(c, "invalid request: "+err.Error())
+		return
+	}
+	// Containment check BEFORE the enqueue, not in the worker.
+	//
+	// The worker refuses a root outside the library either way (tasks.TidyRoot),
+	// but by then the gateway has already answered 200 and the UI has already
+	// toasted "已提交目录整理异步任务". A typo in this field therefore read as
+	// a success that quietly did nothing. The same check here turns it into a
+	// 400 carrying the reason.
+	//
+	// tasks.TidyRoot is the worker's own function, not a re-implementation: two
+	// copies of the rule would be free to drift, and a gateway that accepts
+	// what the worker refuses (or worse, the reverse) reintroduces the silent
+	// failure from the other end.
+	musicRoot := os.Getenv("MUSIC_DIR")
+	if musicRoot == "" {
+		Failure(c, "服务端未配置 MUSIC_DIR，无法整理目录")
+		return
+	}
+	if _, err := tasks.TidyRoot(musicRoot, req.RootPath); err != nil {
+		// The worker's own message is written for a log; this one is read by
+		// the person holding the dialog, so it names the correct value.
+		Failure(c, fmt.Sprintf("目标根目录 %q 不在曲库内。曲库根目录是 %s，请填它（或其下的子目录）。", req.RootPath, musicRoot))
 		return
 	}
 	enqueueTypedTask(c, tasks.TypeTidyFolder, &tasks.TidyFolderPayload{
