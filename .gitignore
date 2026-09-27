@@ -50,6 +50,13 @@ static/dist/
 # uploads the artifact, so nothing here belongs in git.
 /dist-pages/
 
+# Docroot for demo/serve.sh: a `music-tag-web` symlink pointing at
+# dist-pages/, because the bundle is patched to /music-tag-web/... and a
+# service worker can only intercept inside its own scope. Inside the repo
+# on purpose — a /tmp docroot gets swept up by cleanup and leaves the
+# server answering 404 for every path, which reads as "the demo broke".
+/.pages-serve/
+
 # Local media/data for dev testing — never commit
 /music/
 /data/
