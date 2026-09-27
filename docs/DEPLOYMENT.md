@@ -17,8 +17,10 @@
 git clone https://github.com/Yorafa/music-tag-web.git
 cd music-tag-web
 
-# ② 首次运行必要：创建 ./music ./data
+# ② 首次运行必要：创建 ./music ./data，并从模板生成 compose 副本
+#    （副本不进版本库：里面会写进你的端口和口令）
 mkdir -p ./music ./data
+cp docker-compose.yml.template docker-compose.yml
 
 # ③ 拉起全栈（自动生成 admin 账号、JWT secret、webhook token）
 docker compose up -d --build
@@ -37,7 +39,7 @@ xdg-open http://localhost:9150/admin     # macOS 用 open；Windows 用 start
 
 **首次启动的工作流程：**
 
-- `docker-compose.yml` 把 `JWT_SECRET` / `ADMIN_USERS` / `WEBHOOK_INTERNAL_TOKEN` 默认设成空 → gateway 看到空 → `ensureBootstrap()` 读取 `/app/data/.bootstrap-creds`，文件不存在则用 crypto/rand 生成三个 secret + bcrypt 一个 admin 密码，写不出就 FATAL 返回。
+- `docker-compose.yml.template`（拷成 `docker-compose.yml` 后使用）把 `JWT_SECRET` / `ADMIN_USERS` / `WEBHOOK_INTERNAL_TOKEN` 默认设成空 → gateway 看到空 → `ensureBootstrap()` 读取 `/app/data/.bootstrap-creds`，文件不存在则用 crypto/rand 生成三个 secret + bcrypt 一个 admin 密码，写不出就 FATAL 返回。
 - 明文 admin 密码只出现一次：位于 gateway startup log 的 `FIRST-BOOT auto-bootstrap` banner；之后仅 `.bootstrap-creds` 里的 bcrypt hash 用于身份验证，**重启不会再打印**。
 - 转发丢给同一个 `./music` 和 `./data` bind mount，静默重启后密钥保持。要轮换就删掉 `./data/.bootstrap-creds` 再重启。
 - 懒人模式被**任何一项**显式配置绕过：`.env` 里 `JWT_SECRET` / `ADMIN_USERS` / `WEBHOOK_INTERNAL_TOKEN` 任一项填了真实值（非空、非 `__REPLACE_ME__` 这类 sentinel），该项就不再自动生成。哨兵值仍走自动填充，所以「只改了一项」不会把占位凭据带进生产。
@@ -47,7 +49,7 @@ xdg-open http://localhost:9150/admin     # macOS 用 open；Windows 用 start
 <a id="preflight"></a>
 ## Pre-flight · boilerplate 检查
 
-进入 deploy 之前**必须**读完 `.env.example` 顶部的 `⛔ PRE-FLIGHT CHECKLIST ⛔`。三项 `__REPLACE_ME__` 占位符（`JWT_SECRET`、`ADMIN_USERS`、`WEBHOOK_INTERNAL_TOKEN`）未替换会被 gateway `config.Load()` 在启动时 `log.Fatalf` 拒掉（除非显式设置 `ALLOW_INSECURE_DEFAULTS=1`，**仅 dev 可用**）。`docker-compose.yml`、`.env.example`、所有 Dockerfile 都在仓库根，不需要再 cd 进子目录。
+进入 deploy 之前**必须**读完 `.env.example` 顶部的 `⛔ PRE-FLIGHT CHECKLIST ⛔`。三项 `__REPLACE_ME__` 占位符（`JWT_SECRET`、`ADMIN_USERS`、`WEBHOOK_INTERNAL_TOKEN`）未替换会被 gateway `config.Load()` 在启动时 `log.Fatalf` 拒掉（除非显式设置 `ALLOW_INSECURE_DEFAULTS=1`，**仅 dev 可用**）。`docker-compose.yml.template`（先 `cp` 成 `docker-compose.yml`）、`.env.example`、所有 Dockerfile 都在仓库根，不需要再 cd 进子目录。
 
 > ⚠️ **从更早版本升级再看本节**（全新部署跳过）。新 compose 默认路径改到仓库根，裸 `git pull && docker compose up -d` 会让 sqlite 重建、`./music` / `./data` 目录不存在而启动失败。这几步在任何时机都会成功——`{.env,data,music}` 即使 git 已不再跟踪，仍写在 NAS 上。
 >
@@ -68,15 +70,16 @@ xdg-open http://localhost:9150/admin     # macOS 用 open；Windows 用 start
 ```bash
 git clone https://github.com/Yorafa/music-tag-web.git
 cd music-tag-web
+cp docker-compose.yml.template docker-compose.yml   # 上一节没做的话
 cp .env.example .env           # 与 docker-compose.yml 同目录，Compose 才能读到
 # 编辑 .env，填入必填项
 ```
 
-`JWT_SECRET` 和 `ADMIN_USERS` 是必填（不设 / 占位 → gateway 启动 Fail-closed 或登录拒绝）；强烈建议同时配置 `CORS_ALLOWED_ORIGINS`、`GRPC_USE_TLS`、`GATEWAY_PORT`。`MUSIC_DIR` / `DATA_DIR` 不再从 `.env` 注入（已硬编码到 `docker-compose.yml` 的 `./music` / `./data` host bind mount），若需指向外部 mount 直接 `ln -s` 进仓库根即可。模板里每项都有详细注释。
+`JWT_SECRET` 和 `ADMIN_USERS` 是必填（不设 / 占位 → gateway 启动 Fail-closed 或登录拒绝）；强烈建议同时配置 `CORS_ALLOWED_ORIGINS`、`GRPC_USE_TLS`、`GATEWAY_PORT`。`MUSIC_DIR` / `DATA_DIR` 不再从 `.env` 注入（已硬编码到 `docker-compose.yml.template` 的 `./music` / `./data` host bind mount），若需指向外部 mount 直接 `ln -s` 进仓库根即可。模板里每项都有详细注释。
 
 ## 2. Volume pre-flight + 构建 + 启动全栈
 
-`docker-compose.yml` 的默认值 `./music`、`./data` 都是**相对 compose 文件路径**，首次运行必须存在；否则 `docker compose up` 会报 `volume source not found`。NAS 用户使用 SMB / NFS 挂载，先在宿主机准备好路径。
+`docker-compose.yml`（由 `.template` 拷来）的默认值 `./music`、`./data` 都是**相对 compose 文件路径**，首次运行必须存在；否则 `docker compose up` 会报 `volume source not found`。NAS 用户使用 SMB / NFS 挂载，先在宿主机准备好路径。
 
 ```bash
 mkdir -p ./music ./data         # 首次需要（相对仓库根路径）
