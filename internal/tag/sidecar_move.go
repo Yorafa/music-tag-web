@@ -43,9 +43,7 @@ type SidecarMove struct {
 func MoveSidecars(oldPath, newPath string) []SidecarMove {
 	var moves []SidecarMove
 
-	oldBase := strings.TrimSuffix(oldPath, filepath.Ext(oldPath))
-	newBase := strings.TrimSuffix(newPath, filepath.Ext(newPath))
-	if m := moveSidecarFile(oldBase+".lrc", newBase+".lrc"); m != nil {
+	if m := moveSidecarFile(LyricsSidecarName(oldPath), LyricsSidecarName(newPath)); m != nil {
 		moves = append(moves, *m)
 	}
 

@@ -568,10 +568,14 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
       // `refused` row still has a file behind it, and dropping it would make
       // the queue disagree with the disk.
       remove(report.results.filter((x) => x.status === 'deleted').map((x) => x.file_full_path));
+      // A track's .lrc goes with it, and the notice has to say so: the
+      // user selected one row and two files left the library.
+      const lyrics = report.lyrics ?? [];
+      const lyricsNote = lyrics.length > 0 ? `，含 ${lyrics.length} 个同名歌词文件` : '';
       useNoticeStore
         .getState()
         .push(
-          `已删除 ${report.deleted} 个文件${report.failed > 0 ? `，${report.failed} 个未处理` : ''}（已移入回收目录，可恢复）`,
+          `已删除 ${report.deleted} 个文件${lyricsNote}${report.failed > 0 ? `，${report.failed} 个未处理` : ''}（已移入回收目录，可恢复）`,
           report.failed > 0 ? 'warn' : 'info',
         );
     } catch (e) {

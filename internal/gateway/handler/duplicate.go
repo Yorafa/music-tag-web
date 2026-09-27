@@ -13,6 +13,7 @@ import (
 
 	"go-music-tag/internal/audit"
 	"go-music-tag/internal/dedup"
+	"go-music-tag/internal/tag"
 	"go-music-tag/internal/trash"
 	"go-music-tag/internal/utils"
 )
@@ -206,6 +207,12 @@ func DeleteFiles(c *gin.Context) {
 
 	results := make([]deleteRow, 0, len(req.FileFullPaths))
 	deleted, failed := 0, 0
+	// Lyrics files carried along with the tracks they belong to. The UI only
+	// ever selects audio rows, so without this the .lrc beside a deleted
+	// track stayed behind — and if that was the directory's last track, the
+	// directory was then permanently unprunable. The application created the
+	// stranded file; it should not also be the one that could not clean it up.
+	var carried []string
 
 	for _, rel := range req.FileFullPaths {
 		row := deleteRow{FileFullPath: rel}
@@ -251,6 +258,26 @@ func DeleteFiles(c *gin.Context) {
 		}
 		forgetIndexPath(ctx, abs)
 
+		// The audio is gone from the library now, which is exactly when its
+		// lyrics stop meaning anything. Moving the .lrc into the SAME batch is
+		// what makes one "restore" bring back both: a restore that returned
+		// the audio and left the lyrics behind would look like the app lost
+		// them.
+		//
+		// Best-effort, and deliberately not allowed to fail the delete. The
+		// audio is already in the trash; failing the row now would report a
+		// deletion that in fact happened, and a retry would find the file
+		// missing. A .lrc that would not move stays in the library, where the
+		// pruner can now recognise it as an orphan.
+		if lrcRel, ok := lyricsBeside(rel, abs); ok {
+			lrcAbs := filepath.Join(filepath.Dir(abs), filepath.Base(lrcRel))
+			if err := trash.MoveAside(lrcAbs, filepath.Join(trashDir, filepath.FromSlash(lrcRel))); err != nil {
+				log.Printf("[delete_files] %s left behind: %v", lrcRel, err)
+			} else {
+				carried = append(carried, lrcRel)
+			}
+		}
+
 		row.Status = "deleted"
 		row.TrashPath = dest
 		deleted++
@@ -269,10 +296,35 @@ func DeleteFiles(c *gin.Context) {
 			"failed":       failed,
 			"trash_dir":    trashDir,
 			"file_paths":   req.FileFullPaths,
+			"lyrics":       carried,
 			"requested_by": requestedBy,
 		}, nil)
 
-	SuccessData(c, deleteReport{Results: results, Deleted: deleted, Failed: failed})
+	SuccessData(c, deleteReport{Results: results, Deleted: deleted, Failed: failed, Lyrics: carried})
+}
+
+// lyricsBeside returns the library-relative path of the `<base>.lrc` sitting
+// next to rel, if there is one to carry. The second return is false whenever
+// the answer is "no": rel has no extension to derive a base from, the sidecar
+// is missing, or the sidecar is not a regular file.
+//
+// The `lrcRel == rel` check is what stops a request that named a .lrc from
+// moving the file it had just deleted. Deriving the name and comparing it to
+// what we were given is the whole guard — an earlier version also asked
+// whether rel parsed as a lyrics sidecar, which said the same thing twice.
+func lyricsBeside(rel, abs string) (string, bool) {
+	if filepath.Ext(rel) == "" {
+		return "", false
+	}
+	lrcRel := tag.LyricsSidecarName(rel)
+	if lrcRel == rel {
+		return "", false
+	}
+	fi, err := os.Lstat(filepath.Join(filepath.Dir(abs), filepath.Base(lrcRel)))
+	if err != nil || !fi.Mode().IsRegular() {
+		return "", false
+	}
+	return lrcRel, true
 }
 
 type deleteRow struct {
@@ -286,6 +338,12 @@ type deleteReport struct {
 	Results []deleteRow `json:"results"`
 	Deleted int         `json:"deleted"`
 	Failed  int         `json:"failed"`
+	// Lyrics are the `<base>.lrc` files that travelled into the trash with
+	// the tracks they belong to. Reported, not hidden: a user who deletes one
+	// song and sees "deleted 1" has no way to know a second file went with it
+	// unless this says so, and "it took my lyrics too" is exactly the kind of
+	// surprise that makes people stop trusting a delete button.
+	Lyrics []string `json:"lyrics"`
 }
 
 // forgetIndexPath drops the music_folder row for a file that has left the

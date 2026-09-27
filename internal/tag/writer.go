@@ -320,7 +320,7 @@ func HandleSidecars(path string, upd *TagUpdate, sc *WriteSidecar) (*WriteResult
 			lyrics = *upd.Lyrics
 		}
 		if lyrics != "" {
-			lrcPath := base + ".lrc"
+			lrcPath := LyricsSidecarName(base)
 			if err := os.WriteFile(lrcPath, []byte(lyrics), 0o644); err != nil {
 				return res, fmt.Errorf("write .lrc sidecar: %w", err)
 			}

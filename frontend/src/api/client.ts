@@ -248,7 +248,13 @@ export interface DuplicateReport {
  *  files are recoverable rather than claiming a hard delete.
  *
  * Returns per-row outcomes. A row that was already missing is `missing`,
- * not a request failure — a cleanup pass routinely races a manual delete. */
+ * not a request failure — a cleanup pass routinely races a manual delete.
+ *
+ * `lyrics` names the `<base>.lrc` files the server carried into the same
+ * batch, because they were named after the tracks it just deleted. The UI
+ * only ever selects audio rows, so without this the user deletes one song
+ * and has no way to know a second file went with it — which reads as the app
+ * losing their lyrics. */
 export async function deleteFiles(
   fileFullPaths: string[],
   requestedBy = 'duplicate_cleanup',
@@ -269,6 +275,8 @@ export interface DeleteFilesReport {
   }>;
   deleted: number;
   failed: number;
+  /** `<base>.lrc` files carried into the trash alongside the tracks. */
+  lyrics?: string[];
 }
 
 /** GET /api/trash/ — what 删除选中 / 删除重复 removed, and where it came from.
