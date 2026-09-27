@@ -247,7 +247,7 @@ export function CloudSearchView() {
                             {(song.title || song.name || '?').charAt(0)}
                           </div>
                         )}
-                        <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                        <div className="absolute inset-0 bg-black/30 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <PlayButton
                             track={{
                               id: `${song.source}-${song.id}`,

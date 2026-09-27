@@ -20,6 +20,7 @@ import { useWorklistStore, rowMatchesFilter } from '@/store/useWorklistStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { duplicateBadgeSpec } from '@/components/workstation/duplicateBadge';
 import { resolveCoverSrc, COVER_PLACEHOLDER_GRADIENTS } from '@/utils/cover';
+import { buildMediaUrl } from '@/lib/mediaUrl';
 import { cn } from '@/lib/utils';
 import type { WorklistRow } from '@/types';
 
@@ -222,9 +223,13 @@ export function WorkstationTable({ activeRow, onSelectRow }: Props) {
                             : 'hover:bg-muted/40',
                         )}
                       >
-                        {/* Checkbox & Index */}
+                        {/* Checkbox & Index. The negative margin plus padding
+                            makes the CELL the tap target rather than the 16px
+                            box inside it — the cell's own onClick already
+                            toggles the row, so on a phone a thumb lands on
+                            ~28px of column instead of a checkbox square. */}
                         <div
-                          className="col-span-1 flex items-center gap-2"
+                          className="col-span-1 flex items-center gap-2 py-1.5 -my-1.5"
                           onClick={(e) => {
                             e.stopPropagation();
                             toggleSelected(row.fullPath);
@@ -234,7 +239,7 @@ export function WorkstationTable({ activeRow, onSelectRow }: Props) {
                             type="checkbox"
                             checked={isSelected}
                             onChange={() => {}}
-                            className="rounded border-border text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer"
+                            className="rounded border-border text-primary focus:ring-primary h-4 w-4 sm:h-3.5 sm:w-3.5 cursor-pointer"
                           />
                           <span className="text-[10px] text-muted-foreground/60 font-mono hidden md:inline">
                             {index + 1}
@@ -254,11 +259,11 @@ export function WorkstationTable({ activeRow, onSelectRow }: Props) {
                                 {(row.musicInfo?.title || row.fileName).charAt(0)}
                               </div>
                             )}
-                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/cover:opacity-100 flex items-center justify-center transition-opacity">
+                            <div className="absolute inset-0 bg-black/40 opacity-100 sm:opacity-0 sm:group-hover/cover:opacity-100 flex items-center justify-center transition-opacity">
                               <PlayButton
                                 track={{
                                   id: row.fullPath,
-                                  url: `/api/stream/local/?path=${encodeURIComponent(row.fullPath)}`,
+                                  url: buildMediaUrl(row.fullPath),
                                   title: row.musicInfo?.title || row.fileName,
                                   artist: row.musicInfo?.artist || '',
                                   cover: coverSrc,
@@ -307,7 +312,12 @@ export function WorkstationTable({ activeRow, onSelectRow }: Props) {
                               e.stopPropagation();
                               remove([row.fullPath]);
                             }}
-                            className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive h-6 w-6"
+                            // Always visible on a phone. `opacity-0 group-hover:opacity-100` alone
+                            // leaves the button invisible there — no hover means no reveal —
+                            // while still hit-testable, so a blind tap in that spot
+                            // removes a row. sm: puts the hover behaviour back where hover
+                            // exists.
+                            className="text-muted-foreground hover:text-destructive h-7 w-7 sm:h-6 sm:w-6 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
                             title="从列表中移除"
                           >
                             <Trash2 className="w-3 h-3" />

@@ -40,6 +40,11 @@ import {
   rememberSources,
 } from '@/components/common/tagSources';
 import { searchAcrossSources } from '@/api/scrapeSources';
+import {
+  APPLYABLE_FIELDS,
+  fieldLabel,
+  type ApplyableField,
+} from '@/components/workstation/scrapedInfo';
 import { useWorklistStore } from '@/store/useWorklistStore';
 import { useLibraryStore } from '@/store/useLibraryStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
@@ -54,6 +59,7 @@ import {
   getMusicId3,
 } from '@/api/client';
 import { resolveCoverSrc, COVER_PLACEHOLDER_GRADIENTS } from '@/utils/cover';
+import { buildMediaUrl } from '@/lib/mediaUrl';
 import {
   renamedPathFromUpdate,
   sidecarWarningsFromUpdate,
@@ -240,21 +246,46 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
   }, [row.fullPath]);
 
   // Apply candidate metadata
-  const handleApplyCandidate = (c: SongInfo) => {
-    const updated: Partial<MusicTagInfo> = {
-      ...formData,
-      title: c.name || formData.title,
-      artist: c.artist || formData.artist,
-      album: c.album || formData.album,
-      album_img: c.album_img || formData.album_img,        year: c.year || formData.year,
-        // Read the candidate's genre rather than leaving the field on
-        // whatever it was seeded with — MusicBrainz reports one, and
-        // applying its tags used to throw that away.
-        genre: c.genre || formData.genre,
-        lyrics: c.lyric || c.lyrics || formData.lyrics,
+  // Apply a candidate, or just some of it.
+  //
+  // `fields` omitted means the whole candidate, which is right most of the
+  // time. The subset form is what makes a second candidate worth opening:
+  // taking 专辑 from one source and 歌词 from another, or fixing only the
+  // year, used to be impossible — the only control was "take everything",
+  // and the only way to find out whether it was right was to save and look
+  // at the file.
+  //
+  // A field the candidate does not carry is left as the form had it. The
+  // alternative — clearing it — would let a source with no genre erase the
+  // genre the file already had.
+  const handleApplyCandidate = (c: SongInfo, fields?: ApplyableField[]) => {
+    const wanted = fields ?? APPLYABLE_FIELDS;
+    const values: Partial<MusicTagInfo> = {
+      title: c.name,
+      artist: c.artist,
+      album: c.album,
+      album_img: c.album_img,
+      year: c.year,
+      // Read the candidate's genre rather than leaving the field on
+      // whatever it was seeded with — MusicBrainz reports one, and
+      // applying its tags used to throw that away.
+      genre: c.genre,
+      lyrics: c.lyric || c.lyrics,
     };
-    setFormData(updated);
-    useNoticeStore.getState().push(`已应用「${c.name}」候选标签`, 'info');
+    const patched: Partial<MusicTagInfo> = { ...formData };
+    for (const field of wanted) {
+      const value = values[field];
+      if (value) (patched as Record<string, unknown>)[field] = value;
+    }
+    setFormData(patched);
+    useNoticeStore
+      .getState()
+      .push(
+        fields
+          ? `已应用「${c.name}」的 ${fields.map(fieldLabel).join('、')}`
+          : `已应用「${c.name}」候选标签`,
+        'info',
+      );
     setActiveTab('tags');
   };
 
@@ -370,7 +401,7 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
     const filePath = parts.join('/');
     playTrack({
       id: row.fullPath,
-      url: `/api/stream/local/?path=${encodeURIComponent(row.fullPath)}`,
+      url: buildMediaUrl(row.fullPath),
       title: formData.title || row.fileName,
       artist: formData.artist || '本地音乐',
       cover: formData.album_img,

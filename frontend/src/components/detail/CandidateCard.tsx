@@ -20,41 +20,67 @@ import { ChevronDown, ChevronRight, Fingerprint } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { fieldLabel, type ApplyableField } from '@/components/workstation/scrapedInfo';
 import type { SongInfo } from '@/types';
 
 interface Props {
   candidate: SongInfo;
-  onApply: (c: SongInfo) => void;
+  /** `fields` omitted means the whole candidate. */
+  onApply: (c: SongInfo, fields?: ApplyableField[]) => void;
 }
 
 /** A field that may simply be absent, rendered as a dash rather than an
  *  empty cell so a row of dashes is visibly "this source has no such
- *  field" instead of a rendering bug. */
+ *  field" instead of a rendering bug.
+ *
+ *  `applyField` is what turns this from a read-only list into a set of
+ *  decisions: it appears only on a field the candidate actually carries,
+ *  because offering 「应用年份」 on a source with no year would write
+ *  nothing and look broken. */
 function Fact({
   label,
   value,
   mono,
+  applyField,
+  onApplyField,
 }: {
   label: string;
   value?: string | number | null;
   mono?: boolean;
+  applyField?: ApplyableField;
+  onApplyField?: (field: ApplyableField) => void;
 }) {
-  const text = value === undefined || value === null || value === '' ? '—' : String(value);
+  const hasValue = value !== undefined && value !== null && value !== '';
+  const text = hasValue ? String(value) : '—';
+  // Only offered where there is something to apply: a 「应用年份」 on a
+  // source with no year would write nothing and read as broken.
+  const canApply = applyField !== undefined && hasValue && onApplyField !== undefined;
   return (
-    <div className="flex items-start gap-2 text-xs min-w-0">
+    <div className="flex items-start gap-2 text-xs min-w-0 group/fact">
       <span className="text-muted-foreground w-16 shrink-0">{label}</span>
       <span
-        className={cn('text-foreground min-w-0 break-all', mono && 'font-mono text-[11px]')}
+        className={cn('text-foreground min-w-0 break-all flex-1', mono && 'font-mono text-[11px]')}
         title={text}
       >
         {text}
       </span>
+      {canApply && (
+        <button
+          type="button"
+          onClick={() => onApplyField?.(applyField)}
+          className="shrink-0 text-[10px] text-primary hover:underline sm:opacity-0 sm:group-hover/fact:opacity-100 sm:focus-visible:opacity-100 transition-opacity"
+          title={`只应用这一项：${fieldLabel(applyField)}`}
+        >
+          应用
+        </button>
+      )}
     </div>
   );
 }
 
 export function CandidateCard({ candidate: c, onApply }: Props) {
   const [open, setOpen] = useState(false);
+  const applyOnly = (field: ApplyableField) => onApply(c, [field]);
 
   // Two different claims, never merged into one number. `score` is a
   // confidence in the audio and only a source that listened to the file
@@ -107,15 +133,50 @@ export function CandidateCard({ candidate: c, onApply }: Props) {
 
       {open && (
         <div className="space-y-1.5 pt-2 border-t border-border/40">
+          {/* The ids first: they are the reason to look, and they are
+              read-only — an id3 frame has nowhere to put a source's own
+              album id, so there is no "apply" for them. */}
           <Fact label="音源 ID" value={c.id} mono />
           <Fact label="艺术家 ID" value={c.artist_id} mono />
           <Fact label="专辑 ID" value={c.album_id} mono />
-          <Fact label="专辑年份" value={c.year} mono />
-          <Fact label="流派" value={c.genre} />
-          <Fact label="封面链接" value={c.album_img} mono />
           <Fact label="声纹置信" value={confidence === null ? undefined : `${confidence}%`} mono />
           <Fact label="标题比对" value={titleFact} />
-          <div className="flex items-start gap-2 text-xs min-w-0">
+
+          {/* The writable half, each with its own 应用. "应用此标签" takes
+              everything from one source, which is right most of the time
+              and wrong exactly when the user wants this source's album and
+              that source's lyrics — which is most of the reason to look
+              at a second candidate at all. */}
+          <div className="pt-1.5 mt-1.5 border-t border-border/30 space-y-1.5">
+            <Fact
+              label="标题"
+              value={c.name}
+              applyField="title"
+              onApplyField={applyOnly}
+            />
+            <Fact
+              label="艺术家"
+              value={c.artist}
+              applyField="artist"
+              onApplyField={applyOnly}
+            />
+            <Fact label="专辑" value={c.album} applyField="album" onApplyField={applyOnly} />
+            <Fact
+              label="专辑年份"
+              value={c.year}
+              mono
+              applyField="year"
+              onApplyField={applyOnly}
+            />
+            <Fact label="流派" value={c.genre} applyField="genre" onApplyField={applyOnly} />
+            <Fact
+              label="封面链接"
+              value={c.album_img}
+              mono
+              applyField="album_img"
+              onApplyField={applyOnly}
+            />
+          <div className="flex items-start gap-2 text-xs min-w-0 group/fact">
             <span className="text-muted-foreground w-16 shrink-0">歌词</span>
             <span className="text-foreground min-w-0 flex-1">
               {lyric ? (
@@ -126,6 +187,17 @@ export function CandidateCard({ candidate: c, onApply }: Props) {
                 <span className="text-muted-foreground">该音源未返回歌词</span>
               )}
             </span>
+            {lyric && (
+              <button
+                type="button"
+                onClick={() => applyOnly('lyrics')}
+                className="shrink-0 text-[10px] text-primary hover:underline sm:opacity-0 sm:group-hover/fact:opacity-100 sm:focus-visible:opacity-100 transition-opacity"
+                title="只应用歌词"
+              >
+                应用
+              </button>
+            )}
+          </div>
           </div>
         </div>
       )}

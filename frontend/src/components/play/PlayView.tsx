@@ -162,7 +162,9 @@ function LibraryTable() {
                 }}
                 className={cn(
                   'inline-flex items-center justify-center w-8 h-8 rounded-full transition-colors cursor-pointer',
-                  'opacity-0 group-hover:opacity-100',
+                  // Revealed on hover where hover exists; always shown on a phone,
+                  // where a hover-only control is an invisible one.
+                  'sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100',
                   isCurrent && 'opacity-100',
                   isCurrent
                     ? isPlaying

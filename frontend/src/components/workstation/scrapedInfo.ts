@@ -52,31 +52,79 @@ function orOmit(v: unknown): string | undefined {
   return t === '' ? undefined : t;
 }
 
+/** The tags a scrape candidate can write, in the order the UI shows them.
+ *
+ *  The list is the set of keys this module knows how to read off a
+ *  candidate; the ids a source sends (artist_id / album_id) are NOT here,
+ *  because a file's id3 frame has nowhere to put them and "apply the
+ *  artist id" is not an action a user can mean. */
+export const APPLYABLE_FIELDS = [
+  'title',
+  'artist',
+  'album',
+  'year',
+  'genre',
+  'album_img',
+  'lyrics',
+] as const;
+
+export type ApplyableField = (typeof APPLYABLE_FIELDS)[number];
+
+const FIELD_LABELS: Record<ApplyableField, string> = {
+  title: '标题',
+  artist: '艺术家',
+  album: '专辑',
+  year: '年份',
+  genre: '流派',
+  album_img: '封面',
+  lyrics: '歌词',
+};
+
+export function fieldLabel(field: ApplyableField): string {
+  return FIELD_LABELS[field] ?? field;
+}
+
+/** The tag value a candidate offers for one field, or undefined when it
+ *  offers nothing. Undefined is the load-bearing part: applying a field
+ *  the source did not fill in means "leave my tag alone", not "clear it". */
+export function candidateTagValue(
+  candidate: ScrapeCandidate,
+  field: ApplyableField,
+): string | undefined {
+  if (field === 'lyrics') {
+    return orOmit(candidate.lyric) ?? orOmit(candidate.lyrics);
+  }
+  const value = candidate[field as keyof ScrapeCandidate];
+  return orOmit(value);
+}
+
 /** The tags to write for `candidate`, ready to hand to the batch endpoint.
  *
  *  `fallbackTitle` is the query that produced no usable title — the file's
- *  own name — so a hit with an empty `name` does not blank the title. */
+ *  own name — so a hit with an empty `name` does not blank the title.
+ *
+ *  `fields` narrows the write to the ones asked for, which is what the
+ *  candidate card's per-field 「应用」 does: taking one source's album but
+ *  another source's genre is a normal thing to want, and "apply
+ *  everything" makes it impossible. Omitted means all of them. */
 export function scrapedMusicInfo(
   candidate: ScrapeCandidate,
   fallbackTitle: string,
+  fields?: readonly ApplyableField[],
 ): Record<string, unknown> {
-  const info: Record<string, unknown> = {
-    title: orOmit(candidate.name) ?? fallbackTitle,
-  };
+  const wanted = fields ?? APPLYABLE_FIELDS;
+  const info: Record<string, unknown> = {};
 
-  const optional: Array<[string, unknown]> = [
-    ['artist', candidate.artist],
-    ['album', candidate.album],
-    ['album_img', candidate.album_img],
-    ['year', candidate.year],
-    // The bug this module exists for: the candidate's real genre, and
-    // nothing at all when there isn't one.
-    ['genre', candidate.genre],
-    ['lyrics', orOmit(candidate.lyric) ?? orOmit(candidate.lyrics)],
-  ];
-  for (const [key, value] of optional) {
-    const v = orOmit(value);
-    if (v !== undefined) info[key] = v;
+  // Only ever a fallback when the title is one of the fields being
+  // written. Asking for just the genre must not also rewrite the title.
+  if (wanted.includes('title')) {
+    info.title = orOmit(candidate.name) ?? fallbackTitle;
+  }
+
+  for (const field of wanted) {
+    if (field === 'title') continue;
+    const value = candidateTagValue(candidate, field);
+    if (value !== undefined) info[field] = value;
   }
   return info;
 }

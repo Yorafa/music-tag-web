@@ -463,7 +463,12 @@ export function DirPickerDrawer({
             </div>
           )}
 
-          <DialogFooter className="px-4">
+          {/* `mx-0 mb-0` overrides the primitive's `-mx-4 -mb-4`. Those
+              negatives exist to cancel DialogContent's own `p-4`; this
+              drawer sets `p-0 gap-0` instead, so nothing cancels them and
+              the footer hangs 16px off BOTH edges — invisible on a desktop
+              panel, 32px wider than the screen on a phone. */}
+          <DialogFooter className="mx-0 mb-0 px-4 py-3 sm:px-4">
             <Button
               variant="outline"
               onClick={() => onOpenChange(false)}

@@ -205,7 +205,7 @@ export function FileTreeBrowser({ className, onOpenDirPicker }: Props) {
             variant="ghost"
             size="icon-xs"
             onClick={(e) => handleLoadDir(node.path, e)}
-            className="opacity-0 group-hover:opacity-100 hover:bg-primary/20 hover:text-primary transition-opacity h-5 w-5"
+            className="hover:bg-primary/20 hover:text-primary transition-opacity h-6 w-6 sm:h-5 sm:w-5 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
             title={`载入目录「${node.name}」中的音频`}
           >
             <FolderPlus className="w-3 h-3" />
@@ -316,7 +316,7 @@ export function FileTreeBrowser({ className, onOpenDirPicker }: Props) {
             <Button
               variant="ghost"
               size="icon-xs"
-              className="opacity-0 group-hover:opacity-100 hover:bg-primary/20 hover:text-primary transition-opacity h-5 w-5"
+              className="hover:bg-primary/20 hover:text-primary transition-opacity h-6 w-6 sm:h-5 sm:w-5 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
               title="载入全部根目录"
             >
               <FolderPlus className="w-3 h-3" />

@@ -870,7 +870,10 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
                 type="button"
                 onClick={() => setGrouping(g)}
                 className={cn(
-                  'px-2 py-0.5 text-xs rounded transition-colors',
+                  // py-1.5 on phones: at py-0.5 these chips are 20px tall,
+                  // which a thumb cannot hit reliably next to a row of
+                  // h-8 (32px) buttons.
+                  'px-2 py-1.5 sm:py-0.5 text-xs rounded transition-colors',
                   active ? 'bg-primary text-primary-foreground font-semibold shadow-xs' : 'text-muted-foreground hover:text-foreground',
                 )}
               >
