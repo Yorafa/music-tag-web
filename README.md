@@ -57,7 +57,7 @@
 | 封面 | ✅ | 远端拉取（带 SSRF 防护）+ 自定义上传；批量打包 zip 🚧 |
 | 曲库 / 文件管理 | ✅ | 递归扫描、多维度排序状态已在 store（UI 未接线 🚧）、按艺术家/专辑分组 |
 | 声纹索引与缓存 | ✅ | 索引自维护（有进展就排下一次，30s + `Unique` 去重）；子指纹带 duration 存进索引，重复查重零解码（400ms → 24ms），失效判据是 size **和** mtime |
-| 「清理残留」 | ✅ | 逐行问内核文件在不在，只删确定的 ENOENT；刻意不做 `WHERE path NOT IN` 集合差集。目录只剩专辑元数据（`album.nfo` / `*.cue` / 封面）时也当残留处理，元数据先进回收站 |
+| 「清理残留」 | ✅ | 逐行问内核文件在不在，只删确定的 ENOENT；刻意不做 `WHERE path NOT IN` 集合差集。目录只剩专辑元数据或无主 `.lrc` 时也当残留处理，这些文件先进回收站；删除音频时同名 `.lrc` 一起进回收站 |
 | 文件名解析 | ✅ | preview 返回 token + 逐行 `{artist,title,status}`（10 分钟 TTL），apply 走 asynq 批量写；Go + TS 双引擎在 200+ NFC fixture 上 deep-equal |
 | 下载 / 抓取 | ✅ | YouTube / B 站走 yt-dlp，参数 sanitize 防 `--exec=` 注入；5 个音乐源 download plugin |
 | 操作日志 | ✅ | GORM `OperationLog` 持久化 + 侧边栏「操作审计」面板（多维过滤 / 模糊检索 / 变动详情 / 清空） |

@@ -276,7 +276,7 @@ func moveSidecarsToTrash(root, batch string, paths []string) []string {
 }
 
 // dirPrunable reports whether dir holds nothing that has to stay, and which
-// album-scoped sidecars would have to be moved out first to make that true.
+// sidecars would have to be moved out first to make that true.
 //
 // This mirrors what os.Remove will decide, minus the removal. An entry that is
 // a file this pass does not own, a symlink, or a directory the walk skipped
@@ -284,15 +284,19 @@ func moveSidecarsToTrash(root, batch string, paths []string) []string {
 // is the same answer the real pass arrives at when the kernel refuses the
 // parent.
 //
-// The album-scoped sidecars are the exception, and they are listed rather than
-// counted: album.nfo / *.cue / cover*.* describe the album, not any track, so
-// one left alone in a directory with no audio is residue rather than a
-// file somebody put there. They are moved to the trash, not unlinked, so
-// "the pruner deleted my nfo" is always something the user can undo.
+// Two classes of sidecar are the exception, and they are listed rather than
+// counted so the confirmation dialog can name the files:
 //
-// A track-scoped `<base>.lrc` is not on that list, and neither is any
-// dot-file: those are named after a track or created by a tool, and the
-// conservative answer for them is to leave the directory alone.
+//   - Album-scoped (`album.nfo`, `*.cue`, cover*.*): they describe the album
+//     and not any track, so one sitting in a directory with no audio is
+//     residue rather than a file somebody put there.
+//   - A track-scoped `<base>.lrc`. Its entire reason to exist is the track it
+//     is named after, and reaching this line already means no audio is left
+//     in the directory (see isLyricsSidecar).
+//
+// Everything else keeps its directory. The sidecars go to the trash, not to
+// unlink, so "the pruner deleted my lyrics" is always something the user can
+// undo.
 func dirPrunable(dir string, willGo map[string]bool) (sidecars []string, ok bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -307,7 +311,7 @@ func dirPrunable(dir string, willGo map[string]bool) (sidecars []string, ok bool
 			return nil, false
 		}
 		if !e.IsDir() {
-			if !tag.IsAlbumScopedSidecar(name) {
+			if !tag.IsAlbumScopedSidecar(name) && !isLyricsSidecar(name) {
 				return nil, false
 			}
 			sidecars = append(sidecars, filepath.Join(dir, name))
@@ -318,6 +322,21 @@ func dirPrunable(dir string, willGo map[string]bool) (sidecars []string, ok bool
 		}
 	}
 	return sidecars, true
+}
+
+// isLyricsSidecar reports whether name is a track-scoped `<base>.lrc`.
+//
+// There is deliberately no "does its track still exist" check here, and that
+// omission is the design rather than an oversight. This predicate is only
+// ever reached for a directory that holds NO audio at all: an audio file is
+// not a sidecar, so one entry above it has already returned "not prunable".
+// A directory that still contains a track can therefore never be a candidate,
+// and the lyrics of a live track cannot be taken by this pass — a guarantee
+// that is structural, and that survives any future edit to the residue list
+// in a way an ownership check inside this function would not.
+func isLyricsSidecar(name string) bool {
+	_, ok := tag.LyricsSidecarFor(name)
+	return ok
 }
 
 // scopes resolves a task payload's sub_paths into the directories this task

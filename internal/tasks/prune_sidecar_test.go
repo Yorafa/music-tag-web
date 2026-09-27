@@ -76,26 +76,27 @@ func mustBatchID(t *testing.T, data string) string {
 }
 
 // The rule is residue, not "no audio". Anything else that keeps a file in the
-// directory keeps the directory, including a track-scoped .lrc — a lone
-// lyrics file is something a person fetched, and it is named after a track,
-// so the conservative answer is to leave it alone.
+// directory keeps the directory — and a .lrc keeps it when the track it names
+// is still there. The audio in these cases belongs to the .lrc, not to the
+// nfo: `holds-lrc` is the case that would be wrong if the ownership check
+// were loose, since the directory is nothing but lyrics and metadata.
 func TestPruneEmpty_KeepsDirectoriesThatStillHoldSomethingThatIsNotResidue(t *testing.T) {
 	root, data := t.TempDir(), t.TempDir()
 	t.Setenv("DATA_DIR", data)
-	cases := map[string]string{
+	for name, file := range map[string]string{
 		"holds-audio":   "song.ogg",
 		"holds-lrc":     "song.lrc",
-		"holds-nfo-too": "song.ogg",
+		"holds-nfo-too": "other.ogg",
 		"holds-dotfile": ".DS_Store",
 		"holds-notes":   "notes.txt",
-	}
-	for name, file := range cases {
+	} {
 		dir := filepath.Join(root, name)
 		mustWriteNested(t, filepath.Join(dir, file), "x")
 		// Every case also carries the residue, so each one is testing
 		// "the OTHER file is what saved it", not "the dir had no nfo".
-		if file != "album.nfo" {
-			mustWriteNested(t, filepath.Join(dir, "album.nfo"), "nfo")
+		mustWriteNested(t, filepath.Join(dir, "album.nfo"), "nfo")
+		if name == "holds-lrc" {
+			mustWriteNested(t, filepath.Join(dir, "song.ogg"), "the track these lyrics belong to")
 		}
 	}
 	// A cover is album-scoped like the nfo, so this one may go — but only
@@ -122,6 +123,52 @@ func TestPruneEmpty_KeepsDirectoriesThatStillHoldSomethingThatIsNotResidue(t *te
 	// that is still there.
 	if _, err := os.Stat(filepath.Join(root, "holds-audio", "album.nfo")); err != nil {
 		t.Errorf("the nfo next to a live track was taken anyway: %v", err)
+	}
+}
+
+// The second kind of residue: a .lrc whose track is gone. Deleting the last
+// track in a directory used to strand its lyrics and leave the directory
+// permanently unprunable — the same shape as the album.nfo case, one file
+// over. A .lrc that still HAS its audio keeps its directory, which is the
+// line that has to be exactly right.
+func TestPruneEmpty_AnUnownedLrcGoesButAnOwnedOneStays(t *testing.T) {
+	root, data := t.TempDir(), t.TempDir()
+	t.Setenv("DATA_DIR", data)
+	// The orphan: the track it names is not here.
+	mustWriteNested(t, filepath.Join(root, "orphan", "gone.lrc"), "[00:01.00]words")
+	// Owned: same directory, audio present.
+	mustWriteNested(t, filepath.Join(root, "kept", "here.ogg"), "audio")
+	mustWriteNested(t, filepath.Join(root, "kept", "here.lrc"), "[00:01.00]words")
+	// Owned only by case: on a case-insensitive filesystem these are one
+	// track, and deleting the lyrics there would be losing live data.
+	mustWriteNested(t, filepath.Join(root, "kept-case", "song.ogg"), "audio")
+	mustWriteNested(t, filepath.Join(root, "kept-case", "Song.lrc"), "[00:01.00]words")
+
+	h := &PruneEmptyFoldersHandler{DB: newScanDB(t), MusicRoot: root}
+	removed, sidecars, err := h.pruneEmpty(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("pruneEmpty: %v", err)
+	}
+	if !equalStrings(removed, []string{"orphan"}) {
+		t.Errorf("removed = %v, want only the directory with an unowned .lrc", removed)
+	}
+	if !equalStrings(sidecars, []string{"orphan/gone.lrc"}) {
+		t.Errorf("sidecars = %v, want the orphan lyrics", sidecars)
+	}
+	for _, dir := range []string{"kept", "kept-case"} {
+		if _, err := os.Stat(filepath.Join(root, dir)); err != nil {
+			t.Errorf("%s was removed: %v", dir, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "kept", "here.lrc")); err != nil {
+		t.Errorf("the .lrc next to a live track was taken: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "kept-case", "Song.lrc")); err != nil {
+		t.Errorf("the case-mismatched .lrc was taken: %v", err)
+	}
+	// And the orphan is recoverable.
+	if _, err := os.Stat(filepath.Join(data, ".trash", mustBatchID(t, data), "orphan", "gone.lrc")); err != nil {
+		t.Errorf("the orphan lyrics did not reach the trash: %v", err)
 	}
 }
 
@@ -287,9 +334,9 @@ func TestDirPrunable_RefusesASymlinkEvenWhenItLooksLikeResidue(t *testing.T) {
 // The predicate the whole thing rests on. A drifted copy here is how a file
 // ends up carried by a rename and deleted by a prune, so the shapes that must
 // and must not count are pinned rather than assumed.
-func TestDirPrunable_AlbumScopedOnly(t *testing.T) {
+func TestDirPrunable_AlbumScopedAndUnownedLyrics(t *testing.T) {
 	prunable := []string{"album.nfo", "Album.NFO", "MyAlbum.cue", "cover.jpg", "cover-17.png", "folder.webp"}
-	keep := []string{"song.lrc", "notes.txt", "cover.jpg.txt", ".DS_Store", "cover-.jpg", "album.nfo.bak", "cover"}
+	keep := []string{"notes.txt", "cover.jpg.txt", ".DS_Store", "cover-.jpg", "album.nfo.bak", "cover"}
 
 	for _, name := range prunable {
 		dir := t.TempDir()
@@ -304,13 +351,27 @@ func TestDirPrunable_AlbumScopedOnly(t *testing.T) {
 			t.Errorf("%s: found = %v, want exactly that one file", name, found)
 		}
 	}
+	// A .lrc alone in a directory IS residue, by the ownership rule, so it
+	// is not in `keep` — it is the same shape as the album metadata. The
+	// interesting half is the one below, where the track is still there.
 	for _, name := range keep {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if _, ok := dirPrunable(dir, map[string]bool{}); ok {
-			t.Errorf("%s counted as residue; it is not album-scoped", name)
+			t.Errorf("%s counted as residue sitting alone in a directory", name)
 		}
+	}
+	// ...and the same name beside the track it describes is not residue at
+	// all, which is the other half of the rule.
+	dir := t.TempDir()
+	for _, name := range []string{"song.ogg", "song.lrc"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if found, ok := dirPrunable(dir, map[string]bool{}); ok {
+		t.Errorf("an owned .lrc counted as residue: %v", found)
 	}
 }
