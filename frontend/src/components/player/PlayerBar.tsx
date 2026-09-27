@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Mic2 } from 'lucide-react';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { sourceErrorMessage } from '@/lib/streamUrl';
 import { NowPlaying } from '@/components/player/NowPlaying';
+import { LyricsView } from '@/components/player/LyricsView';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 
 function formatTime(s: number): string {
   if (!Number.isFinite(s) || s < 0) return '0:00';
@@ -26,7 +28,7 @@ function formatTime(s: number): string {
  *    before React re-renders) would otherwise attribute the toast to A's
  *    source. Documented and adopted (see Round-3 fix).
  *
- *  - React onClick / onChange handlers (togglePlay, prev, next, seek,
+ *  - React onClick / onChange handlers (togglePlay, seek,
  *    setVolume, onSeekInput) capture Zustand slice selectors (`(s) =>
  *    s.togglePlay` etc.) at render time. These references are STABLE —
  *    Zustand returns the same function pointer on every call to the
@@ -40,6 +42,13 @@ function formatTime(s: number): string {
  *  comment exists so a future audit doesn't re-do this analysis. */
 export function PlayerBar() {
   const audioRef = useRef<HTMLAudioElement>(null);
+  // The track URL we last assigned to <audio>.src, kept verbatim from the
+  // store. We compare against THIS, not el.src: the DOM resolves el.src to an
+  // absolute URL, so `el.src !== currentTrack.url` (a relative "/api/stream/…")
+  // is always true — every pause/resume would then re-assign src and call
+  // load(), which resets currentTime to 0. Comparing the store value to itself
+  // makes the src swap fire only on a genuine track change.
+  const loadedUrlRef = useRef<string | null>(null);
   // Mobile-only overlay open state. Owned here so the mini player bar
   // and the NowPlaying sheet share one source of truth without a UI
   // store slot. Resets whenever currentTrack goes null (so dismissing a
@@ -53,10 +62,9 @@ export function PlayerBar() {
   const duration = usePlayerStore((s) => s.duration);
   const volume = usePlayerStore((s) => s.volume);
   const togglePlay = usePlayerStore((s) => s.togglePlay);
+  const pause = usePlayerStore((s) => s.pause);
   const seek = usePlayerStore((s) => s.seek);
   const setVolume = usePlayerStore((s) => s.setVolume);
-  const next = usePlayerStore((s) => s.next);
-  const prev = usePlayerStore((s) => s.prev);
   const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
   const setDuration = usePlayerStore((s) => s.setDuration);
   const setIsBuffering = usePlayerStore((s) => s.setIsBuffering);
@@ -81,7 +89,8 @@ export function PlayerBar() {
     const el = audioRef.current;
     if (!el) return;
     if (currentTrack && currentTrack.url) {
-      if (el.src !== currentTrack.url) {
+      if (loadedUrlRef.current !== currentTrack.url) {
+        loadedUrlRef.current = currentTrack.url;
         el.src = currentTrack.url;
         el.load();
       }
@@ -92,7 +101,8 @@ export function PlayerBar() {
       } else if (!el.paused) {
         el.pause();
       }
-    } else if (el.getAttribute('src')) {
+    } else if (loadedUrlRef.current !== null) {
+      loadedUrlRef.current = null;
       el.pause();
       el.removeAttribute('src');
       el.load();
@@ -100,14 +110,15 @@ export function PlayerBar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrack?.url, isPlaying]);
 
-  // Auto-advance queue when the current track ends.
+  // Single-track player (no queue): when the track ends, stop playback so
+  // the transport reflects reality and a tap on play restarts from 0.
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
-    const handler = () => next();
+    const handler = () => pause();
     el.addEventListener('ended', handler);
     return () => el.removeEventListener('ended', handler);
-  }, [next]);
+  }, [pause]);
 
   // Note: NowPlaying self-guards via `if (!open || !currentTrack) return null`
   // so a leftover `nowPlayingOpen=true` from a previous track is harmless —
@@ -206,17 +217,8 @@ export function PlayerBar() {
         )}
       </div>
 
-      {/* Transport */}
+      {/* Transport — single-track player, so just play/pause (no queue). */}
       <div className="flex items-center gap-1 shrink-0">
-        <button
-          onClick={prev}
-          disabled={!currentTrack}
-          aria-label="上一首"
-          title="上一首"
-          className="p-1.5 rounded hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed text-muted-foreground hover:text-foreground"
-        >
-          <SkipBack className="w-4 h-4" />
-        </button>
         <button
           onClick={togglePlay}
           disabled={!hasUrl}
@@ -225,15 +227,6 @@ export function PlayerBar() {
           className="p-2 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-        </button>
-        <button
-          onClick={next}
-          disabled={!currentTrack}
-          aria-label="下一首"
-          title="下一首"
-          className="p-1.5 rounded hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed text-muted-foreground hover:text-foreground"
-        >
-          <SkipForward className="w-4 h-4" />
         </button>
       </div>
 
@@ -279,6 +272,39 @@ export function PlayerBar() {
           className="flex-1 accent-primary h-1 cursor-pointer"
         />
       </div>
+
+      {/* Lyrics — popover panel anchored to the bar so the thin strip
+          doesn't have to grow. Disabled when the current track carries no
+          lyric body (most streaming rows). */}
+      <Popover>
+        <PopoverTrigger
+          render={
+            <button
+              type="button"
+              disabled={!currentTrack?.lyrics}
+              aria-label="歌词"
+              title={currentTrack?.lyrics ? '歌词' : '暂无歌词'}
+              className="p-1.5 rounded hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed text-muted-foreground hover:text-foreground shrink-0"
+            >
+              <Mic2 className="w-4 h-4" />
+            </button>
+          }
+        />
+        <PopoverContent align="end" sideOffset={8} className="w-80">
+          <div className="mb-2 min-w-0">
+            <div className="text-sm font-medium truncate">{currentTrack?.title}</div>
+            <div className="text-xs text-muted-foreground truncate">
+              {currentTrack?.artist || '未知艺术家'}
+            </div>
+          </div>
+          <LyricsView
+            lyrics={currentTrack?.lyrics}
+            currentTime={currentTime}
+            variant="compact"
+            className="max-h-72"
+          />
+        </PopoverContent>
+      </Popover>
       </div>
 
       {/* Mobile mini bar (below 640px). Plan B decision #10: bottom
@@ -327,28 +353,12 @@ export function PlayerBar() {
           onClick={(e) => e.stopPropagation()}
         >
           <button
-            onClick={prev}
-            disabled={!currentTrack}
-            aria-label="上一首"
-            className="p-1.5 rounded hover:bg-surface-2 disabled:opacity-40"
-          >
-            <SkipBack className="w-4 h-4" />
-          </button>
-          <button
             onClick={togglePlay}
             disabled={!hasUrl}
             aria-label={isPlaying ? '暂停' : '播放'}
             className="p-2 rounded-full bg-primary text-primary-foreground disabled:opacity-40"
           >
             {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-          </button>
-          <button
-            onClick={next}
-            disabled={!currentTrack}
-            aria-label="下一首"
-            className="p-1.5 rounded hover:bg-surface-2 disabled:opacity-40"
-          >
-            <SkipForward className="w-4 h-4" />
           </button>
         </div>
       </div>

@@ -405,6 +405,7 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
       title: formData.title || row.fileName,
       artist: formData.artist || '本地音乐',
       cover: formData.album_img,
+      lyrics: formData.lyrics || undefined,
       source: { kind: 'local', fileName, filePath },
     });
   };

@@ -79,6 +79,7 @@ function buildLocalTrack(row: LibraryRow): PlayerTrack {
     title: row.musicInfo?.title || row.fileName,
     artist: row.musicInfo?.artist || '未知艺术家',
     cover: resolveCoverSrc(row.musicInfo ?? undefined),
+    lyrics: row.musicInfo?.lyrics || undefined,
     source: { kind: 'local', fileName: row.fileName, filePath: row.fullPath },
   };
 }

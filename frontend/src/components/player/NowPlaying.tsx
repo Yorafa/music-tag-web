@@ -11,21 +11,25 @@
 //     whole sheet, but only vertical downward motion accumulates
 //     displacement; upward motion snaps back to 0 immediately.
 //   - Album cover, square, sized to min(80vw, 320px) — caps on tablets
-//     so it doesn't dominate a 768 viewport.
+//     so it doesn't dominate a 768 viewport. A cover⇄lyrics toggle swaps
+//     the square for a scrolling LyricsView (karaoke-follow when the body
+//     carries LRC timestamps).
 //   - Title + artist text rows.
 //   - Seekbar: same range-input pattern PlayerBar uses; the store does
 //     the heavy lifting, NowPlaying just mirrors.
-//   - Transport row: Prev | Play/Pause | Next — icon-only, large tap
-//     targets (~56px diameter).
+//   - Transport row: single Play/Pause — icon-only, large tap target
+//     (~56px diameter). No prev/next: the player is single-track (no
+//     queue), so there is nothing to skip to.
 //   - NO queue / library list.
 //
 // The overlay never blocks the audio element. The mini PlayerBar keeps
 // the actual <audio> mounted; this component reads the same store and
-// only writes transport commands (seek / togglePlay / next / prev).
+// only writes transport commands (seek / togglePlay).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Play, Pause, SkipBack, SkipForward, ChevronDown } from 'lucide-react';
+import { Play, Pause, ChevronDown, Mic2, Disc3 } from 'lucide-react';
 import { usePlayerStore } from '@/store/usePlayerStore';
+import { LyricsView } from '@/components/player/LyricsView';
 
 function formatTime(s: number): string {
   if (!Number.isFinite(s) || s < 0) return '0:00';
@@ -48,8 +52,19 @@ export function NowPlaying({ open, onClose }: Props) {
   const duration = usePlayerStore((s) => s.duration);
   const togglePlay = usePlayerStore((s) => s.togglePlay);
   const seek = usePlayerStore((s) => s.seek);
-  const next = usePlayerStore((s) => s.next);
-  const prev = usePlayerStore((s) => s.prev);
+
+  // Cover ↔ lyrics toggle for the main square area. Defaults to cover.
+  // Reset to cover whenever the track changes so a new song doesn't open
+  // straight into the previous song's (possibly stale) lyric scroll. Done
+  // with React's "adjust state during render" pattern (compare against a
+  // tracked previous id) rather than an effect — no cascading render, no
+  // setState-in-effect lint bite.
+  const [showLyrics, setShowLyrics] = useState(false);
+  const prevTrackId = useRef<string | undefined>(currentTrack?.id);
+  if (prevTrackId.current !== currentTrack?.id) {
+    prevTrackId.current = currentTrack?.id;
+    if (showLyrics) setShowLyrics(false);
+  }
 
   // Drag-down state — vertical displacement (px) the sheet has been
   // dragged down. Committed to 0 on every pointer up below threshold AND
@@ -153,21 +168,38 @@ export function NowPlaying({ open, onClose }: Props) {
         </button>
       </div>
 
-      {/* Cover */}
+      {/* Cover ↔ lyrics. Tap the square to flip between the two; the
+          toggle button below the title mirrors the same state so the
+          affordance is discoverable. Lyrics scroll and auto-follow the
+          playhead (LyricsView handles LRC vs plain text). */}
       <div className="flex-1 min-h-0 flex items-center justify-center">
-        <div className="w-[min(80vw,22rem)] aspect-square rounded-xl overflow-hidden bg-surface-2 shadow-2xl">
-          {currentTrack.cover ? (
-            <img
-              src={currentTrack.cover}
-              alt={currentTrack.title}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-6xl text-muted-foreground/60">
-              ♪
-            </div>
-          )}
-        </div>
+        {showLyrics ? (
+          <LyricsView
+            lyrics={currentTrack.lyrics}
+            currentTime={currentTime}
+            variant="full"
+            className="w-[min(90vw,26rem)] h-full py-4 px-2"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowLyrics(true)}
+            aria-label="显示歌词"
+            className="w-[min(80vw,22rem)] aspect-square rounded-xl overflow-hidden bg-surface-2 shadow-2xl"
+          >
+            {currentTrack.cover ? (
+              <img
+                src={currentTrack.cover}
+                alt={currentTrack.title}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-6xl text-muted-foreground/60">
+                ♪
+              </div>
+            )}
+          </button>
+        )}
       </div>
 
       {/* Title + artist */}
@@ -204,15 +236,17 @@ export function NowPlaying({ open, onClose }: Props) {
         </span>
       </div>
 
-      {/* Transport */}
+      {/* Transport — single-track player (no queue), so a centered
+          play/pause with a lyrics/cover toggle flanking it. */}
       <div className="flex items-center justify-center gap-8 mt-3 shrink-0">
         <button
-          onClick={prev}
-          disabled={!currentTrack}
-          aria-label="上一首"
-          className="p-3 rounded-full hover:bg-surface-2 disabled:opacity-40 disabled:cursor-not-allowed"
+          onClick={() => setShowLyrics((v) => !v)}
+          aria-label={showLyrics ? '显示封面' : '显示歌词'}
+          aria-pressed={showLyrics}
+          title={showLyrics ? '显示封面' : '显示歌词'}
+          className="p-3 rounded-full hover:bg-surface-2 text-muted-foreground hover:text-foreground"
         >
-          <SkipBack className="w-7 h-7" />
+          {showLyrics ? <Disc3 className="w-7 h-7" /> : <Mic2 className="w-7 h-7" />}
         </button>
         <button
           onClick={togglePlay}
@@ -222,14 +256,8 @@ export function NowPlaying({ open, onClose }: Props) {
         >
           {isPlaying ? <Pause className="w-8 h-8" /> : <Play className="w-8 h-8" />}
         </button>
-        <button
-          onClick={next}
-          disabled={!currentTrack}
-          aria-label="下一首"
-          className="p-3 rounded-full hover:bg-surface-2 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <SkipForward className="w-7 h-7" />
-        </button>
+        {/* Spacer to keep play/pause visually centered opposite the toggle. */}
+        <span className="p-3 w-7 h-7 box-content" aria-hidden />
       </div>
     </div>
   );

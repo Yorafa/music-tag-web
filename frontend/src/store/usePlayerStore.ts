@@ -22,6 +22,11 @@ export interface PlayerTrack {
   artist: string;
   cover?: string;
   durationSec?: number;
+  /** Lyric body for display in the player. Either plain text or LRC with
+   *  `[mm:ss.xx]` time tags — LyricsView parses both. Populated from the
+   *  local file's id3 `lyrics` tag (PlayView) or the inspector's edited
+   *  lyrics (TrackInspector). Absent for most streaming rows. */
+  lyrics?: string;
   source: PlayerSource;
 }
 
@@ -30,7 +35,6 @@ interface PlayerState {
   isPlaying: boolean;
   currentTime: number;
   duration: number;
-  queue: PlayerTrack[];
   /** 0..1. Persisted across page reloads so the user doesn't lose mix on
    *  tab-nap. NOT persisted to localStorage on every render — debounced by
    *  PlayerBar's setter wrapper. */
@@ -45,8 +49,9 @@ interface PlayerState {
   isBuffering: boolean;
 
   /** Start playing a new track. Replaces currentTrack; resets currentTime
-   *  to 0 and (optionally) seeds the queue for next/prev navigation. */
-  playTrack: (track: PlayerTrack, opts?: { queue?: PlayerTrack[] }) => void;
+   *  to 0. Single-track only — there is no multi-track queue (previews are
+   *  started one row at a time), so there is no next/prev navigation. */
+  playTrack: (track: PlayerTrack) => void;
   togglePlay: () => void;
   pause: () => void;
   resume: () => void;
@@ -55,8 +60,6 @@ interface PlayerState {
    *  onChange, not by a reactive effect (avoids a loop with onTimeUpdate). */
   seek: (sec: number) => void;
   setVolume: (v: number) => void;
-  next: () => void;
-  prev: () => void;
 
   // Mirrors from native <audio> events. Don't call from UI directly.
   setCurrentTime: (sec: number) => void;
@@ -76,23 +79,21 @@ function loadInitialVolume(): number {
   return Math.max(0, Math.min(1, raw));
 }
 
-export const usePlayerStore = create<PlayerState>((set, get) => ({
+export const usePlayerStore = create<PlayerState>((set) => ({
   currentTrack: null,
   isPlaying: false,
   currentTime: 0,
   duration: 0,
-  queue: [],
   volume: loadInitialVolume(),
   error: null,
   isBuffering: false,
 
-  playTrack: (track, opts) =>
+  playTrack: (track) =>
     set({
       currentTrack: track,
       isPlaying: true,
       currentTime: 0,
       duration: track.durationSec ?? 0,
-      queue: opts?.queue && opts.queue.length > 0 ? opts.queue : [track],
       error: null,
       // New track → the <audio> element will fire onWaiting the moment it
       // starts fetching, and onCanPlay once it has enough buffered.
@@ -112,44 +113,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const clamped = Math.max(0, Math.min(1, v));
     writeNumber(VOLUME_KEY, clamped);
     set({ volume: clamped });
-  },
-
-  next: () => {
-    const q = get().queue;
-    const cur = get().currentTrack;
-    if (!cur) return;
-    const idx = q.findIndex((t) => t.id === cur.id);
-    if (idx < 0 || idx + 1 >= q.length) return;
-    set({
-      currentTrack: q[idx + 1],
-      isPlaying: true,
-      currentTime: 0,
-      duration: q[idx + 1].durationSec ?? 0,
-      error: null,
-      isBuffering: false,
-    });
-  },
-
-  prev: () => {
-    const q = get().queue;
-    const cur = get().currentTrack;
-    if (!cur || q.length < 2) {
-      set({ currentTime: 0 });
-      return;
-    }
-    const idx = q.findIndex((t) => t.id === cur.id);
-    if (idx <= 0) {
-      set({ currentTime: 0 });
-      return;
-    }
-    set({
-      currentTrack: q[idx - 1],
-      isPlaying: true,
-      currentTime: 0,
-      duration: q[idx - 1].durationSec ?? 0,
-      error: null,
-      isBuffering: false,
-    });
   },
 
   setCurrentTime: (sec) => set({ currentTime: sec }),
