@@ -180,12 +180,21 @@ func validateStreamUpstream(ctx context.Context, upstreamURL string) error {
 //     from leaking goroutines,
 //   - cap redirects at 5 hops so a malicious sign-via-redirect-upstream
 //     can't bounce us through internal IPs without perimeter netguard
-//     protection.
+//     protection,
+//   - re-run streamGuard.Validate on every redirect target. The initial
+//     URL is validated once at streamFromPlugin (validateStreamUpstream),
+//     but a public URL can 302 to http://169.254.169.254/ or an RFC 1918
+//     host; without per-hop validation the hop-count cap alone would
+//     happily follow that pivot. Mirrors netguard.SafeHTTPGet's
+//     CheckRedirect (internal/netguard/safehttp.go).
 var streamUpstreamClient = &http.Client{
 	Timeout: streamUpstreamTimeout,
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return errors.New("upstream too many redirects")
+		}
+		if err := streamGuard.Validate(req.Context(), req.URL.String()); err != nil {
+			return err
 		}
 		return nil
 	},

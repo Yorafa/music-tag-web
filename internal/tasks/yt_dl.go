@@ -339,6 +339,23 @@ func (h *DownloadHandler) runDownloadSource(ctx context.Context, payload *Downlo
 // resolved once; tests inject their own via downloadGuard.Resolver.
 var downloadGuard = netguard.NewGuard()
 
+// downloadCheckRedirect is the CheckRedirect policy for the audio-download
+// client. Package-level (rather than an inline closure) so a regression test
+// can exercise the per-hop SSRF re-validation directly via downloadGuard.
+//
+// The initial audioURL is checked once in runTagSource, but a public URL can
+// 302 to http://169.254.169.254/ or an RFC 1918 host; the hop-count cap alone
+// would follow that pivot. Mirrors netguard.SafeHTTPGet's CheckRedirect.
+func downloadCheckRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 5 {
+		return fmt.Errorf("too many redirects")
+	}
+	if err := downloadGuard.Validate(req.Context(), req.URL.String()); err != nil {
+		return err
+	}
+	return nil
+}
+
 // runTagSource downloads a TagSource track by asking the plugin for a
 // short-lived audio URL and saving the bytes. This lets users "加入库"
 // from sources like migu / kugou / kuwo, not just YouTube.
@@ -385,13 +402,8 @@ func (h *DownloadHandler) runTagSource(ctx context.Context, payload *DownloadPay
 	req.Header.Set("Accept", "audio/*,*/*")
 
 	client := &http.Client{
-		Timeout: 5 * time.Minute,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("too many redirects")
-			}
-			return nil
-		},
+		Timeout:       5 * time.Minute,
+		CheckRedirect: downloadCheckRedirect,
 	}
 	resp, err := client.Do(req)
 	if err != nil {
