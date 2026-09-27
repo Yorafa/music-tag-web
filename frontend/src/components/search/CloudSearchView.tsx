@@ -189,7 +189,7 @@ export function CloudSearchView() {
             </div>
             <p className="text-sm font-semibold text-foreground">跨平台多源音乐云端检索</p>
             <p className="text-xs text-muted-foreground max-w-md">
-              支持网易云、QQ 音乐、酷狗、酷我、咪咕、MusicBrainz 与 YouTube 音频。可即时在线试听、保存至本地 NAS 音乐库或下载到浏览器。
+              支持自定义源的搜索与下载。可即时在线试听、保存至本地 NAS 音乐库或下载到浏览器。
             </p>
           </div>
         ) : results.length === 0 ? (
