@@ -21,7 +21,7 @@ func TestPruneEmpty_RemovesOnlyEmptyDirs(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "Artist", "Album", "track.ogg"), "x")
 
 	h := &PruneEmptyFoldersHandler{MusicRoot: root}
-	removed, err := h.pruneEmpty(context.Background(), nil)
+	removed, _, err := h.pruneEmpty(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("pruneEmpty: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestPruneEmpty_CascadesUpward(t *testing.T) {
 	mustMkdir(t, filepath.Join(root, "A", "B", "C"))
 
 	h := &PruneEmptyFoldersHandler{MusicRoot: root}
-	removed, err := h.pruneEmpty(context.Background(), nil)
+	removed, _, err := h.pruneEmpty(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("pruneEmpty: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestPruneEmpty_KeepsSidecarOnlyDirs(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "Album", "track.lrc"), "la")
 
 	h := &PruneEmptyFoldersHandler{MusicRoot: root}
-	removed, err := h.pruneEmpty(context.Background(), nil)
+	removed, _, err := h.pruneEmpty(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("pruneEmpty: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestPruneEmpty_NeverRemovesRoot(t *testing.T) {
 	mustMkdir(t, filepath.Join(root, "Empty"))
 
 	h := &PruneEmptyFoldersHandler{MusicRoot: root}
-	if _, err := h.pruneEmpty(context.Background(), nil); err != nil {
+	if _, _, err := h.pruneEmpty(context.Background(), nil); err != nil {
 		t.Fatalf("pruneEmpty: %v", err)
 	}
 	if _, err := os.Stat(root); err != nil {
@@ -122,7 +122,7 @@ func TestPruneEmpty_SkipsDataDir(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "data", "keep.sqlite"), "db")
 
 	h := &PruneEmptyFoldersHandler{MusicRoot: root}
-	removed, err := h.pruneEmpty(context.Background(), nil)
+	removed, _, err := h.pruneEmpty(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("pruneEmpty: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestPruneEmpty_ScopedToSubPaths(t *testing.T) {
 	mustMkdir(t, filepath.Join(root, "out-of-scope", "empty-b"))
 
 	h := &PruneEmptyFoldersHandler{MusicRoot: root}
-	removed, err := h.pruneEmpty(context.Background(),
+	removed, _, err := h.pruneEmpty(context.Background(),
 		[][2]string{{"", filepath.Join(root, "in-scope")}})
 	if err != nil {
 		t.Fatalf("pruneEmpty: %v", err)
@@ -187,7 +187,7 @@ func TestPruneEmpty_IgnoresOutOfRootScope(t *testing.T) {
 	mustMkdir(t, legit)
 
 	h := &PruneEmptyFoldersHandler{MusicRoot: root}
-	removed, err := h.pruneEmpty(context.Background(),
+	removed, _, err := h.pruneEmpty(context.Background(),
 		[][2]string{{"", outside}, {"", filepath.Join(root, "in-scope")}})
 	if err != nil {
 		t.Fatalf("pruneEmpty: %v", err)
@@ -226,7 +226,7 @@ func TestPruneEmpty_IgnoresTraversalAndForeignAbsoluteScopes(t *testing.T) {
 		filepath.Join(filepath.Dir(root), "sibling-empty"), // absolute, a sibling
 		"../" + filepath.Base(outside),                     // traversal
 	} {
-		removed, err := h.pruneEmpty(context.Background(), [][2]string{{"", scope}})
+		removed, _, err := h.pruneEmpty(context.Background(), [][2]string{{"", scope}})
 		if err != nil {
 			t.Fatalf("pruneEmpty(%q): %v", scope, err)
 		}

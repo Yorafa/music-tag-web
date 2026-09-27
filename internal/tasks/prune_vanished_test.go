@@ -412,7 +412,7 @@ func TestPruneEmpty_AloneLeavesRowsAlone(t *testing.T) {
 	addRow(t, gdb, gone, "music")
 
 	h := &PruneEmptyFoldersHandler{DB: gdb, MusicRoot: root}
-	if _, err := h.pruneEmpty(context.Background(), nil); err != nil {
+	if _, _, err := h.pruneEmpty(context.Background(), nil); err != nil {
 		t.Fatalf("pruneEmpty: %v", err)
 	}
 	if !rowExists(t, gdb, gone) {
@@ -438,7 +438,7 @@ func TestPruneEmptyThenVanished_AfterFilesDisappear(t *testing.T) {
 	}
 
 	h := &PruneEmptyFoldersHandler{DB: gdb, MusicRoot: root}
-	removedDirs, err := h.pruneEmpty(context.Background(), nil)
+	removedDirs, _, err := h.pruneEmpty(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("pruneEmpty: %v", err)
 	}

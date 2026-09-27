@@ -106,6 +106,25 @@ func isAlbumMetaSidecar(name string) bool {
 	return bareCoverBases[base] && coverExts[strings.TrimPrefix(filepath.Ext(lower), ".")]
 }
 
+// IsAlbumScopedSidecar reports whether name is a file that describes the album
+// living in its directory rather than one particular track: album.nfo, a cue
+// sheet, or any of the cover forms (cover-<album>.<ext>, cover.<ext>,
+// folder.<ext>).
+//
+// Exported because the pruner needs the same answer for the same reason the
+// move logic does. A directory left holding nothing but these is a directory
+// whose audio is gone, and both callers are asking "is this file about the
+// music that used to be here?". A second copy of the rule would drift, and a
+// drifted copy is how a file ends up deleted by one path and carried by the
+// other.
+//
+// A track-scoped `<base>.lrc` is deliberately NOT in this set: its name says
+// which track it belongs to, so a lone .lrc is a lyric somebody fetched, not
+// residue. Deciding that is the pruner's call, not this predicate's.
+func IsAlbumScopedSidecar(name string) bool {
+	return isAlbumMetaSidecar(name) || isCoverSidecar(name)
+}
+
 // moveAlbumMetadata carries the album-scoped non-cover files (album.nfo, cue
 // sheets) from oldDir to newDir.
 //

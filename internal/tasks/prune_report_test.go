@@ -46,7 +46,7 @@ func TestPrune_LogsARefusedScopeOnce(t *testing.T) {
 
 	// The preview has the same shape and the same doubling.
 	buf.Reset()
-	if _, _, err := h.PreviewPrune(context.Background(), payload); err != nil {
+	if _, _, _, err := h.PreviewPrune(context.Background(), payload); err != nil {
 		t.Fatalf("PreviewPrune: %v", err)
 	}
 	if n := bytes.Count(buf.Bytes(), []byte("out-of-root scope")); n != 1 {
@@ -79,7 +79,7 @@ func TestPrune_DryRunReportsEachTargetOnce(t *testing.T) {
 	// root and root/sub overlap, so root/sub is visited twice.
 	overlapping := [][2]string{{"", root}, {"", filepath.Join(root, "sub")}}
 
-	dirs, rows, err := h.PreviewPrune(context.Background(), overlapping)
+	dirs, _, rows, err := h.PreviewPrune(context.Background(), overlapping)
 	if err != nil {
 		t.Fatalf("PreviewPrune: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestPrune_DryRunReportsEachTargetOnce(t *testing.T) {
 
 	// And the real run has to agree with what the preview promised, which is
 	// the property the dialog rests on.
-	realDirs, err := h.pruneEmpty(context.Background(), overlapping)
+	realDirs, _, err := h.pruneEmpty(context.Background(), overlapping)
 	if err != nil {
 		t.Fatalf("pruneEmpty: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestPrune_SingleScopeStillReportsEverything(t *testing.T) {
 	addRow(t, gdb, filepath.Join(root, "a", "gone.ogg"), "music")
 
 	h := &PruneEmptyFoldersHandler{DB: gdb, MusicRoot: root}
-	dirs, rows, err := h.PreviewPrune(context.Background(), nil)
+	dirs, _, rows, err := h.PreviewPrune(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("PreviewPrune: %v", err)
 	}

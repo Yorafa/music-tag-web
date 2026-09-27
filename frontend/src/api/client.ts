@@ -140,8 +140,13 @@ export async function fullScanFolder() {
  *
  *  Both lists land in 操作审计 as `prune_empty_folders`, under `removed` and
  *  `vanished_rows`.
+ * * `sub_paths` restricts the sweep; omit it for the whole library.
  *
- *  `sub_paths` restricts the sweep; omit it for the whole library. */
+ * A directory left holding nothing but album-scoped residue — album.nfo, a
+ * cue sheet, a cover — counts as empty: the audio it described is gone, and
+ * the residue is what stops the directory from ever being removed. Those files
+ * are moved into the delete trash, so this stays recoverable; the directory
+ * itself still has to be accepted by os.Remove. */
 export async function pruneEmptyFolders(subPaths?: Array<[string, string]>) {
   const { data } = await api.post('prune_empty_folders/', { sub_paths: subPaths ?? [] });
   return data;
@@ -153,18 +158,26 @@ export async function pruneEmptyFolders(subPaths?: Array<[string, string]>) {
  *  Read-only, so the gateway answers inline instead of going through the
  *  worker queue. The confirmation dialog lists these paths: a count the
  *  user can only nod at is not a confirmation, and a count that is wrong
- *  is worse than no dialog at all. */
+ *  is worse than no dialog at all.
+ *
+ *  `sidecars` is the third list and it is not a footnote: a directory
+ *  holding nothing but an `album.nfo` is only removable once that file is
+ *  taken, and the file goes to the trash rather than being unlinked. The
+ *  dialog has to name it, or the user approves a directory and loses a
+ *  file they were never shown. */
 export async function previewPruneEmpty(subPaths?: Array<[string, string]>) {
   const { data } = await api.post('prune_empty_folders/preview/', {
     sub_paths: subPaths ?? [],
   });
   const payload = unwrapEnvelope<{
     empty_dirs?: string[];
+    sidecars?: string[];
     vanished_rows?: string[];
     total?: number;
   }>(data, 'prune_empty_folders/preview');
   return {
     emptyDirs: payload.empty_dirs ?? [],
+    sidecars: payload.sidecars ?? [],
     vanishedRows: payload.vanished_rows ?? [],
     total: payload.total ?? 0,
   };

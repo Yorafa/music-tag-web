@@ -136,7 +136,7 @@ func PreviewPruneEmptyFolders(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 
 	h := &tasks.PruneEmptyFoldersHandler{DB: dedupDB}
-	dirs, rows, err := h.PreviewPrune(c.Request.Context(), req.SubPaths)
+	dirs, sidecars, rows, err := h.PreviewPrune(c.Request.Context(), req.SubPaths)
 	if err != nil {
 		Failure(c, err.Error())
 		return
@@ -147,11 +147,20 @@ func PreviewPruneEmptyFolders(c *gin.Context) {
 	if dirs == nil {
 		dirs = []string{}
 	}
+	if sidecars == nil {
+		sidecars = []string{}
+	}
 	if rows == nil {
 		rows = []string{}
 	}
+	// total counts directories and index rows — the two things the button's
+	// name promises. The sidecars ride along in their own list because they
+	// are not endpoints: they are what had to be taken to get there, and
+	// folding them into the headline number would overstate how much was
+	// cleaned up.
 	SuccessData(c, gin.H{
 		"empty_dirs":    dirs,
+		"sidecars":      sidecars,
 		"vanished_rows": rows,
 		"total":         len(dirs) + len(rows),
 	})

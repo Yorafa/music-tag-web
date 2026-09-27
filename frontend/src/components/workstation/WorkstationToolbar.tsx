@@ -158,12 +158,17 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   // discriminated shape rather than two nullable lists so "still loading"
   // and "loaded, nothing to do" cannot be confused — the second is a real
   // answer and the dialog has to be able to say so.
+  // `sidecars` is the album-metadata files a directory has to give up before
+  // the kernel will let it go. It is listed in its own right, next to the
+  // directories, because the user is approving the removal of those files as
+  // much as the removal of the folders.
   const [prunePreview, setPrunePreview] = useState<{
     loading: boolean;
     emptyDirs: string[];
+    sidecars: string[];
     vanishedRows: string[];
     error?: boolean;
-  }>({ loading: false, emptyDirs: [], vanishedRows: [] });
+  }>({ loading: false, emptyDirs: [], sidecars: [], vanishedRows: [] });
 
   // The rows a batch edit would apply to. Captured as rows rather than
   // paths because the dialog also needs each row's fileName for the
@@ -434,13 +439,13 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   // row depends on files that vanished outside the app. Asking "are you
   // sure?" without saying what would go is not a confirmation.
   const handlePruneEmpty = async () => {
-    setPrunePreview({ loading: true, emptyDirs: [], vanishedRows: [] });
+    setPrunePreview({ loading: true, emptyDirs: [], sidecars: [], vanishedRows: [] });
     setPruneOpen(true);
     try {
       const preview = await previewPruneEmpty();
       setPrunePreview({ loading: false, ...preview });
     } catch {
-      setPrunePreview({ loading: false, emptyDirs: [], vanishedRows: [], error: true });
+      setPrunePreview({ loading: false, emptyDirs: [], sidecars: [], vanishedRows: [], error: true });
     }
   };
 
@@ -782,7 +787,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           onClick={handlePruneEmpty}
           disabled={pruning}
           className="h-8 gap-1 text-xs"
-          title="删除库内空目录（只删真正空的目录；残留封面或 .lrc 的目录会保留），并清理文件已不在但索引行还在的记录"
+          title="删除库内空目录（只剩专辑元数据、音频已不在的目录会连同元数据一起进回收站），并清理文件已不在但索引行还在的记录"
         >
           <FolderX className="w-3.5 h-3.5 text-muted-foreground" />
           <span>{pruning ? '提交中…' : '清理残留'}</span>
@@ -1161,13 +1166,28 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
                 {prunePreview.emptyDirs.length > 0 && (
                   <div className="space-y-1.5">
                     <p className="text-muted-foreground">
-                      将删除 {prunePreview.emptyDirs.length} 个空目录（只删真正空的；含封面或{' '}
+                      将删除 {prunePreview.emptyDirs.length} 个空目录（只删真正空的；含音频或{' '}
                       <code className="px-1 rounded bg-muted/50 font-mono">.lrc</code> 的目录会保留）：
                     </p>
                     <div className="max-h-32 overflow-y-auto rounded border border-border/60 bg-surface-1 divide-y divide-border/40">
                       {prunePreview.emptyDirs.map((d) => (
                         <div key={d} className="px-2 py-1 font-mono truncate">
                           {d}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {prunePreview.sidecars.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-muted-foreground">
+                      这些目录里只剩下专辑元数据，音频已经不在了。它们描述的音乐已经不存在，
+                      所以文件会先移入<strong className="text-foreground">回收站</strong>，需要时能放回：
+                    </p>
+                    <div className="max-h-32 overflow-y-auto rounded border border-border/60 bg-surface-1 divide-y divide-border/40">
+                      {prunePreview.sidecars.map((s) => (
+                        <div key={s} className="px-2 py-1 font-mono truncate">
+                          {s}
                         </div>
                       ))}
                     </div>
@@ -1190,7 +1210,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
                 )}
                 <p className="text-muted-foreground">
                   这里<strong className="text-foreground">不会删除任何音频文件</strong>
-                  ，只删空目录和失效索引行。已从外部删除的文件不会被恢复。
+                  ，只删空目录、上面的元数据（进回收站）和失效索引行。已从外部删除的文件不会被恢复。
                 </p>
               </>
             )}

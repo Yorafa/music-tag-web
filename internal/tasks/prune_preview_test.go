@@ -27,7 +27,7 @@ func TestPreviewPrune_RemovesNothing(t *testing.T) {
 	addRow(t, gdb, live, "music")
 
 	h := &PruneEmptyFoldersHandler{DB: gdb, MusicRoot: root}
-	dirs, rows, err := h.PreviewPrune(context.Background(), nil)
+	dirs, _, rows, err := h.PreviewPrune(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("PreviewPrune: %v", err)
 	}
@@ -67,12 +67,12 @@ func TestPreviewPrune_AgreesWithTheRealRun(t *testing.T) {
 	addRow(t, gdb, filepath.Join(root, "nested", "gone.ogg"), "music")
 
 	h := &PruneEmptyFoldersHandler{DB: gdb, MusicRoot: root}
-	previewDirs, previewRows, err := h.PreviewPrune(context.Background(), nil)
+	previewDirs, _, previewRows, err := h.PreviewPrune(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("PreviewPrune: %v", err)
 	}
 
-	realDirs, err := h.pruneEmpty(context.Background(), nil)
+	realDirs, _, err := h.pruneEmpty(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("pruneEmpty: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestPreviewPrune_CleanLibraryReportsNothing(t *testing.T) {
 	addRow(t, gdb, filepath.Join(root, "Artist", "track.ogg"), "music")
 
 	h := &PruneEmptyFoldersHandler{DB: gdb, MusicRoot: root}
-	dirs, rows, err := h.PreviewPrune(context.Background(), nil)
+	dirs, _, rows, err := h.PreviewPrune(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("PreviewPrune: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestPreviewPrune_StopsOnCancelledContext(t *testing.T) {
 	cancel()
 
 	h := &PruneEmptyFoldersHandler{DB: gdb, MusicRoot: root}
-	dirs, rows, err := h.PreviewPrune(ctx, nil)
+	dirs, _, rows, err := h.PreviewPrune(ctx, nil)
 	if err == nil {
 		t.Fatalf("PreviewPrune returned no error for a cancelled context: %v / %v", dirs, rows)
 	}

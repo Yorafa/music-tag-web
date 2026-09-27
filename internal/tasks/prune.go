@@ -13,6 +13,17 @@
 // deleting a track that arrived a millisecond ago. pruneVanished is built on
 // the same principle: it asks the kernel whether each file exists, one row at
 // a time, rather than inferring absence from what a walk happened to see.
+//
+// The one thing that is allowed to keep a directory alive is a file the
+// kernel cannot be asked about, because it is not a file this pass owns: an
+// album-scoped sidecar (album.nfo, a cue sheet, a cover) whose audio has
+// already been moved or deleted. Those are moved to the trash first, and then
+// the kernel is still asked — os.Remove, not RemoveAll. "Hold nothing but
+// metadata for music that is gone" is the residue of a reorganise, and
+// without this rule it accumulated forever: an emptied directory kept one
+// stranded album.nfo, and neither this pass nor any other could ever remove
+// it. Real libraries carried `17/` and `17 (Explicit)/` for exactly that
+// reason.
 package tasks
 
 import (
@@ -23,11 +34,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
 	"go-music-tag/internal/audit"
 	"go-music-tag/internal/db"
+	"go-music-tag/internal/tag"
+	"go-music-tag/internal/trash"
+	"go-music-tag/internal/utils"
 )
 
 // PruneEmptyFoldersPayload 与 FullScanPayload 同 schema：worker 入口可选传
@@ -51,7 +66,7 @@ func (h *PruneEmptyFoldersHandler) ProcessTask(ctx context.Context, t Task) erro
 	// skipped, so a doubled one is worse than a single one, not merely
 	// untidy. PreviewPrune had the same shape and the same doubling.
 	scopes := h.scopes(p.SubPaths)
-	removed, err := h.pruneEmptyScopes(ctx, scopes, false)
+	removed, sidecars, err := h.pruneEmptyScopes(ctx, scopes, false)
 	if err != nil {
 		return err
 	}
@@ -66,11 +81,13 @@ func (h *PruneEmptyFoldersHandler) ProcessTask(ctx context.Context, t Task) erro
 	audit.Log(ctx, audit.ActionPruneEmptyFolders, "library", "worker", audit.StatusSuccess,
 		len(removed), map[string]interface{}{
 			"removed":        removed,
+			"sidecars":       sidecars,
+			"trash_batch":    trash.BatchDir(utils.DataDir(), time.Now()),
 			"vanished_rows":  vanished,
 			"vanished_count": len(vanished),
 		}, nil)
-	log.Printf("[prune] removed %d empty director%s, %d vanished index row(s)",
-		len(removed), plural(len(removed)), len(vanished))
+	log.Printf("[prune] removed %d empty director%s (%d sidecar file(s) to trash), %d vanished index row(s)",
+		len(removed), plural(len(removed)), len(sidecars), len(vanished))
 	return nil
 }
 
@@ -82,13 +99,17 @@ func plural(n int) string {
 }
 
 // pruneEmpty walks depth-first and deletes every directory that is empty by
-// the time we reach it.
+// the time we reach it. The second return value names the album-scoped files
+// it had to move into the trash on the way — a directory that held nothing
+// but `album.nfo` is the residue of a reorganise, and those files are
+// recoverable, so the caller reports them rather than pretending nothing was
+// deleted.
 //
 // Bottom-up is what makes nesting work: a directory holding nothing but empty
 // subdirectories becomes empty itself once those go, and gets removed on the
 // same pass. So `Artist/Album` emptied by a tidy, and then the `Artist` that
 // held only that album, both disappear without anyone having to say so twice.
-func (h *PruneEmptyFoldersHandler) pruneEmpty(ctx context.Context, subPaths [][2]string) ([]string, error) {
+func (h *PruneEmptyFoldersHandler) pruneEmpty(ctx context.Context, subPaths [][2]string) ([]string, []string, error) {
 	return h.pruneEmptyScopes(ctx, h.scopes(subPaths), false)
 }
 
@@ -101,7 +122,12 @@ func (h *PruneEmptyFoldersHandler) pruneEmpty(ctx context.Context, subPaths [][2
 // Taking scopes rather than the payload is what lets ProcessTask and
 // PreviewPrune resolve once and share, instead of each pass resolving for
 // itself and logging every refusal twice.
-func (h *PruneEmptyFoldersHandler) pruneEmptyScopes(ctx context.Context, scopes []string, dryRun bool) ([]string, error) {
+//
+// The second return value lists the album-scoped sidecars moved into the
+// trash to make a directory removable, relative to the music root. A dry run
+// reports the same list from the same decision, so the confirmation dialog
+// can name the files it is about to take as well as the directories.
+func (h *PruneEmptyFoldersHandler) pruneEmptyScopes(ctx context.Context, scopes []string, dryRun bool) ([]string, []string, error) {
 	// No empty-root guard. musicRoot() falls back to MUSIC_DIR and then to
 	// /app/media, so it cannot return "", which made the guard this replaced
 	// unreachable -- and a test asserting on it passed only because its
@@ -146,7 +172,7 @@ func (h *PruneEmptyFoldersHandler) pruneEmptyScopes(ctx context.Context, scopes 
 	}
 
 	if len(scopes) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	for _, scope := range scopes {
 		// A walk that stops early cannot answer "what would you remove?",
@@ -159,7 +185,7 @@ func (h *PruneEmptyFoldersHandler) pruneEmptyScopes(ctx context.Context, scopes 
 		// should not abort the sweep of the rest. This is only ctx.Err()
 		// and a failure to read a scope root itself.
 		if err := walk(scope); err != nil {
-			return nil, fmt.Errorf("prune: walk %s: %w", scope, err)
+			return nil, nil, fmt.Errorf("prune: walk %s: %w", scope, err)
 		}
 	}
 
@@ -171,7 +197,7 @@ func (h *PruneEmptyFoldersHandler) pruneEmptyScopes(ctx context.Context, scopes 
 			strings.Count(dirs[j], string(os.PathSeparator))
 	})
 
-	var removed []string
+	var removed, sidecars []string
 	// A dry run has to answer the same question the real pass answers one
 	// level at a time: "would the kernel accept this?" — which for the
 	// real pass means os.Remove, and for the preview means "is this
@@ -180,53 +206,118 @@ func (h *PruneEmptyFoldersHandler) pruneEmptyScopes(ctx context.Context, scopes 
 	// stop one level short of the cascade, so the dialog would promise
 	// two directories where the task removes three.
 	willGo := make(map[string]bool, len(dirs))
+	// One batch per pass, so "what did 清理残留 take" is a single thing to
+	// restore rather than one batch per directory.
+	batch := trash.BatchDir(utils.DataDir(), time.Now())
 	for _, dir := range dirs {
 		select {
 		case <-ctx.Done():
-			return removed, ctx.Err()
+			return removed, sidecars, ctx.Err()
 		default:
 		}
-		// os.Remove, deliberately not RemoveAll: a non-empty directory is
-		// left exactly as it is, and that decision is the kernel's.
+		found, prunable := dirPrunable(dir, willGo)
+		if !prunable {
+			continue
+		}
 		if !dryRun {
+			// The residue goes to the trash first. A file that would not
+			// move stays where it is, and os.Remove below refuses the
+			// directory for exactly that reason — there is no pre-check on
+			// "did they all get there?", because the kernel is already
+			// answering that question and answering it better than a
+			// counter would. moveSidecarsToTrash logs the ones that stayed.
+			sidecars = append(sidecars, moveSidecarsToTrash(root, batch, found)...)
+			// os.Remove, deliberately not RemoveAll: a non-empty directory
+			// is left exactly as it is, and that decision is the kernel's.
 			if err := os.Remove(dir); err != nil {
 				continue
 			}
-		} else if !directoryWouldEmpty(dir, willGo) {
-			continue
+		} else {
+			for _, p := range found {
+				sidecars = append(sidecars, relTo(root, p))
+			}
 		}
 		willGo[dir] = true
-		rel, relErr := filepath.Rel(root, dir)
-		if relErr != nil {
-			rel = dir
-		}
-		removed = append(removed, filepath.ToSlash(rel))
+		removed = append(removed, relTo(root, dir))
 	}
-	return sortedUniq(removed), nil
+	return sortedUniq(removed), sortedUniq(sidecars), nil
 }
 
-// directoryWouldEmpty reports whether dir holds nothing that would survive
-// the pass: either nothing at all, or only subdirectories already accounted
-// for as going away.
+// relTo expresses an absolute path against the music root for reporting.
+// A path outside the root cannot happen (the walk started there) but a
+// failure here must not become a missing entry, so the absolute path is the
+// fallback rather than an error.
+func relTo(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+	return filepath.ToSlash(rel)
+}
+
+// moveSidecarsToTrash relocates album-scoped residue into a trash batch under
+// the library-relative path it had, so RestoreTrash can put it back exactly
+// where it was — the same promise DeleteFiles makes.
 //
-// This mirrors what os.Remove will decide, minus the removal. An entry that
-// is a file, a symlink, or a directory the walk skipped (data/, anything
-// reached through a symlink) keeps its parent alive — which is the same
-// answer the real pass arrives at when the kernel refuses the parent.
-func directoryWouldEmpty(dir string, willGo map[string]bool) bool {
+// It returns the paths that actually moved. A file that could not be moved is
+// left out of that list and stays in the library, which is the outcome the
+// caller needs to decide whether the directory can still go.
+func moveSidecarsToTrash(root, batch string, paths []string) []string {
+	moved := make([]string, 0, len(paths))
+	for _, p := range paths {
+		rel := relTo(root, p)
+		if err := trash.MoveAside(p, filepath.Join(batch, filepath.FromSlash(rel))); err != nil {
+			log.Printf("[prune] keep %s: cannot move into trash: %v", rel, err)
+			continue
+		}
+		moved = append(moved, rel)
+	}
+	return moved
+}
+
+// dirPrunable reports whether dir holds nothing that has to stay, and which
+// album-scoped sidecars would have to be moved out first to make that true.
+//
+// This mirrors what os.Remove will decide, minus the removal. An entry that is
+// a file this pass does not own, a symlink, or a directory the walk skipped
+// (data/, anything reached through a symlink) keeps its parent alive — which
+// is the same answer the real pass arrives at when the kernel refuses the
+// parent.
+//
+// The album-scoped sidecars are the exception, and they are listed rather than
+// counted: album.nfo / *.cue / cover*.* describe the album, not any track, so
+// one left alone in a directory with no audio is residue rather than a
+// file somebody put there. They are moved to the trash, not unlinked, so
+// "the pruner deleted my nfo" is always something the user can undo.
+//
+// A track-scoped `<base>.lrc` is not on that list, and neither is any
+// dot-file: those are named after a track or created by a tool, and the
+// conservative answer for them is to leave the directory alone.
+func dirPrunable(dir string, willGo map[string]bool) (sidecars []string, ok bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return false
+		return nil, false
 	}
 	for _, e := range entries {
-		if !e.IsDir() {
-			return false
+		name := e.Name()
+		// A symlink is not followed by the walk, so it arrives here as a
+		// non-directory entry. Moving one into the trash would take
+		// something whose target the library never owned.
+		if e.Type()&os.ModeSymlink != 0 {
+			return nil, false
 		}
-		if !willGo[filepath.Join(dir, e.Name())] {
-			return false
+		if !e.IsDir() {
+			if !tag.IsAlbumScopedSidecar(name) {
+				return nil, false
+			}
+			sidecars = append(sidecars, filepath.Join(dir, name))
+			continue
+		}
+		if !willGo[filepath.Join(dir, name)] {
+			return nil, false
 		}
 	}
-	return true
+	return sidecars, true
 }
 
 // scopes resolves a task payload's sub_paths into the directories this task
@@ -397,13 +488,19 @@ func likeEscape(s string) string {
 //
 // Read-only, so the gateway can answer it inline instead of round-tripping
 // through the worker queue the way the mutation does.
-func (h *PruneEmptyFoldersHandler) PreviewPrune(ctx context.Context, subPaths [][2]string) ([]string, []string, error) {
+//
+// It returns three lists, because the pass does three things: directories
+// that would go, album-scoped files that would be taken into the trash to get
+// there, and index rows whose files are already gone. The dialog renders all
+// three — a preview that named the directory but hid the nfo inside it would
+// be approving less than what runs.
+func (h *PruneEmptyFoldersHandler) PreviewPrune(ctx context.Context, subPaths [][2]string) ([]string, []string, []string, error) {
 	scopes := h.scopes(subPaths)
-	dirs, err := h.pruneEmptyScopes(ctx, scopes, true)
+	dirs, sidecars, err := h.pruneEmptyScopes(ctx, scopes, true)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return dirs, h.pruneVanishedScopes(ctx, scopes, true), nil
+	return dirs, sidecars, h.pruneVanishedScopes(ctx, scopes, true), nil
 }
 
 func (h *PruneEmptyFoldersHandler) musicRoot() string {
