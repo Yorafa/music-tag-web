@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -335,44 +334,6 @@ func TestDeleteFiles_ReportsMissingInsteadOfFailingWhole(t *testing.T) {
 	}
 	if rep.Results[1].Status != "missing" {
 		t.Errorf("missing row status = %q, want missing", rep.Results[1].Status)
-	}
-}
-
-// TestMoveAside_FallsBackWhenRenameCannotWork covers the cross-device path.
-//
-// In the default compose layout MUSIC_DIR and DATA_DIR are two separate
-// bind mounts, so os.Rename returns EXDEV and a rename-only implementation
-// works in `go test` (one temp dir) and fails in every real deployment.
-// The rename is injected because a single temp dir can never produce a
-// real EXDEV.
-func TestMoveAside_FallsBackWhenRenameCannotWork(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "src.mp3")
-	if err := os.WriteFile(src, []byte("payload"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	dest := filepath.Join(dir, "nested", "trash", "src.mp3")
-
-	exdev := func(string, string) error {
-		return &os.LinkError{Op: "rename", Old: src, New: dest, Err: syscall.EXDEV}
-	}
-	if err := moveAsideWith(src, dest, exdev); err != nil {
-		t.Fatalf("moveAsideWith: %v", err)
-	}
-	if _, err := os.Stat(src); !os.IsNotExist(err) {
-		t.Error("source should be gone")
-	}
-	got, err := os.ReadFile(dest)
-	if err != nil {
-		t.Fatalf("read dest: %v", err)
-	}
-	if string(got) != "payload" {
-		t.Errorf("dest content = %q, want payload — the copy must be byte-exact", got)
-	}
-	// The fallback creates intermediate dirs; a rename-only version would
-	// have left the copy impossible to place.
-	if _, err := os.Stat(filepath.Dir(dest)); err != nil {
-		t.Errorf("trash subdir not created: %v", err)
 	}
 }
 

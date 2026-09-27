@@ -11,6 +11,7 @@ import (
 
 	"go-music-tag/internal/audioext"
 	"go-music-tag/internal/audit"
+	"go-music-tag/internal/trash"
 	"go-music-tag/internal/utils"
 )
 
@@ -325,14 +326,14 @@ func RestoreTrash(c *gin.Context) {
 			results = append(results, row)
 			continue
 		}
-		// moveAside, not os.Rename: DATA_DIR and MUSIC_DIR are separate
-		// mounts in the default compose layout, and a rename cannot cross
-		// filesystems. This exact mistake made restore return
+		// trash.MoveAside, not os.Rename: DATA_DIR and MUSIC_DIR are
+		// separate mounts in the default compose layout, and a rename
+		// cannot cross filesystems. This exact mistake made restore return
 		// "invalid cross-device link" for every single file while the Go
-		// test — one temp dir, one device — passed. moveAside is the same
+		// test — one temp dir, one device — passed. MoveAside is the same
 		// helper DeleteFiles uses in the other direction, so a restore is
 		// the delete it undoes.
-		if err := moveAside(src, dst); err != nil {
+		if err := trash.MoveAside(src, dst); err != nil {
 			row.Status, row.Reason, failed = "failed", err.Error(), failed+1
 			results = append(results, row)
 			continue

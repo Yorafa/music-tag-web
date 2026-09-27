@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"go-music-tag/internal/trash"
 )
 
 // RestoreTrash and DeleteFiles move files between MUSIC_DIR and
@@ -25,18 +27,18 @@ import (
 //
 // The count is the point. Asserting only "the file came back" cannot tell the
 // fallback apart from a plain rename that happened to work, and a plain rename
-// DOES work on a single temp dir — so a handler that skipped moveAside and
+// DOES work on a single temp dir — so a handler that skipped MoveAside and
 // called os.Rename itself passed every test here while failing on every file
 // in the real two-mount deployment.
 func withCrossDeviceRename(t *testing.T) *int {
 	t.Helper()
 	attempts := 0
-	prev := renameAside
-	renameAside = func(src, dest string) error {
+	prev := trash.Rename
+	trash.Rename = func(src, dest string) error {
 		attempts++
 		return &os.LinkError{Op: "rename", Old: src, New: dest, Err: syscall.EXDEV}
 	}
-	t.Cleanup(func() { renameAside = prev })
+	t.Cleanup(func() { trash.Rename = prev })
 	return &attempts
 }
 
@@ -96,7 +98,7 @@ func TestRestoreTrash_SurvivesSeparateMountsForDataAndMusic(t *testing.T) {
 		t.Fatalf("restore across mounts = %+v, want 1 restored; reason %q", got, got["reason"])
 	}
 	if *renames == 0 {
-		t.Error("the move never attempted a rename: RestoreTrash is not going through moveAside, " +
+		t.Error("the move never attempted a rename: RestoreTrash is not going through trash.MoveAside, " +
 			"so it will return invalid cross-device link on every file in a real deployment")
 	}
 	back, err := os.ReadFile(filepath.Join(music, "artist", "song.ogg"))
@@ -198,7 +200,7 @@ func TestRestoreTrash_RenameFastPathStillWorksWithoutEXDEV(t *testing.T) {
 // restore that did nothing.
 //
 // Note what is NOT asserted here: that a non-EXDEV rename error is reported
-// as itself. moveAsideWith falls back to copy+remove on ANY rename error, so
+// as itself. trash.MoveAside falls back to copy+remove on ANY rename error, so
 // such an error is retried as a copy and succeeds if the filesystem allows it.
 // That is the shared helper's existing contract, and changing it is a
 // separate decision from making restore reachable at all.

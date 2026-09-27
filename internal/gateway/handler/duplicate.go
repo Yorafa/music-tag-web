@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 
 	"go-music-tag/internal/audit"
 	"go-music-tag/internal/dedup"
+	"go-music-tag/internal/trash"
 	"go-music-tag/internal/utils"
 )
 
@@ -202,7 +202,7 @@ func DeleteFiles(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	root := utils.MusicRoot()
-	trashDir := filepath.Join(utils.DataDir(), ".trash", time.Now().Format("20060102-150405"))
+	trashDir := trash.BatchDir(utils.DataDir(), time.Now())
 
 	results := make([]deleteRow, 0, len(req.FileFullPaths))
 	deleted, failed := 0, 0
@@ -242,7 +242,7 @@ func DeleteFiles(c *gin.Context) {
 		}
 
 		dest := filepath.Join(trashDir, filepath.FromSlash(rel))
-		if err := moveAside(abs, dest); err != nil {
+		if err := trash.MoveAside(abs, dest); err != nil {
 			row.Status = "failed"
 			row.Reason = err.Error()
 			failed++
@@ -286,76 +286,6 @@ type deleteReport struct {
 	Results []deleteRow `json:"results"`
 	Deleted int         `json:"deleted"`
 	Failed  int         `json:"failed"`
-}
-
-// renameAside is os.Rename behind a variable so a test can make it fail the
-// way a real deployment makes it fail.
-//
-// This is not a hypothetical: DATA_DIR and MUSIC_DIR are separate mounts in
-// the default compose layout, so a rename between them returns EXDEV. A test
-// with one temp dir is one device and can never produce that, which is how
-// RestoreTrash shipped a plain os.Rename that failed with "invalid
-// cross-device link" on every file in production while its Go test passed.
-//
-// The alternative — an integration test on two real mounts — is not runnable
-// in `go test`, and the alternative before that, a per-call rename parameter,
-// cannot reach a caller that goes through the HTTP handler.
-var renameAside = os.Rename
-
-// moveAside renames src into destDir, falling back to copy+remove when the
-// two are on different filesystems (EXDEV) — which they are here whenever
-// DATA_DIR and MUSIC_DIR are separate mounts, i.e. the default compose
-// layout. Without the fallback, DeleteFiles would work in `go test` (one
-// temp dir) and fail in every real deployment.
-//
-// The rename is also a parameter so a test can inject the EXDEV directly,
-// without going through the package-level seam above.
-func moveAside(src, dest string) error {
-	return moveAsideWith(src, dest, renameAside)
-}
-
-func moveAsideWith(src, dest string, rename func(string, string) error) error {
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return fmt.Errorf("prepare trash dir: %w", err)
-	}
-	if err := rename(src, dest); err == nil {
-		return nil
-	}
-	// The dest dir is created before the rename so a genuine permission
-	// error surfaces as itself rather than being masked by a confusing
-	// "no such file" from the fallback.
-	if err := copyFileThenRemove(src, dest); err != nil {
-		return err
-	}
-	return nil
-}
-
-func copyFileThenRemove(src, dest string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("open source: %w", err)
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return fmt.Errorf("create trash copy: %w", err)
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		_ = os.Remove(dest)
-		return fmt.Errorf("copy to trash: %w", err)
-	}
-	if err := out.Close(); err != nil {
-		_ = os.Remove(dest)
-		return fmt.Errorf("close trash copy: %w", err)
-	}
-	if err := os.Remove(src); err != nil {
-		// The copy exists, so the content is safe even though the
-		// original path still does. Report it rather than silently
-		// leaving two copies of the same file in the library.
-		return fmt.Errorf("copy succeeded but removing original failed: %w", err)
-	}
-	return nil
 }
 
 // forgetIndexPath drops the music_folder row for a file that has left the
