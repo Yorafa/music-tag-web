@@ -152,13 +152,37 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       dedupedNewRows.push(r);
     }
 
-    // The set of newly-added source dirs = the input dirs that contributed at
-    // least one file the library did not have. These are bookkept in `dirs`
+    // The set of newly-added source dir names = the input dirs that contributed
+    // at least one file the library did not have. These are bookkept in `dirs`
     // for the drawer's existingDirs badges.
-    const inputDirSet = new Set(dirs);
     const freshDirs = addedDirNames;
 
-    const nextRows = [...get().rows, ...dedupedNewRows];
+    // Prune stale rows: a re-added directory's fresh expansion is the
+    // authoritative "what is on disk right now" list for that subtree. Any
+    // existing row that sits under a re-added dir but is NOT in the fresh set
+    // has moved (tidy / rename) or been trashed — its /media URL now 404s, so
+    // it must leave the library. This is the "部分索引依旧落库依旧无法播放"
+    // case: re-adding used to only APPEND the file's new location and leave the
+    // dead row behind, still 404ing forever.
+    //
+    // Guard against transient failures: expandDirsToAudioFiles swallows a
+    // per-dir fetch error (404/500) as "no files", so we only treat a source
+    // dir as authoritative when it actually returned at least one file this
+    // pass. A dir that returned nothing (transient 500, or genuinely emptied)
+    // prunes nothing — we must never wipe a user's rows because one
+    // /api/file_list/ call happened to fail.
+    const inputDirSet = new Set(dirs);
+    const productiveDirs = [
+      ...new Set(expanded.map((e) => e.sourceDir).filter((sd) => inputDirSet.has(sd))),
+    ].map((d) => d.replace(/\/+$/, ''));
+    const expandedPaths = new Set(expanded.map((e) => e.fullPath));
+    const underProductiveDir = (fullPath: string): boolean =>
+      productiveDirs.some((d) => fullPath === d || fullPath.startsWith(d + '/'));
+    const keptRows = get().rows.filter(
+      (r) => !(underProductiveDir(r.fullPath) && !expandedPaths.has(r.fullPath)),
+    );
+
+    const nextRows = [...keptRows, ...dedupedNewRows];
     // Dedupe nextDirs against existing dirs (re-adding the same dir
     // name twice should still only result in one badge).
     const existingDirSet = new Set(get().dirs);
@@ -169,8 +193,6 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         nextDirs.push(d);
       }
     }
-    // Guard against the (unusual) case where dirs contains duplicates.
-    void inputDirSet;
 
     set({ rows: nextRows, dirs: nextDirs });
     persist({ rows: nextRows, dirs: nextDirs });

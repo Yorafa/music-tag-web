@@ -153,6 +153,76 @@ describe('useLibraryStore', () => {
     expect(useLibraryStore.getState().dirs).toEqual(['d1']);
   });
 
+  // 部分索引依旧落库依旧无法播放: a file that was in the library moved on disk
+  // (tidy / rename / trash), so re-adding its directory used to APPEND the new
+  // location and leave the dead row behind — a permanent 404 the user could
+  // never clear except by wiping the whole library. Re-adding must now treat
+  // the fresh listing as authoritative for that subtree and drop the stale row.
+  it('enqueueDirs prunes a stale row whose file moved out of a re-added dir', async () => {
+    getFileListMock.mockResolvedValueOnce(
+      listResp([fileNode('gone.flac', 100), fileNode('stay.mp3', 101)]),
+    );
+    await useLibraryStore.getState().enqueueDirs(['d1']);
+    expect(useLibraryStore.getState().rows.map((r) => r.fullPath).sort()).toEqual([
+      'd1/gone.flac',
+      'd1/stay.mp3',
+    ]);
+
+    // gone.flac was moved/trashed; the directory now lists only stay.mp3 plus a
+    // freshly downloaded track. The stale d1/gone.flac row must be pruned.
+    getFileListMock.mockResolvedValueOnce(
+      listResp([fileNode('stay.mp3', 101), fileNode('fresh.ogg', 102)]),
+    );
+    await useLibraryStore.getState().enqueueDirs(['d1']);
+
+    expect(useLibraryStore.getState().rows.map((r) => r.fullPath).sort()).toEqual([
+      'd1/fresh.ogg',
+      'd1/stay.mp3',
+    ]);
+  });
+
+  // Transient guard: expandDirsToAudioFiles swallows a per-dir 404/500 as "no
+  // files". A re-add whose listing came back empty (backend hiccup) must NOT
+  // wipe the user's rows under that directory — pruning only applies to dirs
+  // that actually returned files this pass.
+  it('enqueueDirs does not prune when a re-added dir returns no files', async () => {
+    getFileListMock.mockResolvedValueOnce(
+      listResp([fileNode('a.flac', 100), fileNode('b.mp3', 101)]),
+    );
+    await useLibraryStore.getState().enqueueDirs(['d1']);
+    expect(useLibraryStore.getState().rows.length).toBe(2);
+
+    // Backend hiccups: empty listing. expandDirsToAudioFiles returns [] and
+    // enqueueDirs bails at the empty-guard, leaving rows untouched.
+    getFileListMock.mockResolvedValueOnce(listResp([]));
+    const res = await useLibraryStore.getState().enqueueDirs(['d1']);
+    expect(res).toEqual({ added: 0, skipped: 0, files: 0 });
+    expect(useLibraryStore.getState().rows.map((r) => r.fullPath).sort()).toEqual([
+      'd1/a.flac',
+      'd1/b.mp3',
+    ]);
+  });
+
+  // Pruning is scoped to the re-added subtree: re-adding d1 must never touch a
+  // row that lives under a different, un-readded directory.
+  it('enqueueDirs leaves rows under other directories untouched when pruning', async () => {
+    getFileListMock.mockResolvedValueOnce(listResp([fileNode('x.flac', 1)]));
+    await useLibraryStore.getState().enqueueDirs(['d1']);
+    getFileListMock.mockResolvedValueOnce(listResp([fileNode('y.mp3', 2)]));
+    await useLibraryStore.getState().enqueueDirs(['d2']);
+    expect(useLibraryStore.getState().rows.length).toBe(2);
+
+    // Re-add only d1, now empty of its old file but with a new one. d2/y.mp3
+    // must survive even though it is not in d1's fresh listing.
+    getFileListMock.mockResolvedValueOnce(listResp([fileNode('z.flac', 3)]));
+    await useLibraryStore.getState().enqueueDirs(['d1']);
+
+    expect(useLibraryStore.getState().rows.map((r) => r.fullPath).sort()).toEqual([
+      'd1/z.flac',
+      'd2/y.mp3',
+    ]);
+  });
+
   it('enqueueDirs adds a different dir with different files', async () => {
     getFileListMock.mockResolvedValueOnce(listResp([fileNode('p.mp3', 1)]));
     await useLibraryStore.getState().enqueueDirs(['d1']);
