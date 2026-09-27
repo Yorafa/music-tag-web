@@ -9,6 +9,7 @@
 // `selectedSources[0]` was ever searched), so the choice existed on screen
 // and not in the request.
 
+import { readJson, writeJson } from '@/utils/persist';
 import type { MusicSource } from '@/types';
 
 export const SOURCES: { id: MusicSource; name: string }[] = [
@@ -42,3 +43,40 @@ export function toggleSourceSelection(
  *  larger: paging over five results is a way of reviewing candidates, and a
  *  list that stops at 15 makes the pager look like the end of the music. */
 export const CANDIDATE_FETCH_LIMIT = 50;
+
+/** Where the last-used selection is kept. Versioned because the stored
+ *  value is a list of source ids and the id set changes when a plugin is
+ *  added or dropped — an unversioned key would silently resurrect a
+ *  selection naming a source this build no longer offers. */
+const REMEMBERED_SOURCES_KEY = 'scrape.sources.v1';
+
+/** The subset of `saved` that this build still offers, in the order given.
+ *
+ *  Everything here is defensive about `saved` because it is parsed
+ *  localStorage: another version of the app, or a user with a stale key,
+ *  can leave anything there. An empty result is a valid answer and means
+ *  "fall back to the defaults" — never "search nothing". */
+export function knownSources(saved: unknown): MusicSource[] {
+  if (!Array.isArray(saved)) return [];
+  const offered = new Set<string>(SOURCES.map((s) => s.id));
+  const out: MusicSource[] = [];
+  for (const id of saved) {
+    if (typeof id !== 'string' || !offered.has(id) || out.includes(id as MusicSource)) {
+      continue;
+    }
+    out.push(id as MusicSource);
+  }
+  return out;
+}
+
+/** The sources the last search used, or `fallback` when there is nothing
+ *  usable stored. */
+export function loadRememberedSources(fallback: MusicSource[]): MusicSource[] {
+  const remembered = knownSources(readJson<unknown>(REMEMBERED_SOURCES_KEY));
+  return remembered.length > 0 ? remembered : fallback;
+}
+
+/** Remember a selection for the next dialog open and the next page load. */
+export function rememberSources(sources: MusicSource[]): void {
+  writeJson(REMEMBERED_SOURCES_KEY, sources);
+}

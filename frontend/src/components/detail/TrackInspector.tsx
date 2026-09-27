@@ -29,10 +29,16 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { TAB_BAR_CLASS } from '@/components/detail/tabBar';
+import { cn } from '@/lib/utils';
 import { CandidateCard } from '@/components/detail/CandidateCard';
 import { SourcePickerDialog } from '@/components/detail/SourcePickerDialog';
-import { CANDIDATES_PER_PAGE, paginateCandidates } from '@/components/detail/candidates';
-import { CANDIDATE_FETCH_LIMIT, SOURCES } from '@/components/common/tagSources';
+import { CANDIDATES_PER_PAGE, CANDIDATE_PAGE_SIZES, paginateCandidates } from '@/components/detail/candidates';
+import {
+  CANDIDATE_FETCH_LIMIT,
+  SOURCES,
+  loadRememberedSources,
+  rememberSources,
+} from '@/components/common/tagSources';
 import { searchAcrossSources } from '@/api/scrapeSources';
 import { useWorklistStore } from '@/store/useWorklistStore';
 import { useLibraryStore } from '@/store/useLibraryStore';
@@ -114,14 +120,28 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
   const [formData, setFormData] = useState<Partial<MusicTagInfo>>(() => getInitialFormData(row));
   const [candidates, setCandidates] = useState<SongInfo[]>([]);
   const [page, setPage] = useState(1);
+  // How many candidates one page holds. Adjustable because "5" was a guess
+  // baked into a constant: someone comparing 25 results wants them side by
+  // side, someone reading 歌名/艺术家/年份/流派 wants one card at a time.
+  const [pageSize, setPageSize] = useState(CANDIDATES_PER_PAGE);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [saving, setSaving] = useState(false);
   // Which sources the last search asked. Kept as state rather than a
   // constant so the picker can start from them: re-running a search with
   // the same sources is the common case, and re-picking them every time is
   // the friction that stops people retrying with a different source.
-  const [scrapeSources, setScrapeSources] = useState<MusicSource[]>(DEFAULT_SCRAPE_SOURCES);
+  const [scrapeSources, setScrapeSources] = useState<MusicSource[]>(() =>
+    loadRememberedSources(DEFAULT_SCRAPE_SOURCES),
+  );
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
+
+  // Remember the choice, not just the search. Picking a source set is
+  // deliberate and slow, and the next track usually wants the same one —
+  // re-ticking the same three boxes before every search is the friction
+  // that makes people scrape with whatever the default was.
+  useEffect(() => {
+    rememberSources(scrapeSources);
+  }, [scrapeSources]);
   const [searchQuery, setSearchQuery] = useState(() => formData.title || row.fileName.replace(/\.[^/.]+$/, '').trim());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -363,8 +383,8 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
   // Derived, so a re-search that returns fewer candidates cannot leave the
   // tab on a page number that no longer exists.
   const candidatePage = useMemo(
-    () => paginateCandidates(candidates, page, CANDIDATES_PER_PAGE),
-    [candidates, page],
+    () => paginateCandidates(candidates, page, pageSize),
+    [candidates, page, pageSize],
   );
 
   return (
@@ -661,6 +681,34 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
               >
                 更换
               </button>
+              {/* Page size lives in the header, not the pager: the pager
+                  only exists once there is more than one page, and a
+                  control that appears and disappears with the thing it
+                  controls is a control you cannot find. Back to page 1
+                  because page 4 of a 5-per-page list is page 1 of the
+                  new one, not page 4. */}
+              <span className="flex items-center gap-1 ml-auto shrink-0">
+                <span className="text-[10px] text-muted-foreground">每页</span>
+                {CANDIDATE_PAGE_SIZES.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    aria-pressed={pageSize === n}
+                    onClick={() => {
+                      setPageSize(n);
+                      setPage(1);
+                    }}
+                    className={cn(
+                      'px-1.5 h-4 rounded text-[10px] font-mono transition-colors',
+                      pageSize === n
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                    )}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </span>
             </div>
           </div>
 

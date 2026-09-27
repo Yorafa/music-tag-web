@@ -31,7 +31,7 @@ import {
 } from '@/api/client';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { cn } from '@/lib/utils';
-import { ACTION_CONFIG, STATUS_CONFIG } from './operationLogConfig';
+import { ACTION_CONFIG, ACTION_FILTER_OPTIONS, STATUS_CONFIG } from './operationLogConfig';
 
 function formatTimestamp(iso: string) {
   if (!iso) return '';
@@ -153,14 +153,11 @@ export function OperationLogsTab() {
             aria-label="操作类型过滤"
           >
             <option value="all">全部操作</option>
-            <option value="update_id3">单曲标签</option>
-            <option value="batch_update_id3">批量标签</option>
-            <option value="auto_scrape">自动刮削</option>
-            <option value="filename_parse">文件名解析</option>
-            <option value="tidy_folder">目录整理</option>
-            <option value="prune_empty_folders">清理残留</option>
-            <option value="download">音乐下载</option>
-            <option value="upload_cover">上传封面</option>
+            {ACTION_FILTER_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
           </select>
 
           {/* Status Filter */}

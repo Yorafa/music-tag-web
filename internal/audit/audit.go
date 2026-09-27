@@ -30,6 +30,12 @@ const (
 	// exactly the kind of thing the audit log exists to answer "when did
 	// this disappear, and where did it go".
 	ActionDeleteFiles = "delete_files"
+	// ActionTrashPurge is the one action in this list that destroys data:
+	// the file is gone from the disk, not quarantined somewhere recoverable.
+	// It gets its own action rather than riding on delete_files so the audit
+	// page can answer "what did someone permanently delete, and when" —
+	// which is the question a restore-capable delete cannot answer.
+	ActionTrashPurge = "trash_purge"
 )
 
 // Status 常量定义操作结果状态。

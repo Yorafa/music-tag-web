@@ -7,6 +7,8 @@ import {
   FolderX,
   Download,
   Image as ImageIcon,
+  Trash2,
+  Flame,
   CheckCircle2,
   XCircle,
   AlertTriangle,
@@ -67,7 +69,32 @@ export const ACTION_CONFIG: Record<string, ActionConfigItem> = {
     icon: ImageIcon,
     color: 'bg-rose-500/10 text-rose-400 border-rose-500/30',
   },
+  // 移入回收站 — recoverable, which is the whole point of the quarantine.
+  // It had no entry until now, so every recoverable delete in the log
+  // rendered as a bare `delete_files` string in an unstyled fallback badge.
+  delete_files: {
+    label: '移入回收站',
+    icon: Trash2,
+    color: 'bg-zinc-500/10 text-zinc-300 border-zinc-500/30',
+  },
+  // 彻底删除 — the one action here that cannot be undone, so it reads as
+  // its own thing rather than as another flavour of delete.
+  trash_purge: {
+    label: '彻底删除',
+    icon: Flame,
+    color: 'bg-red-500/10 text-red-400 border-red-500/30',
+  },
 };
+
+/** Filter options, derived from ACTION_CONFIG.
+ *
+ *  The `<select>` used to hardcode the same list a second time, which is
+ *  how `delete_files` ended up with no label and no way to filter on it:
+ *  adding an action to one list and forgetting the other is a silent
+ *  omission, not a compile error. */
+export const ACTION_FILTER_OPTIONS = Object.entries(ACTION_CONFIG).map(
+  ([value, cfg]) => ({ value, label: cfg.label }),
+);
 
 export const STATUS_CONFIG: Record<string, StatusConfigItem> = {
   success: {

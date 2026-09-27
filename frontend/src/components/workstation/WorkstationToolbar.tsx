@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Sparkles,
   FolderTree,
@@ -59,15 +59,30 @@ import {
 } from '@/components/detail/renameResult';
 import { dedupeFlag, isDedupeEnabled, setDedupeEnabled } from '@/utils/dedupe';
 import { deleteTargetsFor } from '@/components/workstation/duplicateBadge';
-import { SOURCES } from '@/components/common/tagSources';
+import {
+  SOURCES,
+  loadRememberedSources,
+  rememberSources,
+} from '@/components/common/tagSources';
 import { searchAcrossSources } from '@/api/scrapeSources';
 import { bestCandidate } from '@/components/detail/candidates';
+import { BatchScrapeReportDialog } from '@/components/workstation/BatchScrapeReportDialog';
+import {
+  noMatchReason,
+  type ScrapeRowOutcome,
+} from '@/components/workstation/scrapeReport';
 import { cn } from '@/lib/utils';
 import type { MusicSource } from '@/types';
 
 interface Props {
   onOpenDirPicker: () => void;
 }
+
+/** What a first-time batch scrape asks, when nothing has been remembered.
+ *  Three catalogues, not all seven: a batch is one request per source per
+ *  track, so asking all of them is seven times the wall-clock for results
+ *  that mostly duplicate each other. */
+const DEFAULT_BATCH_SOURCES: MusicSource[] = ['netease', 'qmusic', 'kugou'];
 
 export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   const rows = useWorklistStore((s) => s.rows);
@@ -95,6 +110,11 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   const [scrapePopoverOpen, setScrapePopoverOpen] = useState(false);
   const [isScraping, setIsScraping] = useState(false);
   const [scrapeProgress, setScrapeProgress] = useState<{ current: number; total: number } | null>(null);
+  // Per-row outcomes of the last batch, and whether the report is on
+  // screen. Kept after the dialog closes so a failed write can be traced
+  // back to the row it happened on.
+  const [scrapeOutcomes, setScrapeOutcomes] = useState<ScrapeRowOutcome[]>([]);
+  const [scrapeReportOpen, setScrapeReportOpen] = useState(false);
 
   // Duplicate check / delete
   const [isCheckingDup, setIsCheckingDup] = useState(false);
@@ -106,11 +126,18 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   const [trashOpen, setTrashOpen] = useState(false);
 
   // Scrape settings
-  const [selectedSources, setSelectedSources] = useState<MusicSource[]>([
-    'netease',
-    'qmusic',
-    'kugou',
-  ]);
+  //
+  // The source set is remembered rather than reset on every mount: the
+  // same three boxes were being re-ticked after every reload, and the set
+  // a user converged on is the one they want again. Shared with the track
+  // detail dialog's picker (common/tagSources), so the two surfaces start
+  // from the same answer.
+  const [selectedSources, setSelectedSources] = useState<MusicSource[]>(() =>
+    loadRememberedSources(DEFAULT_BATCH_SOURCES),
+  );
+  useEffect(() => {
+    rememberSources(selectedSources);
+  }, [selectedSources]);
   const [matchMode, setMatchMode] = useState<'smart' | 'simple'>('smart');
   const [autoApplyFirstMatch, setAutoApplyFirstMatch] = useState(true);
   // Duplicate detection is a server-side decision (see internal/dedup);
@@ -183,6 +210,10 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
 
     // Phase 1 — search each track, keep the tags we'd write.
     const matched = new Map<string, Record<string, unknown>>();
+    // One entry per row, kept all the way to the report. The old code
+    // only kept a count, which is why the toast could say "未匹配 3" and
+    // nothing about which source to try next.
+    const outcomes: ScrapeRowOutcome[] = [];
     let failCount = 0;
 
     for (let i = 0; i < targetRows.length; i++) {
@@ -198,7 +229,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         // track that only 咪咕 had was reported as a failure no matter how
         // the sources were set. Merged round-robin by rank, so the best
         // result of any source can be the one that wins.
-        const { candidates } = await searchAcrossSources(
+        const { candidates, emptySources, failedSources } = await searchAcrossSources(
           queryTitle,
           selectedSources.length > 0 ? selectedSources : ['smart_tag'],
           row.fullPath,
@@ -207,12 +238,39 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         if (!best || !autoApplyFirstMatch) {
           setStatus(row.fullPath, 'failed');
           failCount++;
+          outcomes.push({
+            fullPath: row.fullPath,
+            fileName: row.fileName,
+            status: 'no_match',
+            source: null,
+            reason: noMatchReason(emptySources, failedSources, !autoApplyFirstMatch),
+            emptySources,
+            failedSources,
+          });
           continue;
         }
         matched.set(row.fullPath, scrapedMusicInfo(best, queryTitle));
-      } catch {
+        outcomes.push({
+          fullPath: row.fullPath,
+          fileName: row.fileName,
+          status: 'written',
+          source: best.source ?? null,
+          applied: {
+            title: best.name,
+            artist: best.artist,
+            album: best.album,
+          },
+        });
+      } catch (e) {
         setStatus(row.fullPath, 'failed');
         failCount++;
+        outcomes.push({
+          fullPath: row.fullPath,
+          fileName: row.fileName,
+          status: 'error',
+          source: null,
+          reason: `检索失败：${e instanceof Error ? e.message : String(e)}`,
+        });
       }
     }
 
@@ -266,10 +324,17 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
 
         for (const { fullPath } of rowsInGroup) {
           const skipNote = refused.get(fullPath);
+          const outcome = outcomes.find((o) => o.fullPath === fullPath);
           if (skipNote !== undefined) {
             setStatus(fullPath, 'failed');
             failCount++;
             dupNotes.push(`已跳过（${skipNote}）: ${fullPath}`);
+            // Phase 1 already recorded this row as a success; the writer
+            // is what refused it, and the report has to say so.
+            if (outcome) {
+              outcome.status = 'refused';
+              outcome.reason = `写入被跳过：${skipNote}`;
+            }
             continue;
           }
           const info = matched.get(fullPath);
@@ -283,16 +348,28 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           const newPath = renamedPathFromUpdate(res, fullPath);
           if (newPath) renameRow(fullPath, newPath, baseNameOf(newPath));
         }
-      } catch {
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
         for (const { fullPath } of rowsInGroup) {
           setStatus(fullPath, 'failed');
           failCount++;
+          const outcome = outcomes.find((o) => o.fullPath === fullPath);
+          if (outcome) {
+            outcome.status = 'error';
+            outcome.reason = `写入失败：${reason}`;
+          }
         }
       }
     }
 
     setIsScraping(false);
     setScrapeProgress(null);
+    // The toast is the summary; the dialog is the evidence. The dialog
+    // opens on its own because the feedback IS the reason to run a batch,
+    // and a button labelled "结果" that you have to know to press is not
+    // feedback.
+    setScrapeOutcomes(outcomes);
+    setScrapeReportOpen(outcomes.length > 0);
     useNoticeStore
       .getState()
       .push(`批量刮削完成：成功 ${successCount} 首，未匹配 ${failCount} 首`, 'info');
@@ -874,6 +951,17 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           fresh each time without a reset effect. */}
       {batchEditOpen && (
         <BatchEditDialog rows={selectedRows} onClose={() => setBatchEditOpen(false)} />
+      )}
+
+      {/* The per-row report for the last batch. Mounted whenever there is
+          a report to show, open or closed, so the last run's evidence is
+          still reachable after the dialog is dismissed. */}
+      {scrapeOutcomes.length > 0 && (
+        <BatchScrapeReportDialog
+          open={scrapeReportOpen}
+          onOpenChange={setScrapeReportOpen}
+          rows={scrapeOutcomes}
+        />
       )}
 
       {/* Parse Filenames Modal */}

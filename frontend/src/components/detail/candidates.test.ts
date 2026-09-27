@@ -4,7 +4,9 @@ import {
   bestCandidate,
   clampPage,
   mergeCandidates,
+  normalizePageSize,
   paginateCandidates,
+  withSource,
 } from './candidates';
 import type { SongInfo } from '@/types';
 
@@ -65,8 +67,7 @@ describe('mergeCandidates', () => {
   });
 });
 
-describe('bestCandidate', () => {
-  it('is the head of the merged ranking', () => {
+describe('bestCandidate', () => {  it('is the head of the merged ranking', () => {
     expect(bestCandidate([song({ name: 'A' }), song({ name: 'B' })])?.name).toBe('A');
   });
 
@@ -85,6 +86,44 @@ describe('clampPage', () => {
     // state; rendering it raw shows an empty page with no way back.
     expect(clampPage(9, 7, 5)).toBe(2);
     expect(clampPage(0, 7, 5)).toBe(1);
+  });
+});
+
+describe('withSource', () => {
+  // Without this the batch report could not say WHICH source a row's tags
+  // came from: a single-source lookup returns whatever the plugin put on
+  // the wire, and most leave `source` empty, so every card and every
+  // report line read "cloud".
+  it('stamps the source it asked', () => {
+    const stamped = withSource([song({ name: 'A' })], 'netease');
+    expect(stamped[0].source).toBe('netease');
+  });
+
+  it('keeps a more specific id the source did supply', () => {
+    const stamped = withSource([song({ name: 'A', source: 'musicbrainz-mbid' })], 'netease');
+    expect(stamped[0].source).toBe('musicbrainz-mbid');
+  });
+
+  it('does not mutate the input', () => {
+    const list = [song({ name: 'A' })];
+    withSource(list, 'netease');
+    expect(list[0].source).toBeUndefined();
+  });
+});
+
+describe('normalizePageSize', () => {
+  it('accepts every offered size', () => {
+    for (const n of [5, 10, 20]) {
+      expect(normalizePageSize(n)).toBe(n);
+    }
+  });
+
+  it('falls back to the default for anything else', () => {
+    // The input is a remembered number, so it can be a size this build
+    // dropped, a zero, or not a number at all.
+    for (const junk of [0, -5, 7, 1000, null, undefined, '10', NaN]) {
+      expect(normalizePageSize(junk)).toBe(CANDIDATES_PER_PAGE);
+    }
   });
 });
 
@@ -107,6 +146,12 @@ describe('paginateCandidates', () => {
   it('defaults to five per page', () => {
     expect(CANDIDATES_PER_PAGE).toBe(5);
     expect(paginateCandidates(many, 1).items).toHaveLength(5);
+  });
+
+  it('honours a larger page size', () => {
+    const page = paginateCandidates(many, 1, 10);
+    expect(page.items).toHaveLength(10);
+    expect(page.pageCount).toBe(2);
   });
 
   it('has no page at all for an empty list', () => {

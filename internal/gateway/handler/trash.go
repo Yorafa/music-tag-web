@@ -420,7 +420,7 @@ func PurgeTrash(c *gin.Context) {
 			Failure(c, "彻底删除失败: "+err.Error())
 			return
 		}
-		audit.Log(c.Request.Context(), audit.ActionDeleteFiles, req.BatchID, "admin", audit.StatusSuccess,
+		audit.Log(c.Request.Context(), audit.ActionTrashPurge, req.BatchID, "admin", audit.StatusSuccess,
 			len(entries), map[string]interface{}{
 				"purged":       len(entries),
 				"batch_id":     req.BatchID,
@@ -479,7 +479,7 @@ func PurgeTrash(c *gin.Context) {
 	} else if purged == 0 {
 		status = audit.StatusFailed
 	}
-	audit.Log(c.Request.Context(), audit.ActionDeleteFiles, req.BatchID, "admin", status,
+	audit.Log(c.Request.Context(), audit.ActionTrashPurge, req.BatchID, "admin", status,
 		purged+failed, map[string]interface{}{
 			"purged":       purged,
 			"failed":       failed,

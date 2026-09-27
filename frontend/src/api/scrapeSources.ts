@@ -7,7 +7,7 @@
 // dialog searched a hardcoded 'smart_tag'.
 
 import { fetchId3ByTitle } from '@/api/client';
-import { mergeCandidates } from '@/components/detail/candidates';
+import { mergeCandidates, withSource } from '@/components/detail/candidates';
 import { CANDIDATE_FETCH_LIMIT } from '@/components/common/tagSources';
 import type { SongInfo } from '@/types';
 import type { MusicSource } from '@/types';
@@ -65,7 +65,7 @@ export async function searchAcrossSources(
       perSource.push([]);
       return;
     }
-    perSource.push(r.value);
+    perSource.push(withSource(r.value, source));
   });
 
   return {

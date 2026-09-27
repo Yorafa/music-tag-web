@@ -9,7 +9,11 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 
+	"go-music-tag/internal/audit"
+	"go-music-tag/internal/db"
 	"go-music-tag/internal/gateway/handler"
 )
 
@@ -53,6 +57,26 @@ func purgeRouter(t *testing.T) *gin.Engine {
 	return r
 }
 
+// withAuditDB installs a file-backed sqlite as the audit sink, so a test can
+// read the rows the handler wrote. A file rather than ":memory:" on purpose:
+// an in-memory sqlite lives inside ONE pooled connection, so the insert the
+// handler does and the select this file does can land on different
+// connections and the select sees an empty database. The audit global is
+// process-wide, hence the cleanup — the other tests here run without one.
+func withAuditDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	gdb, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "audit.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(gdb); err != nil {
+		t.Fatalf("auto-migrate: %v", err)
+	}
+	audit.SetDB(gdb)
+	t.Cleanup(func() { audit.SetDB(nil) })
+	return gdb
+}
+
 // postPurge sends a purge with an explicit confirm flag, because the flag is
 // the point of several tests here.
 func postPurge(t *testing.T, batchID string, relPaths []string, confirm bool) purgeEnvelope {
@@ -69,6 +93,101 @@ func postPurge(t *testing.T, batchID string, relPaths []string, confirm bool) pu
 		t.Fatalf("purge body is not JSON: %v (%q)", err, w.Body.String())
 	}
 	return env
+}
+
+// A purge destroys data, so it has to leave a trace that says so — and a
+// trace that is distinguishable from a recoverable delete. Sharing
+// `delete_files` with the quarantine delete made the two indistinguishable
+// in the audit page, which is the only place a "when did this file stop
+// existing" question can be answered after the fact.
+func TestPurgeTrash_RecordsAnIrreversiblePurgeInTheAuditLog(t *testing.T) {
+	data, music := t.TempDir(), t.TempDir()
+	t.Setenv("DATA_DIR", data)
+	t.Setenv("MUSIC_DIR", music)
+	withAuditDB(t)
+	seedTrash(t, "20260927-115027", map[string]string{"gone.ogg": "bytes"})
+
+	env := postPurge(t, "20260927-115027", []string{"gone.ogg"}, true)
+	if !env.Result {
+		t.Fatalf("purge failed: %+v", env)
+	}
+
+	gdb := audit.GetDB()
+	var logs []db.OperationLog
+	if err := gdb.Where("action = ?", audit.ActionTrashPurge).Find(&logs).Error; err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("got %d trash_purge entries, want exactly 1", len(logs))
+	}
+	if logs[0].Target != "20260927-115027" {
+		t.Errorf("target = %q, want the batch id", logs[0].Target)
+	}
+	if !strings.Contains(logs[0].Details, "irreversible") {
+		t.Errorf("details = %q, want it to say the delete cannot be undone", logs[0].Details)
+	}
+
+	// And it must not be filed under the recoverable delete, or the audit
+	// page cannot tell the two apart again.
+	var misfiled int64
+	if err := gdb.Model(&db.OperationLog{}).Where("action = ?", audit.ActionDeleteFiles).Count(&misfiled).Error; err != nil {
+		t.Fatalf("count delete_files: %v", err)
+	}
+	if misfiled != 0 {
+		t.Errorf("%d purge entries were logged as a recoverable delete", misfiled)
+	}
+}
+
+// The whole-batch form is a different branch with its own audit call, and
+// it is the one a user reaches when clearing out a batch they no longer
+// want — an empty batch directory can otherwise sit in the listing forever.
+func TestPurgeTrash_RecordsAWholeBatchPurgeToo(t *testing.T) {
+	data, music := t.TempDir(), t.TempDir()
+	t.Setenv("DATA_DIR", data)
+	t.Setenv("MUSIC_DIR", music)
+	withAuditDB(t)
+	seedTrash(t, "20260927-115027", map[string]string{"a.ogg": "x", "b.ogg": "y"})
+
+	env := postPurge(t, "20260927-115027", nil, true)
+	if !env.Result {
+		t.Fatalf("purge failed: %+v", env)
+	}
+
+	var logs []db.OperationLog
+	if err := audit.GetDB().Where("action = ?", audit.ActionTrashPurge).Find(&logs).Error; err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("got %d trash_purge entries, want 1 for the whole batch", len(logs))
+	}
+	if !strings.Contains(logs[0].Details, "whole_batch") {
+		t.Errorf("details = %q, want it to record that the whole batch went", logs[0].Details)
+	}
+}
+
+// A purge that is refused must not leave a success row behind: the audit
+// log answering "1 purged" for a batch whose files are all still on disk is
+// worse than no row at all.
+func TestPurgeTrash_RecordsNothingWhenItRefused(t *testing.T) {
+	data, music := t.TempDir(), t.TempDir()
+	t.Setenv("DATA_DIR", data)
+	t.Setenv("MUSIC_DIR", music)
+	withAuditDB(t)
+	seedTrash(t, "20260927-115027", map[string]string{"still-here.ogg": "bytes"})
+
+	postPurge(t, "20260927-115027", []string{"still-here.ogg"}, false)
+
+	gdb := audit.GetDB()
+	if gdb == nil {
+		t.Fatal("no audit db; trashRouter did not install one")
+	}
+	var logs []db.OperationLog
+	if err := gdb.Where("action = ?", audit.ActionTrashPurge).Find(&logs).Error; err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	if len(logs) != 0 {
+		t.Errorf("a refused purge wrote %d audit rows", len(logs))
+	}
 }
 
 // The whole reason this endpoint is shaped the way it is. A client that wires
