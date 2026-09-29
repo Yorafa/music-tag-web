@@ -12,13 +12,14 @@
 // it for collection. Selected folder paths show as chips above the
 // footer; an ✕ button on each chip removes that selection.
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   Folder,
   FolderTree,
   ChevronRight,
   Home,
   ArrowLeft,
+  Loader2,
   Music,
   X as XIcon,
 } from 'lucide-react';
@@ -34,7 +35,7 @@ import {
 } from '@/components/ui/dialog';
 import { getFileList } from '@/api/client';
 import { selectionKind } from '@/utils/expandDirs';
-import { useWorklistStore } from '@/store/useWorklistStore';
+import { useWorklistStore, type EnqueueResult } from '@/store/useWorklistStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import {
   PATH_ALIAS,
@@ -81,6 +82,16 @@ export function DirPickerDrawer({
   const [treeCache, setTreeCache] = useState<TreeCache>({});
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [fetching, setFetching] = useState(false);
+  /** True from the moment 确认 is pressed until the store's expansion
+   *  settles. Expansion is one `/api/file_list/` round trip per directory
+   *  in the selection, which for a large directory tree is many seconds —
+   *  without this the button stayed live and the drawer looked inert, and
+   *  clicking again just started a second expansion. */
+  const [submitting, setSubmitting] = useState(false);
+  /** Same fact as `submitting`, readable synchronously. `onConfirm` is an
+   *  async handler, so a second click dispatched before React re-renders
+   *  would still see `submitting === false`; this closes that window. */
+  const submittingRef = useRef(false);
 
   // Combined (re-)hydrate + refetch effect. The two transitions we
   // care about are (a) the drawer just opened (re-hydrate: clear
@@ -116,6 +127,21 @@ export function DirPickerDrawer({
       active = false;
     };
   }, [open, currentDir]);
+
+  // A submit still in flight when the drawer closes must not leave the next
+  // open showing a spinner and a dead 确认. Routed through the Dialog's
+  // onOpenChange rather than an effect on `open`, because React forbids
+  // reading/writing refs during render (react-hooks/refs) and forbids a
+  // synchronous setState in an effect body (set-state-in-effect). Every
+  // close path — 取消, Esc, overlay click, the confirm handler's own
+  // onOpenChange(false) — funnels through here, so this covers all of them.
+  const handleOpenChange = useCallback((next: boolean) => {
+    if (!next && submittingRef.current) {
+      submittingRef.current = false;
+      setSubmitting(false);
+    }
+    onOpenChange(next);
+  }, [onOpenChange]);
 
   const rowsForCurrent = useMemo(
     () => folderRowsOf(treeCache[currentDir], currentDir),
@@ -175,7 +201,30 @@ export function DirPickerDrawer({
       return;
     }
 
-    const result = await useWorklistStore.getState().enqueueDirs(selectedArr);
+    // Guard on the ref as well as the disabled button: this handler is
+    // async, so two clicks in the same tick would both pass a state check
+    // that hasn't re-rendered yet.
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+
+    let result: EnqueueResult;
+    try {
+      result = await useWorklistStore.getState().enqueueDirs(selectedArr);
+    } catch (err) {
+      // enqueueDirs swallows per-directory listing failures, so this is
+      // for the failures it cannot: a store bug, or a backend error that
+      // escapes as a throw rather than an envelope. Reporting it beats
+      // leaving a spinner running forever.
+      submittingRef.current = false;
+      setSubmitting(false);
+      useNoticeStore
+        .getState()
+        .push(`添加目录失败：${(err as Error).message ?? '未知错误'}`, 'error');
+      return;
+    }
+    submittingRef.current = false;
+    setSubmitting(false);
 
     // Two units, because the selection can hold both. "已收录 1 个新增目录"
     // after ticking three files is true and useless; the file count is what
@@ -187,17 +236,32 @@ export function DirPickerDrawer({
         : `已收录 ${result.files} 个文件（${result.added} 个新增目录）、跳过 ${result.skipped} 个重复目录`,
       'info',
     );
+
+    // The rows are live either way, but if localStorage refused the write
+    // they are memory-only and a reload empties the queue. Saying so is the
+    // difference between a user who re-adds and a user who thinks the app
+    // lost their work. Quota and "storage unavailable" get different text:
+    // the first is fixed by adding less, the second by changing browser.
+    if (!result.persisted) {
+      useNoticeStore.getState().push(
+        result.persistError === 'quota'
+          ? `队列过大（${result.files} 个文件），未能保存到本地存储；刷新页面后会丢失本次添加`
+          : '浏览器禁用了本地存储，队列仅在当前页面有效',
+        'warn',
+      );
+    }
+
     setSelected(new Set());
-    onOpenChange(false);
-  }, [selected, onOpenChange]);
+    handleOpenChange(false);
+  }, [selected, handleOpenChange]);
 
   // Compose submit-disabled state. We keep the button rather than hiding
   // it so the affordance is discoverable; disabled state is friendlier
   // for screen-reader users than disappearance.
-  const submitDisabled = selected.size === 0;
+  const submitDisabled = selected.size === 0 || submitting;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         className={cn(
           // Mobile = bottom sheet pinned to bottom-stretch; SM+ flips it
@@ -455,7 +519,8 @@ export function DirPickerDrawer({
           <DialogFooter className="mx-0 mb-0 px-4 py-3 sm:px-4">
             <Button
               variant="outline"
-              onClick={() => onOpenChange(false)}
+              onClick={() => handleOpenChange(false)}
+              disabled={submitting}
             >
               取消
             </Button>
@@ -463,10 +528,20 @@ export function DirPickerDrawer({
               onClick={onConfirm}
               disabled={submitDisabled}
               title={
-                submitDisabled ? '请至少选中一个目录' : '把选中的目录加入队列'
+                submitting
+                  ? '正在读取目录，请稍候'
+                  : submitDisabled
+                    ? '请至少选中一个目录'
+                    : '把选中的目录加入队列'
               }
             >
-              确认
+              {/* The spinner is the point of this button's change: the
+                  expansion takes one round trip per directory and used to
+                  look like a dead click for the whole duration. */}
+              {submitting && (
+                <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+              )}
+              {submitting ? '正在添加…' : '确认'}
             </Button>
           </DialogFooter>
         </div>

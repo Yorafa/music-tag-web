@@ -114,44 +114,86 @@ function joinPath(currentPath: string, name: string): string {
   return base ? `${base}/${name}` : name;
 }
 
-/** Recursively fetch one directory's contents and append audio files to
- *  `out`. Sequential per-directory: the backend doesn't fan out on
- *  parallel `/api/file_list/` calls very well (uses sync DB lookups
- *  inside each call), and one user's typical expansion is a handful of
- *  dirs — so a simple await-loop keeps the load behaviour predictable
- *  and avoids hammering the backend. */
-async function expandOne(
-  rootDir: string,
-  currentPath: string,
-  out: ExpandedFile[],
-): Promise<void> {
+/** Peak simultaneous `/api/file_list/` requests during one expansion.
+ *
+ *  Expansion used to be strictly serial — one await per directory, depth
+ *  first. That made adding a directory cost one full network round trip
+ *  per subdirectory: a 200-album selection is 201 sequential calls, which
+ *  measured ~10s on a 50 ms-RTT LAN link, with no progress feedback in the
+ *  drawer for the whole time. The user read that as a dead button.
+ *
+ *  6 is a compromise, not a measured optimum. `/api/file_list/` is an
+ *  `os.ReadDir` plus a per-file `os.Stat` for the .lrc probe — cheap, but
+ *  it is filesystem work on whatever volume holds the music, so an
+ *  unbounded fan-out would turn "add a directory" into an I/O storm on the
+ *  user's disk. Six overlaps the round trip enough to cut the wall clock
+ *  ~6x while keeping the concurrent syscall count modest. The per-file
+ *  search and tag-hydration paths use the same bound. */
+const EXPAND_CONCURRENCY = 6;
+
+/** One directory's listing: its audio files (as ExpandedFile) and the
+ *  subdirectories still to visit. Splitting the two lets the caller fetch
+ *  subdirectories concurrently while keeping each level's OUTPUT ordered,
+ *  which a bare promise-all over directories would not. */
+interface DirListing {
+  files: ExpandedFile[];
+  subdirs: string[];
+}
+
+/** Fetch one directory's contents. Resolves to empty lists on any failure:
+ *  401 auto-logs-out via the response interceptor; other failures (404,
+ *  500, a malformed envelope) silently skip this subtree so a single bad
+ *  dir doesn't torpedo the whole batch. */
+async function listOne(rootDir: string, currentPath: string): Promise<DirListing> {
   let res;
   try {
     res = await getFileList(currentPath);
   } catch {
-    // 401 auto-logs-out via the response interceptor; other failures
-    // (404, 500) silently skip this subtree so a single bad dir
-    // doesn't torpedo the whole batch.
-    return;
+    return { files: [], subdirs: [] };
   }
-  if (!res?.result || !Array.isArray(res.data)) return;
+  if (!res?.result || !Array.isArray(res.data)) return { files: [], subdirs: [] };
   // Backend's file_list response is shaped as [{ ..., children: [...] }]
   // — the root is the first element. Subdirs' children follow the same
   // shape. We always want the root's children list.
   const root = res.data[0];
   const children = root?.children ?? [];
+  const files: ExpandedFile[] = [];
+  const subdirs: string[] = [];
   for (const child of children) {
+    const path = joinPath(currentPath, child.name);
     if (child.icon === 'icon-folder') {
-      await expandOne(rootDir, joinPath(currentPath, child.name), out);
+      subdirs.push(path);
       continue;
     }
     if (!isAudioExt(child.name)) continue;
-    out.push({
-      file: child,
-      fullPath: joinPath(currentPath, child.name),
-      sourceDir: rootDir,
-    });
+    files.push({ file: child, fullPath: path, sourceDir: rootDir });
   }
+  return { files, subdirs };
+}
+
+/** Fetch every path in `paths` with at most EXPAND_CONCURRENCY requests in
+ *  flight, returning the results IN INPUT ORDER.
+ *
+ *  Order is the whole reason this isn't `Promise.all(paths.map(listOne))`:
+ *  the result feeds the worklist's row order and its count, and a
+ *  completion-order result would shuffle rows between identical runs of
+ *  the same selection. The pool hands out indices via a shared cursor and
+ *  writes each result into its own slot. */
+async function listAll(
+  rootDir: string,
+  paths: string[],
+): Promise<DirListing[]> {
+  const out: DirListing[] = new Array(paths.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < paths.length) {
+      const i = next++;
+      out[i] = await listOne(rootDir, paths[i]);
+    }
+  }
+  const lanes = Math.min(EXPAND_CONCURRENCY, Math.max(1, paths.length));
+  await Promise.all(Array.from({ length: lanes }, () => worker()));
+  return out;
 }
 
 /** Expand a list of user-selected directories into a flat array of
@@ -172,16 +214,20 @@ async function expandOne(
  *    skipped; other directories still expand.
  *  - Same directory listed twice → both passes run and both contribute
  *    ExpandedFiles. Downstream callers (useWorklistStore) dedupe by
- *    fullPath so the user sees one row, not two. */
+ *    fullPath so the user sees one row, not two.
+ *
+ *  Traversal is breadth-first per level: every subdirectory of a level is
+ *  fetched concurrently, and each level's files are emitted before its
+ *  grandchildren's. The old depth-first serial walk produced
+ *  dir/subdir/sub-subdir order instead. Nothing depended on that — rows
+ *  are appended, never sorted against it — and level order is the one a
+ *  user can predict from the directory they ticked. */
 export async function expandDirsToAudioFiles(
   dirs: string[],
 ): Promise<ExpandedFile[]> {
   if (dirs.length === 0) return [];
   const out: ExpandedFile[] = [];
-  // Sequential — see expandOne(). For typical workloads (a handful of
-  // dirs) the latency is dominated by per-call DB lookups on the
-  // backend, not by RTT, so parallelism wouldn't help and just
-  // complicates error handling.
+
   for (const dir of dirs) {
     // A file the user ticked in the picker is already the answer; asking
     // the backend to list it as a directory would return nothing.
@@ -189,7 +235,16 @@ export async function expandDirsToAudioFiles(
       out.push(fileEntry(dir));
       continue;
     }
-    await expandOne(dir, dir, out);
+    let level = [dir];
+    while (level.length > 0) {
+      const listings = await listAll(dir, level);
+      const next: string[] = [];
+      for (const listing of listings) {
+        out.push(...listing.files);
+        next.push(...listing.subdirs);
+      }
+      level = next;
+    }
   }
   return out;
 }

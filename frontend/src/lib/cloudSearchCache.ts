@@ -38,10 +38,16 @@
 //
 // Because this needs to know whether the write SUCCEEDED. localStorage is
 // ~5 MB shared with the worklist and the source prefs, and a result set
-// carrying embedded cover art can be large. writeJson swallows
-// QuotaExceededError, which here would mean losing the source selection —
-// the part the user actually asked for — along with the results. So the
-// results are the thing that gets dropped, not the settings.
+// carrying embedded cover art can be large. A failed write here would mean
+// losing the source selection — the part the user actually asked for —
+// along with the results. So the results are the thing that gets dropped,
+// not the settings.
+//
+// (It still rolls its own `tryWrite` rather than using persist.ts's
+// writeString even though that now returns a boolean: the fallback has to
+// re-write the SAME key with different content, which writeString cannot
+// express, and a half-applied snapshot is exactly what this module exists
+// to avoid.)
 
 import type { SearchResult } from '@/types';
 

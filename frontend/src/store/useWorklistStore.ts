@@ -34,8 +34,14 @@ import {
 } from '@/utils/expandDirs';
 import { mergeExpandedDirs } from '@/utils/mergeExpanded';
 import { getFileList } from '@/api/client';
-import { hydrateTagsBatched } from '@/lib/hydrateTags';
-import { readJson, readString, writeJson, writeString } from '@/utils/persist';
+import { hydrateTagsBatched, type HydratedTag } from '@/lib/hydrateTags';
+import {
+  lastPersistError,
+  readJson,
+  readString,
+  writeJson,
+  writeString,
+} from '@/utils/persist';
 import {
   needsMusicInfoRefetch,
   stripHeavyFromRows,
@@ -83,9 +89,7 @@ interface WorklistState {
    *  count of newly-added rows AND the count of dirs that were
    *  skipped, so the caller (DirPickerDrawer) can render a summary
    *  like "已收录 5 个新增、跳过 2 个已存在". */
-  enqueueDirs: (
-    dirs: string[],
-  ) => Promise<{ added: number; skipped: number; files: number }>;
+  enqueueDirs: (dirs: string[]) => Promise<EnqueueResult>;
 
   /** Toggle one row in/out of selection. Idempotent; the caller may
    *  pass any row fullPath — the store resolves to a no-op if the id
@@ -140,6 +144,19 @@ interface WorklistState {
    *  two rows with the same filename in different dirs stay
    *  independent. */
   setMusicInfo: (id: string, info: Partial<MusicTagInfo>) => void;
+  /** Apply a whole chunk of musicInfo updates in ONE store commit.
+   *
+   *  This is what `hydrateTagsBatched` writes through, and the reason it
+   *  exists as a separate entry point: `setMusicInfo` re-persists the
+   *  entire table on every call, so a 4000-song hydration issued 4001
+   *  whole-table writes totalling 2.6 GB and blocked the main thread for
+   *  seconds — the page looked dead, which is what a user reported as
+   *  「添加目录点了确认没反应」. Here one chunk is one `set` and one
+   *  `persistRows`, so the cost is ceil(N / chunkSize) writes.
+   *
+   *  Same merge semantics as setMusicInfo per row (`{...old, ...new}`),
+   *  ids that no longer match a row are skipped rather than inserted. */
+  setMusicInfoBatch: (updates: HydratedTag[]) => void;
   /** Move a row to a new path after the file behind it was renamed.
    *
    *  A row's id IS its fullPath, so a rename is an identity change, not a
@@ -151,6 +168,23 @@ interface WorklistState {
 
 interface PersistedShape {
   rows: WorklistRow[];
+}
+
+/** What one enqueueDirs call reports. Named so a caller can annotate the
+ *  awaited value without re-deriving it off the store's function type
+ *  (which yields the function, not its promise). */
+export interface EnqueueResult {
+  /** Directories newly represented in the queue. */
+  added: number;
+  /** Directories whose files were all already queued. */
+  skipped: number;
+  /** Rows actually added. */
+  files: number;
+  /** Whether the queue reached localStorage. False = the rows above are in
+   *  memory only and a reload loses them; `persistError` says why. */
+  persisted: boolean;
+  /** 'quota' | 'unavailable' | null. Null when `persisted` is true. */
+  persistError: string | null;
 }
 
 const STORAGE_KEY = 'worklist.v1';
@@ -192,23 +226,26 @@ function loadGrouping(): WorklistGrouping {
   return 'none';
 }
 
-function persistRows(rows: WorklistRow[]): void {
-  try {
-    writeJson<PersistedShape>(STORAGE_KEY, {
-      rows: stripHeavyFromRows(rows),
-    });
-  } catch {
-    // quota / private mode — swallow; list still lives in memory
-  }
+/** Write the queue to localStorage. Returns false when the write was
+ *  refused (quota exhausted, private browsing, storage disabled).
+ *
+ *  It used to swallow that, which turned a real failure into a lie: the
+ *  table showed a full queue that was never saved, and the user only found
+ *  out when a reload emptied it. The worklist crosses the ~5 MB origin
+ *  quota at roughly 24000 rows (4000 rows measure 0.89 MB, linear in row
+ *  count), so this is a size the library can genuinely reach. Returning
+ *  the verdict lets the batch paths report it instead. */
+function persistRows(rows: WorklistRow[]): boolean {
+  return writeJson<PersistedShape>(STORAGE_KEY, {
+    rows: stripHeavyFromRows(rows),
+  });
 }
 
-function persistGrouping(g: WorklistGrouping): void {
-  try {
-    writeString(GROUPING_STORAGE_KEY, g);
-  } catch {
-    // swallow per persistRows rationale; grouping choice is recoverable
-    // on next reload via the default 'none'.
-  }
+function persistGrouping(g: WorklistGrouping): boolean {
+  // A failed grouping write is NOT worth a notice: the choice is one enum
+  // and falls back to 'none' on the next load. The verdict is returned
+  // only so this mirrors persistRows's shape.
+  return writeString(GROUPING_STORAGE_KEY, g);
 }
 
 /** The wire shape the server sends for one row, minus the path key the
@@ -319,29 +356,41 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
       else next.add(groupKey);
       return { collapsedGroups: next };
     });
-  },    enqueueDirs: async (dirs) => {
-      if (dirs.length === 0) return { added: 0, skipped: 0, files: 0 };
-      const expanded = await expandDirsToAudioFiles(dirs);
+  },
 
-      // Per-file dedupe, shared with useLibraryStore. The old rule dropped a
-      // source dir's whole batch as soon as one of its files was already
-      // queued, which meant a directory could never gain a new file — a
-      // freshly downloaded track in an already-added directory stayed
-      // invisible no matter how many times the user re-added it. See
-      // utils/mergeExpanded.ts.
-      const { fresh, addedDirs, skippedDirs } = mergeExpandedDirs(
-        expanded,
-        get().rows.map((r) => r.fullPath),
-      );
-      const newRows = expandedToRows(fresh);
+  enqueueDirs: async (dirs) => {
+    // Nothing selected is not a failure, so it reports a clean success
+    // rather than a persist verdict it never got a chance to earn.
+    if (dirs.length === 0) {
+      return {
+        added: 0,
+        skipped: 0,
+        files: 0,
+        persisted: true,
+        persistError: null,
+      };
+    }
+    const expanded = await expandDirsToAudioFiles(dirs);
+
+    // Per-file dedupe, shared with useLibraryStore. The old rule dropped a
+    // source dir's whole batch as soon as one of its files was already
+    // queued, which meant a directory could never gain a new file — a
+    // freshly downloaded track in an already-added directory stayed
+    // invisible no matter how many times the user re-added it. See
+    // utils/mergeExpanded.ts.
+    const { fresh, addedDirs, skippedDirs } = mergeExpandedDirs(
+      expanded,
+      get().rows.map((r) => r.fullPath),
+    );
+    const newRows = expandedToRows(fresh);
 
     const nextRows = appendAndDedupe(get().rows, newRows);
     set({ rows: nextRows });
-    persistRows(nextRows);
+    const persisted = persistRows(nextRows);
 
-    // Mirror of useLibraryStore.enqueueDirs: background-fetch
-    // /api/music_id3/ so the Worklist rows render with title/artist
-    // instead of bare fileName as soon as the user drops a directory.
+    // Background-fetch /api/music_id3/ so the Worklist rows render with
+    // title/artist instead of bare fileName as soon as the user drops a
+    // directory.
     //
     // Contract with the boot hydration at the bottom of this file:
     // hydrateTagsBatched writes row musicInfo ONLY when the response
@@ -350,21 +399,35 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
     // page load. If hydrateTags ever wrote `{}` instead of skipping,
     // that retry would stop firing. See lib/hydrateTags.ts block
     // comment steps 3-4.
+    //
+    // `setMusicInfoBatch`, not `setMusicInfo`: the per-row writer
+    // re-persists the whole table, so a fan-out through it is O(N²) and
+    // froze the page on large batches. See setMusicInfoBatch.
     void hydrateTagsBatched(
       newRows.map((r) => ({ id: r.id, fullPath: r.fullPath })),
-      (id, info) => useWorklistStore.getState().setMusicInfo(id, info),
-    );      return {
-        // Both counts are directories, which is what the drawer's notice
-        // says it is reporting. The old pair mixed units — files for
-        // `added`, dirs for `skipped` — so the two numbers could not be
-        // compared against the number of directories the user ticked.
-        // `files` is the row count, which is the unit a user who ticked
-        // three loose files actually cares about.
-        added: addedDirs,
-        skipped: skippedDirs,
-        files: fresh.length,
-      };
-    },
+      (chunk) => useWorklistStore.getState().setMusicInfoBatch(chunk),
+    );
+
+    return {
+      // Both counts are directories, which is what the drawer's notice
+      // says it is reporting. The old pair mixed units — files for
+      // `added`, dirs for `skipped` — so the two numbers could not be
+      // compared against the number of directories the user ticked.
+      // `files` is the row count, which is the unit a user who ticked
+      // three loose files actually cares about.
+      added: addedDirs,
+      skipped: skippedDirs,
+      files: fresh.length,
+      // False means localStorage refused the write — the rows are live in
+      // memory but will not survive a reload. The caller tells the user;
+      // it used to be swallowed here and the queue just vanished.
+      persisted,
+      // 'quota' vs 'unavailable' distinguishes "too big to save, add
+      // less" from "this browser will never save anything". Null on
+      // success.
+      persistError: persisted ? null : lastPersistError(),
+    };
+  },
 
   toggleSelected: (id) => {
     set((s) => {
@@ -515,6 +578,31 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
     });
   },
 
+  setMusicInfoBatch: (updates) => {
+    if (updates.length === 0) return;
+    set((s) => {
+      // One id→info map for the whole chunk: the old per-row shape
+      // re-checked `rows.some(...)` and re-mapped `rows` once PER FILE,
+      // which is what made the hydration fan-out quadratic even before the
+      // persist. Both are now once per chunk.
+      const byId = new Map(updates.map((u) => [u.id, u.info]));
+      let hit = false;
+      for (const id of byId.keys()) {
+        if (s.rows.some((r) => r.id === id)) {
+          hit = true;
+          break;
+        }
+      }
+      if (!hit) return s;
+      const nextRows = s.rows.map((r) => {
+        const info = byId.get(r.id);
+        return info ? { ...r, musicInfo: { ...(r.musicInfo ?? {}), ...info } } : r;
+      });
+      persistRows(nextRows);
+      return { rows: nextRows };
+    });
+  },
+
   renameRow: (oldPath, newPath, newFileName) => {
     set((s) => {
       if (!s.rows.some((r) => r.id === oldPath)) return s;
@@ -545,7 +633,7 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
     .rows.filter((r) => needsMusicInfoRefetch(r.musicInfo))
     .map((r) => ({ id: r.id, fullPath: r.fullPath }));
   if (need.length === 0) return;
-  void hydrateTagsBatched(need, (id, info) =>
-    useWorklistStore.getState().setMusicInfo(id, info),
+  void hydrateTagsBatched(need, (chunk) =>
+    useWorklistStore.getState().setMusicInfoBatch(chunk),
   );
 })();
