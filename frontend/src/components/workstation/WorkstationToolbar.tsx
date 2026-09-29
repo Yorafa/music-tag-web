@@ -401,10 +401,21 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   );
 
   // Reconcile the queued rows against disk, dropping the ones whose file
-  // is gone. A row's file can leave without going through the app — a file
-  // manager, an rsync, a bind mount edited from the host — and nothing else
-  // here cleans that up: 移除 drops a row the *user* picked, and this is the
-  // one that answers "is the list still true?".
+  // is no longer in the directory the row points at. A row's file can
+  // leave without going through the app — a file manager, an rsync, a bind
+  // mount edited from the host, or 整理目录 having filed it somewhere
+  // better — and nothing else here cleans that up: 移除 drops a row the
+  // *user* picked, and this is the one that answers "is the list still
+  // true?".
+  //
+  // The rule is deliberately "not in the old directory" rather than "not
+  // in the library", because that is the only thing a per-directory listing
+  // can answer. It means a file that MOVED is indistinguishable from one
+  // that vanished, so the notice below says "left its old directory"
+  // instead of calling either of them broken. After a tidy that is exactly
+  // right — the queue is a to-do list, and a filed file is done with it —
+  // and the ones the worker refused (their destination was occupied) are
+  // still in place, so their rows stay.
   //
   // It lives beside the other row-level actions rather than over in the
   // directory tree, which is why the two refreshes are no longer together:
@@ -415,9 +426,11 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
     try {
       const { removed, checkedDirs } = await reconcile();
       if (removed > 0) {
-        useNoticeStore.getState().push(`已清理 ${removed} 个失效条目 (检查 ${checkedDirs} 个目录)`, 'info');
+        useNoticeStore
+          .getState()
+          .push(`已移除 ${removed} 个条目，它们的文件已不在原目录 (检查 ${checkedDirs} 个目录)`, 'info');
       } else {
-        useNoticeStore.getState().push('所有条目均指向仍存在的文件', 'info');
+        useNoticeStore.getState().push('所有条目都还在原目录里', 'info');
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

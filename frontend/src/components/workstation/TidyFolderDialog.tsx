@@ -111,7 +111,19 @@ export function TidyFolderDialog({ open, onOpenChange, rows }: TidyFolderDialogP
         segments,
       });
       if (res?.result) {
-        useNoticeStore.getState().push('已提交目录整理异步任务，结果见操作审计', 'info');
+        // The task has not run yet, so there is nothing to refresh — the
+        // files are still where they were. Saying what to do afterwards is
+        // the useful part: this queue holds files to work on, and a tidy
+        // finishes them. 刷新收录 drops the rows that left their old
+        // directory, which after a tidy is exactly the ones that moved; a
+        // file the worker refused (its destination was occupied) is still
+        // where it was, so its row stays and the audit log says why.
+        useNoticeStore
+          .getState()
+          .push(
+            '已提交目录整理异步任务，结果见操作审计。跑完后点「刷新收录」把这批文件从队列里移除，目录树刷新后可以重新找到它们',
+            'info',
+          );
         onOpenChange(false);
       } else {
         // The gateway's reason, not a generic failure. It names the actual
