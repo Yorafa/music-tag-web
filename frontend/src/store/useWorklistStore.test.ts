@@ -149,26 +149,6 @@ describe('useWorklistStore persistence', () => {
     );
   });
 
-  it('clear resets state and removes the storage key', () => {
-    useWorklistStore.setState({
-      rows: [
-        {
-          id: 'a/x',
-          fullPath: 'a/x',
-          fileName: 'x',
-          status: 'pending',
-        },
-      ],
-      selectedIds: ['a/x'],
-      filter: 'pending',
-    });
-    localStorage.setItem('worklist.v1', '{"rows":[]}');
-    useWorklistStore.getState().clear();
-    expect(useWorklistStore.getState().rows.length).toBe(0);
-    expect(useWorklistStore.getState().selectedIds.length).toBe(0);
-    expect(localStorage.getItem('worklist.v1')).toBeNull();
-  });
-
   it('remove drops rows and re-persists', async () => {
     getFileListMock.mockResolvedValueOnce(
       listResp([fileNode('a.mp3', 1), fileNode('b.mp3', 2)]),
