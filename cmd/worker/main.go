@@ -157,12 +157,61 @@ func main() {
 	// the re-arm chain has a run to start from — see fpIndexBootOptions.
 	enqueueFpIndex(fpIndexBootOptions())
 
+	// 7. Schedule the download-cache size cap. The cache is a docker named
+	// volume, so it survives `compose down` and every container rebuild;
+	// without this it only ever grows.
+	stopCachePrune := startAudioCacheScheduler(cfg)
+	defer stopCachePrune()
+
 	if err := srv.Run(mux); err != nil {
 		log.Fatalf("[worker] asynq terminated with error: %v", err)
 	}
 	log.Printf("[worker] stopped cleanly")
 	_ = ctx
 	fmt.Println("bye")
+}
+
+// audioCachePruneInterval is how often the size cap is enforced. Long
+// enough that the walk is noise, short enough that a busy download session
+// is bounded within the hour rather than the day.
+const audioCachePruneInterval = 30 * time.Minute
+
+// startAudioCacheScheduler enqueues TypePruneAudioCache on a fixed cadence
+// and returns a stop func.
+//
+// asynq's Scheduler rather than a time.Ticker in this process: the enqueue
+// is visible in 任务中心 next to every other task, and a run that fails
+// lands in the normal retry/dead-letter machinery instead of vanishing into
+// a goroutine's log.
+//
+// Returns a no-op stop func when the cap is disabled, so the caller does
+// not need to branch on whether the scheduler exists.
+func startAudioCacheScheduler(cfg *config.Config) func() {
+	noop := func() {}
+	if cfg.AudioCacheMaxMB <= 0 {
+		log.Printf("[worker] audio cache auto-prune disabled (AUDIO_CACHE_MAX_MB=%d)", cfg.AudioCacheMaxMB)
+		return noop
+	}
+	sched := asynq.NewScheduler(queue.ServerOpts(), nil)
+	task, err := tasks.NewTypedTask(tasks.TypePruneAudioCache, &tasks.PruneAudioCachePayload{
+		MaxBytes:      cfg.AudioCacheMaxMB * 1024 * 1024,
+		MinAgeMinutes: cfg.AudioCacheMinAgeMinutes,
+	}, asynq.Queue("low"))
+	if err != nil {
+		log.Printf("[worker] could not build %s: %v", tasks.TypePruneAudioCache, err)
+		return noop
+	}
+	if _, err := sched.Register("@every "+audioCachePruneInterval.String(), task); err != nil {
+		log.Printf("[worker] could not schedule %s: %v", tasks.TypePruneAudioCache, err)
+		return noop
+	}
+	if err := sched.Start(); err != nil {
+		log.Printf("[worker] audio cache scheduler start failed: %v", err)
+		return noop
+	}
+	log.Printf("[worker] audio cache auto-prune scheduled every %s (cap=%d MiB, keep-recent=%d min)",
+		audioCachePruneInterval, cfg.AudioCacheMaxMB, cfg.AudioCacheMinAgeMinutes)
+	return func() { sched.Shutdown() }
 }
 
 func parseQueues(s string) map[string]int {
@@ -394,6 +443,12 @@ func wireTaskHandlers(mux *asynq.ServeMux, d taskHandlerDeps) {
 		// length instead of by byte size — a re-encode changes a file's size
 		// by up to 25x while barely moving its length. This is the one
 		// consumer of fpcalc inside the worker image.
+		// Download-cache size cap. No DB and no MusicRoot: the cache
+		// lives in AUDIO_CACHE_DIR, which is not under the library, and
+		// the whole job is a walk plus some unlinks.
+		{tasks.TypePruneAudioCache, func() {
+			tasks.NewPruneAudioCacheMux(mux, &tasks.PruneAudioCacheHandler{})
+		}},
 		{tasks.TypeFpIndex, func() {
 			tasks.NewFpIndexMux(mux, &tasks.FpIndexHandler{
 				DB:        gormDB,

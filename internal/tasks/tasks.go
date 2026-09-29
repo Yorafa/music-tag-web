@@ -27,6 +27,11 @@ const (
 	// uses to pick fingerprint-stage candidates by length rather than by
 	// byte size. Safe to enqueue repeatedly; it skips indexed rows.
 	TypeFpIndex = "index:fp_duration"
+	// TypePruneAudioCache enforces the size cap on the download cache
+	// (AUDIO_CACHE_DIR). Scheduled by the worker, never by the gateway:
+	// two processes pruning one directory race on the same files, and the
+	// worker is already that tree's only writer.
+	TypePruneAudioCache = "cache:prune_audio"
 )
 
 // --- Payloads ---

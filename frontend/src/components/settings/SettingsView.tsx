@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Separator } from '@/components/ui/separator';
 import {
   Tabs,
   TabsList,
@@ -12,6 +13,7 @@ import { readString, writeString } from '@/utils/persist';
 import { PATH_ALIAS, formatDisplayPath, parseDisplayPath } from '@/utils/path';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { SourcesTabContent } from './SourcesTabContent';
+import { AudioCacheSection } from './AudioCacheSection';
 
 const DOWNLOAD_PATH_KEY = 'settings.downloadPath';
 
@@ -80,6 +82,10 @@ export function SettingsView() {
                 ）。留空时默认下载到音乐库根目录。
               </p>
             </div>
+
+            <Separator />
+
+            <AudioCacheSection />
           </TabsContent>
 
           {/* Sources Tab */}

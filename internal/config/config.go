@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -26,6 +27,16 @@ type Config struct {
 	// File system
 	MusicDir string
 	DataDir  string
+
+	// ─── 下载缓存 (AUDIO_CACHE_DIR) ───────────────────────────────────────
+	// 试听和「加库」都从 AUDIO_CACHE_DIR 读已下载的音频，它是 named volume
+	// 里的常驻数据，从前只进不出。AudioCacheMaxMB 是自动清理的容量上限：
+	// 超过后由 worker 从最旧的开始删，0 表示关掉自动清理（仍然可以手动清）。
+	AudioCacheMaxMB int64
+	// AudioCacheMinAgeMinutes 保护这段时间内写过的文件不被自动清理删掉。
+	// /api/stream 直接 ServeFile 这个目录，正在播的那首和刚下载、正准备
+	// 复制进库的那次下载都在这个窗口里。
+	AudioCacheMinAgeMinutes int
 
 	// gRPC plugins
 	PluginGRPCAddrs map[string]string // source name -> gRPC address
@@ -295,6 +306,8 @@ func loadFromEnv() *Config {
 		JWTSecret:                os.Getenv(envJWTSecret),
 		MusicDir:                 getEnv("MUSIC_DIR", "/app/media"),
 		DataDir:                  getEnv("DATA_DIR", "/app/data"),
+		AudioCacheMaxMB:          getEnvInt64("AUDIO_CACHE_MAX_MB", 2048),
+		AudioCacheMinAgeMinutes:  int(getEnvInt64("AUDIO_CACHE_MIN_AGE_MIN", 30)),
 		PluginGRPCAddrs:          parsePluginAddrs(),
 		TaskQueueDefault:         getEnv("TASK_QUEUE", "music-tag-tasks"),
 		CORSAllowedOrigins:       origins,
@@ -366,6 +379,23 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// getEnvInt64 reads a non-negative integer env var, falling back when it is
+// unset, blank or unparseable. A malformed value must not silently become 0
+// here: 0 is a meaningful setting (AUDIO_CACHE_MAX_MB=0 disables the
+// automatic prune), so a typo has to land on the default instead.
+func getEnvInt64(key string, fallback int64) int64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v < 0 {
+		log.Printf("[config] %s=%q is not a non-negative integer, using %d", key, raw, fallback)
+		return fallback
+	}
+	return v
 }
 
 func isTruthyEnv(key string) bool {

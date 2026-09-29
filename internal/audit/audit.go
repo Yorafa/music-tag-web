@@ -44,6 +44,14 @@ const (
 	// auto-dismisses. Recorded by the client via RecordOperationLog, so unlike
 	// the other actions here it is the one action a browser can create.
 	ActionPlaybackFailed = "playback_failed"
+	// ActionAudioCacheClear records a manual clear of the download cache
+	// (AUDIO_CACHE_DIR). It is recoverable in the sense that a deleted
+	// cache file can be downloaded again, so it sits below the library
+	// actions — but it deletes files, and "who emptied the cache and when"
+	// is the question an operator has when the disk filled up. Only the
+	// manual button writes this row; the worker's scheduled size-cap prune
+	// logs to stdout instead, since it runs every 30 minutes.
+	ActionAudioCacheClear = "audio_cache_clear"
 )
 
 // Status 常量定义操作结果状态。

@@ -92,8 +92,13 @@ services:
       DB_DSN: /app/data/db.sqlite3
       DB_DRIVER: ${DB_DRIVER:-sqlite3}
       REDIS_ADDR: redis:6379
-      # MUST match worker (and yt_dl.go / stream.go audioCacheDir defaults).
+      # MUST match worker + youtube plugin (internal/audiocache.Root owns
+      # the rule; the plugin keeps a mirror it cannot import).
       AUDIO_CACHE_DIR: /tmp/audio_cache
+      # Read by the gateway only to render the settings page: the cap the
+      # worker enforces, and the recent-file window a manual clear keeps.
+      AUDIO_CACHE_MAX_MB: ${AUDIO_CACHE_MAX_MB:-2048}
+      AUDIO_CACHE_MIN_AGE_MIN: ${AUDIO_CACHE_MIN_AGE_MIN:-30}
       # 各插件的 gRPC 地址。服务启动时通过 parsePluginAddrs() 读取。
       # 若插件以独立进程或在不同宿主机上运行，请相应调整。
       PLUGIN_NETEASE_ADDR: ${PLUGIN_NETEASE_ADDR:-netease:50051}
@@ -158,6 +163,12 @@ services:
       DB_DSN: /app/data/db.sqlite3
       DB_DRIVER: ${DB_DRIVER:-sqlite3}
       AUDIO_CACHE_DIR: /tmp/audio_cache
+      # The size cap the worker enforces on this directory, and how long a
+      # freshly written file is protected from it. Must match the gateway:
+      # it reports these to the settings page, and a manual clear there
+      # applies the same window.
+      AUDIO_CACHE_MAX_MB: ${AUDIO_CACHE_MAX_MB:-2048}
+      AUDIO_CACHE_MIN_AGE_MIN: ${AUDIO_CACHE_MIN_AGE_MIN:-30}
       # Same plugin map as gateway (download:generic youtube branch uses
       # local yt-dlp, but other tasks may dial plugins later).
       PLUGIN_NETEASE_ADDR: ${PLUGIN_NETEASE_ADDR:-netease:50051}

@@ -92,6 +92,8 @@ docker compose up -d --build    # 后续只要不加 plugin / 不改 .env，重�
 > 不想改宿主机目录属主？也可以在 compose 里给 `gateway` / `worker` 加 `user: "${UID}:${GID}"`（用你自己在宿主机上的 uid），但那样容器内就是你的 uid 而不是 10001 了。
 >
 > `audio-cache` 是 named volume，首次创建时 Docker 会从镜像里的 `/tmp/audio_cache` 目录（含属主）拷贝内容，不需要任何额外操作。它同时挂给 worker 和 youtube 插件——两边的 `AUDIO_CACHE_DIR` 必须一致，否则下载的文件插件写在一个卷、gateway 在另一个卷里找。
+>
+> 这个卷里存的是试听和「加库」时下载的音频，**不在曲库内，删掉不影响曲库文件**（之后重新试听同一首会再下一次）。worker 每 30 分钟检查一次，超过 `AUDIO_CACHE_MAX_MB`（默认 2048）就从最旧的文件开始删；`AUDIO_CACHE_MIN_AGE_MIN`（默认 30）内写入的文件不删——正在播放的那首和刚下载、正准备复制进曲库的那次下载都在这个窗口里。两个值 gateway 也要有同样的配置：设置页显示的就是它们，手动清理用的也是同一个保留窗口。也可以在「设置 → 通用设置 → 下载缓存」里看当前占用并手动清理；不想让 worker 自动删就把 `AUDIO_CACHE_MAX_MB` 设成 `0`。
 
 不用 Docker 时才需要手动构建前端：`cd frontend && npm install && npm run build`，产物落盘到仓库根 `./static/dist/`，再把 `STATIC_DIR` 指向仓库根 `./static`。
 

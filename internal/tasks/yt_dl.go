@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"go-music-tag/internal/audiocache"
 	"go-music-tag/internal/audioext"
 	"go-music-tag/internal/audit"
 	"go-music-tag/internal/db"
@@ -87,20 +88,13 @@ func upsertDownloadFolder(tx *gorm.DB, folder db.Folder) error {
 	return tx.Model(&db.Folder{}).Where("id = ?", target).Updates(updates).Error
 }
 
-// AudioCacheRoot returns the per-source staging directory downloaded audio
-// files land in (shared with the gateway /api/stream handler's glob lookup).
-//
-// Each registered DownloadSource gets its own subdirectory under
-// /tmp/audio_cache/<source>/ so cross-source video_id collisions (e.g.
-// numeric IDs from migu / soundcloud vs youtube's 11-char) can't collide.
-// MUST stay in lockstep with internal/gateway/handler/stream.go's
-// audioCacheDir (same env var, same default).
+// audioCacheDir returns the per-source staging directory downloaded audio
+// files land in. The rule itself (env var, default, per-source subdir)
+// lives in internal/audiocache, which also owns the size-capped pruning
+// that reads this same tree — the worker and the gateway must not be able
+// to disagree about where the cache is.
 func audioCacheDir(source string) string {
-	root := os.Getenv("AUDIO_CACHE_DIR")
-	if root == "" {
-		root = "/tmp/audio_cache"
-	}
-	return filepath.Join(root, source)
+	return audiocache.Dir(source)
 }
 
 // DownloadHandler is the unified, source-routed asynq handler for the

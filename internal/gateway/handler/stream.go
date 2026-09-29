@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
 
+	"go-music-tag/internal/audiocache"
 	"go-music-tag/internal/audioext"
 	"go-music-tag/internal/netguard"
 	"go-music-tag/internal/plugin"
@@ -92,23 +93,11 @@ const streamDownloadLongPollInterval = 500 * time.Millisecond
 // same number rather than two magic copies.
 const streamDownloadRetryBudget = 5
 
-// audioCacheDir returns the per-source staging directory the worker is
-// expected to write downloaded audio files to (`<cache_root>/<source>`).
-// Read from env on every call so a docker-compose operator can hot-reload
-// by setting AUDIO_CACHE_DIR without restarting the gateway (test seams
-// over `os.Setenv` work the same way).
-//
-// MUST stay in lockstep with the worker's choice of the same directory:
-// see internal/tasks/yt_dl.go::audioCacheDir.
-//
-// Per-source subdirectories prevent video_id collisions across sources
-// (e.g. numeric IDs from migu / soundcloud vs youtube's 11-char IDs).
+// audioCacheDir returns the per-source staging directory the worker writes
+// downloaded audio into. The rule lives in internal/audiocache, shared
+// with the worker's writer side and with the pruner that trims this tree.
 func audioCacheDir(source string) string {
-	root := os.Getenv("AUDIO_CACHE_DIR")
-	if root == "" {
-		root = "/tmp/audio_cache"
-	}
-	return filepath.Join(root, source)
+	return audiocache.Dir(source)
 }
 
 // streamGuard is the SSRF guard for upstream audio URLs (REVIEW.md P1-2).

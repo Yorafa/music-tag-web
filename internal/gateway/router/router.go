@@ -126,6 +126,11 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// these three; /task2/ has no in-app caller and is POST-only now.
 		authed.POST("/clear_async_tasks/", handler.ClearAsyncTasks)
 		authed.GET("/active_queue/", handler.ActiveQueue) // read-only
+		// Download cache (AUDIO_CACHE_DIR) accounting and manual clear.
+		// The worker prunes it to a size cap on a schedule; GET is what
+		// the settings page shows, POST is the button that empties it now.
+		authed.GET("/audio_cache/", handler.GetAudioCache)
+		authed.POST("/audio_cache/clear/", handler.ClearAudioCache)
 		authed.POST("/full_scan_folder/", handler.FullScanFolder)
 		// Incremental scan. The handler and the worker-side registration
 		// (tasks.NewUpdateScanMux → TypeUpdateScanFolder) both existed, but

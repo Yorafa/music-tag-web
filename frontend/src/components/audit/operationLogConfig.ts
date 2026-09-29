@@ -10,6 +10,7 @@ import {
   Trash2,
   Flame,
   PlayCircle,
+  HardDrive,
   CheckCircle2,
   XCircle,
   AlertTriangle,
@@ -93,6 +94,16 @@ export const ACTION_CONFIG: Record<string, ActionConfigItem> = {
     label: '播放失败',
     icon: PlayCircle,
     color: 'bg-orange-500/10 text-orange-400 border-orange-500/30',
+  },
+  // 清理下载缓存 — deletes the AUDIO_CACHE_DIR staging copies, not library
+  // files. Distinct from 移入回收站 on purpose: nothing is quarantined, and
+  // the audio comes back by downloading it again rather than by restoring.
+  // Only the manual button writes this; the worker's scheduled size-cap
+  // prune stays in the worker log, or it would add a row every 30 minutes.
+  audio_cache_clear: {
+    label: '清理下载缓存',
+    icon: HardDrive,
+    color: 'bg-sky-500/10 text-sky-400 border-sky-500/30',
   },
 };
 

@@ -657,3 +657,72 @@ export async function recordOperationLog(params: {
   await api.post('operation_logs/record/', params);
 }
 
+
+// ─── 下载缓存 (AUDIO_CACHE_DIR) ──────────────────────────────────────
+//
+// The staging area /api/stream serves from and /api/download
+// short-circuits on. It lives in a docker named volume, so it survives
+// `compose down`; the worker trims it to a size cap on a schedule and
+// these two calls are the manual half.
+//
+// Every size arrives pre-formatted from the server (`bytes_human`) and
+// this UI uses those strings rather than utils/formatBytes. The two
+// formatters disagree on the unit label — "1.0 GiB" against "1.0 GB" for
+// the same number — and a dialog that mixes them reads as two different
+// quantities.
+
+export interface AudioCacheSourceUsage {
+  bytes: number;
+  bytes_human: string;
+  files: number;
+}
+
+export interface AudioCacheUsage {
+  root: string;
+  exists: boolean;
+  bytes: number;
+  bytes_human: string;
+  files: number;
+  by_source: Record<string, AudioCacheSourceUsage>;
+  /** The worker's periodic policy. Surfaced so the page can say why the
+   *  cache is the size it is instead of leaving it unexplained. */
+  auto_prune: {
+    enabled: boolean;
+    max_mb: number;
+    max_human: string;
+    min_age_minutes: number;
+  };
+  /** The recent-file guard a manual clear applies too. */
+  min_age_minutes: number;
+}
+
+export interface AudioCacheClearResult {
+  removed: number;
+  freed_bytes: number;
+  freed_human: string;
+  /** Files left alone because they were written inside the guard window —
+   *  the one currently being played, or a download about to be copied
+   *  into the library. */
+  kept_recent: number;
+  kept_recent_human: string;
+  failed: Record<string, string>;
+  all: boolean;
+  before_human: string;
+  after: AudioCacheUsage;
+}
+
+/** GET /api/audio_cache/ — what the download cache holds right now. */
+export async function getAudioCache(): Promise<AudioCacheUsage> {
+  const { data } = await api.get('audio_cache/');
+  return unwrapEnvelope<AudioCacheUsage>(data, 'get_audio_cache');
+}
+
+/** POST /api/audio_cache/clear/ — empty the cache.
+ *
+ *  `all` drops the recent-file guard, which the dialog only sends after a
+ *  separate explicit confirmation: deleting the file /api/stream is
+ *  currently serving stops the playback. */
+export async function clearAudioCache(all: boolean): Promise<AudioCacheClearResult> {
+  const { data } = await api.post('audio_cache/clear/', { all });
+  return unwrapEnvelope<AudioCacheClearResult>(data, 'clear_audio_cache');
+}

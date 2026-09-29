@@ -90,7 +90,8 @@
 | Claim | Status | Where |
 |---|---|---|
 | yt-dlp 下载（YouTube） | ✅ | worker 的 `download:generic` 委托 youtube 插件执行（`internal/plugin/youtube/server.go`），worker 本体纯 Go |
-| yt-dlp 参数 sanitize（纵深防御） | ✅ | `internal/ytdlp`（`SanitizeYTDLPFormat` / `SanitizeYTDLPOutputFormat` / `SanitizeYTDLPQuality`）三层防线：gateway handler 预校验 → worker 重放校验 → youtube 插件拼 argv 前再校验 |
+| yt-dlp 参数 sanitize（纵深防御） | ✅ | `internal/ytdlp`（`SanitizeYTDLPFormat` / `SanitizeYTDLPOutputFormat` / `SanitizeYTDLPQuality`）三层防线：gateway handler 预校验 → worker
+| 下载缓存有上限、也能手动清 | ✅ | `internal/audiocache`（`Inspect` / `Select` / `Remove`）+ worker 的 `cache:prune_audio` + `GET /api/audio_cache/` 与 `POST /api/audio_cache/clear/` + 设置页「通用设置 → 下载缓存」。`AUDIO_CACHE_DIR` 是 `audio-cache` 这个 named volume 里的常驻数据，**从前只进不出**：每次试听或「加库」都往里落一份（加库是 copy 不是 move），而 `docker compose down` 不删它，所以唯一能回收的方式是手动 `docker volume rm`。现在两条路都在：worker 每 30 分钟把超出 `AUDIO_CACHE_MAX_MB`（默认 2048）的部分**从 mtime 最旧的开始删**，超过阈值刚好够即停（多删一个就从「上限」变成「悬崖」）；`AUDIO_CACHE_MIN_AGE_MIN`（默认 30）保护这段时间内写过的文件——`/api/stream` 是直接 `ServeFile` 这个目录的，正在播的那首和刚下载、正准备复制进曲库的那次下载都在窗口里，**宁可让缓存暂时超上限也不删它们**（这种情况会打日志说明「超上限但按保留窗口全部留下」，不是静默放过）。手动清理复用同一个 `Select(0, minAge)`，「全部删除」是弹窗里另一个按钮（会打断正在播放的音频）。三条刻意的边界：`Remove` 对每个路径重做「是否在缓存根下、是否恰好是 `<root>/<source>/<file>`」的检查（它是 HTTP 可达的删除入口，信调用方的路径算术就等于离 `rm -rf` 只差一次重构），符号链接和目录一律拒绝而不是跟随；`Select` 只删 `mtime` 相同则按路径排序的稳定序列，否则「它保留了哪些」无法解释；只有手动清理写操作审计（`audio_cache_clear`），30 分钟一次的自动清理写日志就够了，写审计会把这个表淹掉 | 重放校验 → youtube 插件拼 argv 前再校验 |
 
 ## 8. 安全 / 运维卫生
 
