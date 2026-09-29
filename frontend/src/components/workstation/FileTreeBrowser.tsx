@@ -23,6 +23,7 @@ import { getFileList } from '@/api/client';
 import { useWorklistStore, type WorklistFilter } from '@/store/useWorklistStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { cn } from '@/lib/utils';
+import { formatDisplayPath } from '@/utils/path';
 import type { FileNode } from '@/types';
 
 interface TreeNode {
@@ -131,6 +132,29 @@ export function FileTreeBrowser({ className, onOpenDirPicker }: Props) {
     }
   };
 
+  // Directories the user has already added music from, derived from the
+  // queued rows' parent dirs (the worklist store tracks no explicit `dirs`
+  // list). Keyed by dir → file count. Used two ways: `.has(path)` marks tree
+  // nodes as 已添加 so the user can tell, while still browsing every
+  // directory, which ones already contributed rows; and the entries feed the
+  // 「已添加音乐根目录」 section that lists them with counts.
+  const addedDirs = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of rows) {
+      const i = r.fullPath.lastIndexOf('/');
+      const dir = i === -1 ? '' : r.fullPath.slice(0, i);
+      m.set(dir, (m.get(dir) ?? 0) + 1);
+    }
+    return m;
+  }, [rows]);
+
+  // Sorted for a stable render order; '' (library root) sorts first so it
+  // reads as the top of the list rather than jumping around.
+  const addedDirList = useMemo(
+    () => [...addedDirs.entries()].sort((a, b) => a[0].localeCompare(b[0])),
+    [addedDirs],
+  );
+
   // Smart collection counts
   const counts = useMemo(() => {
     return {
@@ -157,6 +181,9 @@ export function FileTreeBrowser({ className, onOpenDirPicker }: Props) {
   const renderDirItem = (node: TreeNode, depth: number = 0) => {
     const isExpanded = expandedPaths.has(node.path);
     const isSelected = activeDirPath === node.path;
+    // Has this exact dir contributed any queued row? (Doesn't claim its
+    // subdirs are added — those carry their own marker when they qualify.)
+    const isAdded = addedDirs.has(node.path);
     const matchesSearch = !searchQuery || node.name.toLowerCase().includes(searchQuery.toLowerCase());
 
     if (searchQuery && !matchesSearch && (!node.children || node.children.length === 0)) {
@@ -198,6 +225,14 @@ export function FileTreeBrowser({ className, onOpenDirPicker }: Props) {
               <Folder className="w-3.5 h-3.5 text-amber-500/80 shrink-0" />
             )}
             <span className="truncate text-xs">{node.name}</span>
+            {isAdded && (
+              <Badge
+                variant="outline"
+                className="shrink-0 text-[9px] px-1 py-0 h-4 border-emerald-500/40 text-emerald-500 bg-emerald-500/10"
+              >
+                已添加
+              </Badge>
+            )}
           </div>
 
           {/* Quick Enqueue Button */}
@@ -236,16 +271,22 @@ export function FileTreeBrowser({ className, onOpenDirPicker }: Props) {
             曲库与目录浏览
           </span>
         </div>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={refreshRoot}
-          disabled={loading}
-          className="h-6 w-6 text-muted-foreground hover:text-foreground"
-          title="刷新目录列表"
-        >
-          <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
-        </Button>
+        <div className="flex items-center gap-0.5">
+          {/* Only the directory tree. 刷新收录 — which reconciles the
+              *queued rows* against disk — lives in the toolbar's right-hand
+              action cluster: it edits the worklist, not the tree, and
+              putting it here read as "reload this panel". */}
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={refreshRoot}
+            disabled={loading}
+            className="h-6 w-6 text-muted-foreground hover:text-foreground"
+            title="刷新目录列表"
+          >
+            <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+          </Button>
+        </div>
       </div>
 
       {/* Smart Collections Section */}
@@ -304,7 +345,43 @@ export function FileTreeBrowser({ className, onOpenDirPicker }: Props) {
       {/* Directory Tree Scroll List */}
       <ScrollArea className="flex-1 p-2">
         <div className="space-y-0.5">
-          {/* Root Directory load shortcut */}
+          {/* 已添加音乐根目录: the dirs the user has already pulled rows from.
+              This is the affordance the old "全部音乐根目录" shortcut hid —
+              a user could load dirs but had no view of which ones already
+              contributed music. Rendered only when there's something to show
+              so an empty queue doesn't carry a dangling header. Each entry
+              re-enqueues its dir (picks up newly-dropped files) and shows the
+              row count so the list doubles as a per-dir tally. */}
+          {addedDirList.length > 0 && (
+            <div className="mb-1.5 space-y-0.5">
+              <div className="text-[10px] font-semibold text-muted-foreground uppercase px-2 py-0.5">
+                已添加音乐根目录
+              </div>
+              {addedDirList.map(([dir, count]) => (
+                <div
+                  key={dir || '__root__'}
+                  onClick={(e) => handleLoadDir(dir, e)}
+                  className="flex items-center justify-between px-2 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground cursor-pointer group"
+                  title={`重新载入「${formatDisplayPath(dir)}」以收录新增文件`}
+                >
+                  <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                    <span className="truncate text-foreground">{formatDisplayPath(dir)}</span>
+                  </div>
+                  <Badge
+                    variant="outline"
+                    className="text-[10px] px-1.5 py-0 h-4 min-w-[20px] justify-center font-mono shrink-0"
+                  >
+                    {count}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Discovery shortcut: load every directory under the root. Kept
+              distinct from the 已添加 list above — this is how a first-time
+              user with an empty queue pulls in everything at once. */}
           <div
             onClick={(e) => handleLoadDir('', e)}
             className="flex items-center justify-between px-2 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground cursor-pointer group"
