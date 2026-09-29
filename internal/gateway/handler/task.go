@@ -75,8 +75,13 @@ func FullScanFolder(c *gin.Context) {
 func TidyFolder(c *gin.Context) {
 	var req struct {
 		MusicPaths []string `json:"music_paths"`
-		RootPath   string   `json:"root_path" binding:"required"`
-		Segments   []string `json:"segments"`
+		// NOT binding:"required": an empty root_path is the library root
+		// itself (tasks.TidyRoot), which is what the dialog sends by
+		// default. Requiring a field whose empty value is meaningful
+		// would reject the common case at the binding layer, before the
+		// rule that actually interprets it ever runs.
+		RootPath string   `json:"root_path"`
+		Segments []string `json:"segments"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Failure(c, "invalid request: "+err.Error())
@@ -136,8 +141,9 @@ func TidyFolder(c *gin.Context) {
 func PreviewTidyFolder(c *gin.Context) {
 	var req struct {
 		MusicPaths []string `json:"music_paths"`
-		RootPath   string   `json:"root_path" binding:"required"`
-		Segments   []string `json:"segments"`
+		// See the note on TidyFolder: empty means the library root.
+		RootPath string   `json:"root_path"`
+		Segments []string `json:"segments"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Failure(c, "invalid request: "+err.Error())

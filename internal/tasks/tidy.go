@@ -50,7 +50,12 @@ func (h *TidyFolderHandler) ProcessTask(ctx context.Context, t Task) error {
 	if raw, ok := t.Payload.(*TidyFolderPayload); ok && raw != nil {
 		p = *raw
 	}
-	if len(p.MusicPaths) == 0 || p.RootPath == "" || len(p.Segments) == 0 {
+	// RootPath is deliberately NOT required here. An empty one is the
+	// library root (TidyRoot resolves it), and ProcessTask normalises it
+	// into an absolute path a few lines below — the check that used to
+	// reject it ran BEFORE that resolution and so threw away the one
+	// value the dialog sends by default.
+	if len(p.MusicPaths) == 0 || len(p.Segments) == 0 {
 		return fmt.Errorf("invalid tidy payload")
 	}
 	// The templates are validated up front, before anything moves. An
@@ -187,23 +192,42 @@ func (h *TidyFolderHandler) ProcessTask(ctx context.Context, t Task) error {
 // a success that quietly moved nothing. Two copies of the rule would be free
 // to drift, so there is one.
 //
-// Strictly absolute, unlike the per-file paths. Those are widened to accept
-// the root-relative form because the frontend genuinely cannot send the
-// absolute one; root_path has no such excuse — the dialog asks for it by name,
-// with the library root as its placeholder. Accepting a relative root would
-// let a stray word resolve to <musicRoot>/<word> and quietly build a new
-// nested tree instead of reporting the typo.
+// Strictly absolute for anything the caller DOES supply, unlike the
+// per-file paths. Those are widened to accept the root-relative form
+// because the frontend genuinely cannot send the absolute one.
+//
+// An EMPTY root_path means the library root itself, and that is the case
+// the dialog leads with. It used to be refused: the argument was that a
+// stray word must not resolve to <musicRoot>/<word> and quietly build a
+// nested tree instead of reporting the typo. That argument is sound for a
+// value the user typed, and it does not apply to no value at all — but
+// refusing empty left the dialog asking for a server-side absolute path
+// the client has no way to learn (nothing in the API reports MUSIC_DIR),
+// so 预览方案 sat disabled until the user guessed something like
+// /app/media. "Tidy the library, in place" is the common case and the one
+// that needs the least thought; requiring a guessed absolute path to
+// express it was the whole reason the button did nothing.
+//
+// The strictness still holds for a non-empty value, which is where the
+// typo risk actually lives.
 //
 // An unconfigured library root refuses everything rather than admitting
 // everything: this handler MOVES files, and without a root there is no way to
-// know what is in bounds. There is no explicit check for that here —
-// utils.SafeAbs already refuses an empty root, and its message ("root is
-// empty") names the actual fault. An earlier version carried its own branch
-// that only reworded the same refusal; mutation testing showed no behavioural
-// test could kill removing it, which is the signature of a branch that cannot
-// rot but also cannot be verified. The gateway handler does keep an empty-root
-// check of its own, because it is answering an operator rather than a log.
+// know what is in bounds. utils.SafeAbs refuses an empty root and its
+// message ("root is empty") names the actual fault. The gateway handler
+// keeps an empty-root check of its own, because it is answering an
+// operator rather than a log.
 func TidyRoot(musicRoot, rootPath string) (string, error) {
+	if strings.TrimSpace(rootPath) == "" {
+		if strings.TrimSpace(musicRoot) == "" {
+			return "", fmt.Errorf("tidy: 未配置曲库根目录，无法确定整理目标")
+		}
+		abs, err := filepath.Abs(musicRoot)
+		if err != nil {
+			return "", fmt.Errorf("tidy: 曲库根目录 %q 无法解析: %w", musicRoot, err)
+		}
+		return abs, nil
+	}
 	abs, err := utils.SafeAbs(musicRoot, rootPath)
 	if err != nil {
 		return "", fmt.Errorf("tidy: root_path %q is outside the library: %w", rootPath, err)
