@@ -37,12 +37,15 @@
 // could do neither, so its edit cells were a weaker version of a
 // control that already exists elsewhere in the same toolbar.
 //
-// The modal is mounted with an optional starting pattern and reports
-// one back up so the toolbar can re-open it with whatever the user
-// last typed (see WorkstationToolbar's `parsePattern` state) — a
-// downloader's naming convention does not change between batches.
+// The pattern is REMEMBERED across reloads (see common/batchRuleCache) —
+// a downloader's naming convention does not change between batches. It
+// used to be lifted into WorkstationToolbar and passed down as
+// `initialPattern` / `onPatternChange` instead, which meant it survived a
+// re-open but not a refresh, and gave the rule two owners: the toolbar's
+// copy and the modal's own useState, which reads its prop exactly once and
+// then ignores it. The modal now owns the one copy.
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Loader2, Music2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -69,6 +72,7 @@ import {
   type ParsePlanRow,
 } from './parseAssist';
 import { cn } from '@/lib/utils';
+import { loadParsePattern, rememberParsePattern } from '@/components/common/batchRuleCache';
 import { previewTruncationNoteBound } from '@/lib/previewLimit';
 import type { WorklistRow } from '@/types';
 
@@ -78,20 +82,14 @@ interface ParseFilenamesModalProps {
   /** The selected worklist rows. The plan renders from these, and the
    *  write covers all of them — not just the ten the table shows. */
   rows: WorklistRow[];
-  /** Starting pattern. Kept by the caller so a re-open keeps it. */
-  initialPattern?: string;
-  /** Called whenever the pattern changes, so the caller can re-open with it. */
-  onPatternChange?: (pattern: string) => void;
 }
 
-export function ParseFilenamesModal({
-  open,
-  onOpenChange,
-  rows,
-  initialPattern = '',
-  onPatternChange,
-}: ParseFilenamesModalProps) {
-  const [pattern, setPattern] = useState(initialPattern);
+export function ParseFilenamesModal({ open, onOpenChange, rows }: ParseFilenamesModalProps) {
+  // Restored on mount, so a reload leaves the rule the way the user left
+  // it. `useState(load)` rather than useEffect: a lazy initialiser runs
+  // once, whereas an effect would read storage and then setState, which
+  // renders the default rule for a frame before replacing it.
+  const [pattern, setPattern] = useState<string>(loadParsePattern);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -138,10 +136,14 @@ export function ParseFilenamesModal({
     }
   };
 
-  const handlePatternEdit = (v: string) => {
+  // Wrapped rather than calling both at each of the three places the rule
+  // changes (a chip, a preset, the box): a rule the user set and then lost
+  // is a worse bug than a missing write, and the call site that gets
+  // forgotten is always whichever one somebody added later.
+  const handlePatternEdit = useCallback((v: string) => {
     setPattern(v);
-    onPatternChange?.(v);
-  };
+    rememberParsePattern(v);
+  }, []);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -228,6 +230,7 @@ export function ParseFilenamesModal({
             onChange={(e) => handlePatternEdit(e.target.value)}
             aria-label="命名模板"
             spellCheck={false}
+            data-testid="parse-pattern-input"
           />
           {/* The rule is always spelled out, default included. An empty
               box used to mean "something is happening that I cannot see",

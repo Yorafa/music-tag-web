@@ -19,7 +19,7 @@
 // checked, because that comparison is free and it is the collision people
 // hit most. The rest is the operator's to look at — the dialog says so.
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Loader2, FileEdit, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -46,6 +46,7 @@ import {
   templateProblem,
 } from './renameFromTags';
 import { localRenamePlan, type PlanRow } from './localPreview';
+import { loadRenameTemplate, rememberRenameTemplate } from '@/components/common/batchRuleCache';
 import { cn } from '@/lib/utils';
 import { previewTruncationNote } from '@/lib/previewLimit';
 import type { WorklistRow } from '@/types';
@@ -59,9 +60,22 @@ interface RenameFromTagsDialogProps {
 }
 
 export function RenameFromTagsDialog({ open, onOpenChange, rows }: RenameFromTagsDialogProps) {
-  const [template, setTemplate] = useState('');
+  // Restored on mount, so a reload leaves the naming convention the user
+  // converged on rather than an empty box that says 先选一条规则. This is a
+  // rule, not a search: the selection is re-picked every batch by design,
+  // the template should not have to be.
+  const [template, setTemplateRaw] = useState<string>(loadRenameTemplate);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Every rule edit in this dialog — the chips, the presets, the box —
+  // goes through this one setter, so none of them can change the template
+  // without also remembering it. Naming the setter `setTemplate` keeps
+  // those call sites unchanged.
+  const setTemplate = useCallback((next: string) => {
+    setTemplateRaw(next);
+    rememberRenameTemplate(next);
+  }, []);
 
   const renameWorklistRow = useWorklistStore((s) => s.renameRow);
 

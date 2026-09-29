@@ -101,10 +101,6 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
 
   const [parseOpen, setParseOpen] = useState(false);
   const [renameFromTagsOpen, setRenameFromTagsOpen] = useState(false);
-  // Kept here, not in the modal, so re-opening does not start from an
-  // empty pattern: one downloader's naming convention does not change
-  // between batches.
-  const [parsePattern, setParsePattern] = useState('');
   const [batchEditOpen, setBatchEditOpen] = useState(false);
   const [tidyOpen, setTidyOpen] = useState(false);
   const [scrapePopoverOpen, setScrapePopoverOpen] = useState(false);
@@ -1037,8 +1033,6 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         open={parseOpen}
         onOpenChange={setParseOpen}
         rows={rows.filter((r) => selectedIds.includes(r.fullPath))}
-        initialPattern={parsePattern}
-        onPatternChange={setParsePattern}
       />
 
       {/* Duplicate result panel — the same verdicts now shown as row badges,

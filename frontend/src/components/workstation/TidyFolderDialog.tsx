@@ -33,7 +33,7 @@
 // dialog says the rest is on the operator, because a tidy is a move, not a
 // copy, and the write reports its own per-file outcomes in 操作审计.
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Loader2, FolderTree, ArrowUp, ArrowDown, Plus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -65,6 +65,12 @@ import {
   type TidyField,
 } from './tidyRule';
 import { localTidyPlan, type PlanRow } from './localPreview';
+import {
+  loadTidyRoot,
+  loadTidySegments,
+  rememberTidyRoot,
+  rememberTidySegments,
+} from '@/components/common/batchRuleCache';
 import { cn } from '@/lib/utils';
 import { previewTruncationNote } from '@/lib/previewLimit';
 import type { WorklistRow } from '@/types';
@@ -78,8 +84,26 @@ interface TidyFolderDialogProps {
 }
 
 export function TidyFolderDialog({ open, onOpenChange, rows }: TidyFolderDialogProps) {
-  const [rootPath, setRootPath] = useState('');
-  const [segments, setSegments] = useState<string[]>(['${artist}', '${album}']);
+  // Both parts of a tidy are remembered (see common/batchRuleCache). The
+  // level list is the more important of the two: it is a structure the
+  // user assembled one 「加一层」 at a time, and it used to start over at
+  // artist/album on every open, so tidying one album and then the next
+  // meant rebuilding the tree twice.
+  const [rootPath, setRootPathRaw] = useState<string>(loadTidyRoot);
+  const [segments, setSegmentsRaw] = useState<string[]>(loadTidySegments);
+  // One setter each, wrapped, because the levels change from six
+  // different places (add, remove, move, edit, toggle a field, a preset).
+  // A remembered rule that misses one of them is indistinguishable from no
+  // remembering at all, and the call site that gets forgotten is whichever
+  // one somebody added later.
+  const setRootPath = useCallback((next: string) => {
+    setRootPathRaw(next);
+    rememberTidyRoot(next);
+  }, []);
+  const setSegments = useCallback((next: string[]) => {
+    setSegmentsRaw(next);
+    rememberTidySegments(next);
+  }, []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
