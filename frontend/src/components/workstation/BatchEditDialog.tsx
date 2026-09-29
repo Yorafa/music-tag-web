@@ -39,7 +39,6 @@ import {
 } from '@/components/ui/dialog';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { useWorklistStore } from '@/store/useWorklistStore';
-import { useLibraryStore } from '@/store/useLibraryStore';
 import { batchUpdateId3 } from '@/api/client';
 import { isDedupeEnabled } from '@/utils/dedupe';
 import type { WorklistRow } from '@/types';
@@ -80,7 +79,6 @@ export function BatchEditDialog({ rows, onClose }: BatchEditDialogProps) {
   const setMusicInfo = useWorklistStore((s) => s.setMusicInfo);
   const setStatus = useWorklistStore((s) => s.setStatus);
   const renameWorklistRow = useWorklistStore((s) => s.renameRow);
-  const renameLibraryRow = useLibraryStore((s) => s.renameRow);
 
   const payload = useMemo(
     () => buildBatchPayload(form, { renameTemplate, dedupeEnabled: isDedupeEnabled() }),
@@ -146,7 +144,6 @@ export function BatchEditDialog({ rows, onClose }: BatchEditDialogProps) {
         if (newPath) {
           const newFileName = baseNameOf(newPath);
           renameWorklistRow(row.fullPath, newPath, newFileName);
-          renameLibraryRow(row.fullPath, newPath, newFileName);
         }
       }
 

@@ -74,7 +74,6 @@ export function WorkstationView() {
       <DirPickerDrawer
         open={dirPickerOpen}
         onOpenChange={setDirPickerOpen}
-        destination="worklist"
       />
     </div>
   );

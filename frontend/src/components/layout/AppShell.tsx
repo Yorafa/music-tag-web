@@ -1,6 +1,7 @@
-// Unified modern app shell. Supports 5 core navigation sections:
-//   - library:  Local library tracks, playback, filter, instant editor
-//   - scraper:  Worklist queue, auto-scraping, filename parser, folder tidy
+// Unified modern app shell. Supports 4 core navigation sections:
+//   - scraper:  Worklist queue, auto-scraping, filename parser, folder tidy,
+//               playback, and the instant tag editor (absorbed the old
+//               本地曲库 mode — see git history for the removed PlayView)
 //   - search:   Cloud multi-source search, preview stream & download
 //   - audit:    Operation history logs, action/status filters & details.
 //               The sole home for 操作审计 — the settings surfaces
@@ -14,7 +15,6 @@
 import { useState, useCallback } from 'react';
 import { TrackDetailDialog } from '@/components/detail/TrackDetailDialog';
 import { WorkstationView } from '@/components/workstation/WorkstationView';
-import { PlayView } from '@/components/play/PlayView';
 import { CloudSearchView } from '@/components/search/CloudSearchView';
 import { AuditLogView } from '@/components/audit/AuditLogView';
 import { SettingsView } from '@/components/settings/SettingsView';
@@ -37,13 +37,11 @@ const SIDEBAR_COLLAPSED_KEY = 'appShell.sidebarCollapsed';
 function readStoredSection(): AppSection {
   try {
     const s = localStorage.getItem(SECTION_KEY);
-    if (s === 'library' || s === 'scraper' || s === 'search' || s === 'audit' || s === 'settings') {
+    if (s === 'scraper' || s === 'search' || s === 'audit' || s === 'settings') {
       return s;
     }
-    // Backward compatibility for mode
-    const mode = localStorage.getItem('appShell.mode');
-    if (mode === 'scrape') return 'scraper';
-    if (mode === 'play') return 'library';
+    // Legacy 'library'/'play' resolved to the removed 本地曲库 mode; the
+    // scraper absorbed that surface, so both now land there.
   } catch {
     /* ignore */
   }
@@ -62,7 +60,7 @@ export function AppShell({ initialSection }: Props) {
     setMobileNavOpen(false);
     try {
       localStorage.setItem(SECTION_KEY, next);
-      localStorage.setItem('appShell.mode', next === 'scraper' ? 'scrape' : 'play');
+      localStorage.setItem('appShell.mode', 'scrape');
     } catch {
       /* ignore */
     }
@@ -126,7 +124,6 @@ export function AppShell({ initialSection }: Props) {
 
         {/* Dynamic Section Viewport */}
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
-          {section === 'library' && <PlayView />}
           {section === 'scraper' && <WorkstationView />}
           {section === 'search' && <CloudSearchView />}
           {section === 'audit' && <AuditLogView />}

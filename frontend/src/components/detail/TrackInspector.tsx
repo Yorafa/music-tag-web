@@ -25,12 +25,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { TAB_BAR_CLASS } from '@/components/detail/tabBar';
 import { cn } from '@/lib/utils';
 import { CandidateCard } from '@/components/detail/CandidateCard';
+import { ScrapeTargetPanel } from '@/components/detail/ScrapeTargetPanel';
 import { SourcePickerDialog } from '@/components/detail/SourcePickerDialog';
 import { CANDIDATES_PER_PAGE, CANDIDATE_PAGE_SIZES, paginateCandidates } from '@/components/detail/candidates';
 import {
@@ -38,15 +40,17 @@ import {
   SOURCES,
   loadRememberedSources,
   rememberSources,
+  lyricSourceOrder,
 } from '@/components/common/tagSources';
 import { searchAcrossSources } from '@/api/scrapeSources';
+import { fetchLyricAcross } from '@/api/lyrics';
+import { sourceLabel } from '@/components/workstation/scrapeReport';
 import {
   APPLYABLE_FIELDS,
   fieldLabel,
   type ApplyableField,
 } from '@/components/workstation/scrapedInfo';
 import { useWorklistStore } from '@/store/useWorklistStore';
-import { useLibraryStore } from '@/store/useLibraryStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { duplicateWarningsFromUpdate } from '@/components/detail/renameResult';
@@ -54,7 +58,6 @@ import { dedupeFlag, isDedupeEnabled } from '@/utils/dedupe';
 import {
   updateId3,
   fetchId3ByTitle,
-  fetchLyric,
   uploadImage,
   getMusicId3,
 } from '@/api/client';
@@ -114,9 +117,7 @@ function getInitialFormData(row: DetailTarget): Partial<MusicTagInfo> {
 function TrackInspectorInner({ row }: { row: DetailTarget }) {
   const setMusicInfo = useWorklistStore((s) => s.setMusicInfo);
   const setStatus = useWorklistStore((s) => s.setStatus);
-  const setLibraryMusicInfo = useLibraryStore((s) => s.setMusicInfo);
   const renameWorklistRow = useWorklistStore((s) => s.renameRow);
-  const renameLibraryRow = useLibraryStore((s) => s.renameRow);
   const renameDetailTarget = useDetailStore((s) => s.renameTarget);
   const playTrack = usePlayerStore((s) => s.playTrack);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
@@ -124,6 +125,18 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
 
   const [activeTab, setActiveTab] = useState<'tags' | 'candidates' | 'lyrics' | 'cover' | 'audio'>('tags');
   const [formData, setFormData] = useState<Partial<MusicTagInfo>>(() => getInitialFormData(row));
+  // The cover as it was first loaded, so a save can tell "the user changed the
+  // art" from "the art was never touched". ReadMusicTags returns an embedded
+  // cover as a base64 data-URI, so formData.album_img is a multi-MB string on
+  // every art-bearing file. Spreading it into the update_id3 body unconditionally
+  // re-uploaded that string on every save — a large cover pushes the JSON past
+  // the gateway's 8 MiB body limit, MaxBytesReader resets the connection, and
+  // axios reports a bare "Network Error". The writer leaves the existing embedded
+  // cover untouched when AlbumImg is empty (tag/writer.go), so an unchanged cover
+  // is simply omitted from the payload. This is a ref, not state: it must not
+  // change when the user edits the cover, and the component is keyed on
+  // row.fullPath so it is re-captured for each track.
+  const originalCover = useRef(getInitialFormData(row).album_img ?? '');
   const [candidates, setCandidates] = useState<SongInfo[]>([]);
   const [page, setPage] = useState(1);
   // How many candidates one page holds. Adjustable because "5" was a guess
@@ -132,6 +145,29 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
   const [pageSize, setPageSize] = useState(CANDIDATES_PER_PAGE);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [fetchingLyric, setFetchingLyric] = useState(false);
+  // Provenance for the 候选 pinned panel: which source each field was last
+  // applied from, so the panel can show a 「网易云」 chip and the user can
+  // tell a composed record apart from the file's own original tags. Absent
+  // means the field still holds whatever the file had.
+  const [fieldSources, setFieldSources] = useState<
+    Partial<Record<ApplyableField, string>>
+  >({});
+  // The field to briefly highlight after an apply, so the eye is drawn to
+  // where the value landed in the panel. Cleared on a timer.
+  const [flashField, setFlashField] = useState<ApplyableField | null>(null);
+  // Lyrics fetched per candidate, cached here rather than inside each card:
+  // a CandidateCard unmounts on every page turn and tab switch, so card-local
+  // state made the user re-open 详情 and re-click 获取歌词 each time they came
+  // back to 候选. Keyed by `source::id` (the pair FetchLyric needs). Value is
+  // the lyric string; `''` records a source that was asked and had none, so
+  // the card shows 「该音源未找到歌词」 instead of offering the button again.
+  const [lyricCache, setLyricCache] = useState<Record<string, string>>({});
+  // Whether 保存 should also drop a `<base>.lrc` sidecar next to the file.
+  // The lyric is embedded into the audio file either way (USLT /
+  // taglib.Lyrics); this only adds the external copy for players that read
+  // sidecars. Read by handleSaveTags at save time.
+  const [saveLyricSidecar, setSaveLyricSidecar] = useState(false);
   // Which sources the last search asked. Kept as state rather than a
   // constant so the picker can start from them: re-running a search with
   // the same sources is the common case, and re-picking them every time is
@@ -166,10 +202,20 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
             title: prev.title || res.data.title,
             artist: prev.artist || res.data.artist,
           }));
+          // Warm the shared worklist cache the player reads from. Without this
+          // the editor re-reads lyrics on every open (showing them here) while
+          // the player keeps reading a lyric-less cached row — the exact
+          // "editor shows lyrics, player doesn't" split. A worklist row's id is
+          // its fullPath, so this patches the same row. Only patch fields the
+          // read actually returned so we never blank an existing cover/lyric.
+          const patch: Record<string, unknown> = {};
+          if (res.data.album_img) patch.album_img = res.data.album_img;
+          if (res.data.lyrics) patch.lyrics = res.data.lyrics;
+          if (Object.keys(patch).length > 0) setMusicInfo(row.fullPath, patch);
         }
       }).catch(() => {});
     }
-  }, [row]);
+  }, [row, setMusicInfo]);
 
   // Search candidate matches across the sources the user picked. The old
   // version searched one hardcoded source and told the user nothing about
@@ -273,11 +319,38 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
       lyrics: c.lyric || c.lyrics,
     };
     const patched: Partial<MusicTagInfo> = { ...formData };
+    // Which fields actually took a value, so provenance only records fields
+    // that changed — a source with no genre must not claim the genre chip.
+    const applied: ApplyableField[] = [];
     for (const field of wanted) {
       const value = values[field];
-      if (value) (patched as Record<string, unknown>)[field] = value;
+      if (value) {
+        (patched as Record<string, unknown>)[field] = value;
+        applied.push(field);
+      }
     }
     setFormData(patched);
+    // Record where each applied field came from, so the pinned 将写入的标签
+    // panel can show a per-field source chip and the user can tell a record
+    // composed from several sources apart from the file's original tags.
+    if (c.source && applied.length > 0) {
+      setFieldSources((prev) => {
+        const next = { ...prev };
+        for (const field of applied) next[field] = c.source!;
+        return next;
+      });
+    }
+    // Flash the applied field so the eye is drawn to where it landed in the
+    // panel. A single-field apply flashes that field; a whole-candidate apply
+    // flashes nothing (too many at once reads as noise, and it jumps tabs).
+    if (fields && fields.length === 1 && applied.includes(fields[0])) {
+      const flashed = fields[0];
+      setFlashField(flashed);
+      window.setTimeout(
+        () => setFlashField((cur) => (cur === flashed ? null : cur)),
+        700,
+      );
+    }
     useNoticeStore
       .getState()
       .push(
@@ -286,7 +359,10 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
           : `已应用「${c.name}」候选标签`,
         'info',
       );
-    setActiveTab('tags');
+    // Only jump to 标签 on a whole-candidate apply. A single-field apply keeps
+    // the user on 候选 so they can pick the next field off the same card
+    // without navigating back and re-scrolling to it.
+    if (!fields) setActiveTab('tags');
   };
 
   // Save all modified tags
@@ -297,17 +373,28 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
     // tell the stores which row moved.
     const savedFrom = row.fullPath;
     try {
-      const res = await updateId3([
-        {
-          file_full_path: savedFrom,
-          file_name: row.fileName,
-          ...formData,
-          // The same preference the batch scrape reads, so turning dedup off
-          // in one place covers both. It lives inside the tag map because
-          // that is the only place the server looks for it.
-          ...dedupeFlag(isDedupeEnabled()),
-        },
-      ]);
+      // Drop the cover from the payload when it is byte-for-byte the one we
+      // loaded: an embedded cover arrives as a multi-MB base64 data-URI, and
+      // re-sending it on every save pushes large-art files past the gateway's
+      // 8 MiB body limit (the reset then surfaces as a bare axios "Network
+      // Error"). The writer preserves the existing embedded cover when
+      // AlbumImg is empty, so omitting an unchanged cover is a no-op on disk.
+      const coverChanged = (formData.album_img ?? '') !== originalCover.current;
+      const payload: Record<string, unknown> = {
+        file_full_path: savedFrom,
+        file_name: row.fileName,
+        ...formData,
+        // Also drop a `<base>.lrc` beside the file when the lyrics tab's
+        // checkbox is ticked. The lyric is embedded either way; this only
+        // decides whether the sidecar is written too.
+        is_save_lyrics_file: saveLyricSidecar,
+        // The same preference the batch scrape reads, so turning dedup off
+        // in one place covers both. It lives inside the tag map because
+        // that is the only place the server looks for it.
+        ...dedupeFlag(isDedupeEnabled()),
+      };
+      if (!coverChanged) delete payload.album_img;
+      const res = await updateId3([payload]);
       // Both stores key rows by fullPath, and both setters ignore ids
       // they don't own — so writing to both lets a save made from
       // 音乐库 also refresh the scraper table's status badge and
@@ -331,7 +418,10 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
 
       setMusicInfo(savedFrom, formData);
       setStatus(savedFrom, 'scraped');
-      setLibraryMusicInfo(savedFrom, formData);
+      // The cover we just sent is now the file's cover, so advance the
+      // baseline: a second save of the same dialog must not re-send it and
+      // re-hit the body limit.
+      originalCover.current = formData.album_img ?? '';
 
       // Did the save also move the file? The handler only renames when
       // info["filename"] resolved to a different name, and says so in the
@@ -341,7 +431,6 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
       if (newPath) {
         const newFileName = baseNameOf(newPath);
         renameWorklistRow(savedFrom, newPath, newFileName);
-        renameLibraryRow(savedFrom, newPath, newFileName);
         renameDetailTarget(savedFrom, newPath, newFileName);
         setFormData((prev) => ({ ...prev, filename: newFileName }));
         useNoticeStore
@@ -379,17 +468,35 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
     }
   };
 
-  // Fetch online lyric
+  // Fetch online lyric.
+  //
+  // A lyric fetch is two hops, not one: the backend's FetchLyric is keyed by
+  // a source-specific song_id, and the proto Song has no lyric field, so a
+  // search must resolve the id first. `fetchLyricAcross` does both, trying
+  // the user's picked sources first (lyric-capable only) then the rest, so
+  // "在线获取歌词" works for every source instead of only a hardcoded netease
+  // that was being handed a title where an id was expected.
   const handleFetchLyric = async () => {
-    if (!formData.title) return;
+    const query = formData.title || searchQuery;
+    if (!query) {
+      useNoticeStore.getState().push('请先填写歌名再获取歌词', 'warn');
+      return;
+    }
+    setFetchingLyric(true);
     try {
-      const res = await fetchLyric(formData.title, 'netease');
-      if (res?.data) {
-        setFormData((prev) => ({ ...prev, lyrics: res.data }));
-        useNoticeStore.getState().push('歌词检索成功并已填充', 'info');
+      const hit = await fetchLyricAcross(query, lyricSourceOrder(scrapeSources), row.fullPath);
+      if (hit) {
+        setFormData((prev) => ({ ...prev, lyrics: hit.lyric }));
+        useNoticeStore
+          .getState()
+          .push(`已从「${sourceLabel(hit.source, SOURCES)}」获取歌词并填充`, 'info');
+      } else {
+        useNoticeStore.getState().push('各音源均未找到该歌曲的歌词', 'warn');
       }
     } catch {
       useNoticeStore.getState().push('歌词检索失败', 'error');
+    } finally {
+      setFetchingLyric(false);
     }
   };
 
@@ -756,69 +863,111 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
                 <p>点击上方搜索或「智能刮削」检索候选</p>
               </div>
             ) : (
-              <>
-              <div className="space-y-2">
-                {candidatePage.items.map((c, i) => (
-                  <CandidateCard
-                    key={`${c.source ?? ''}-${c.id}-${i}`}
-                    candidate={c}
-                    onApply={handleApplyCandidate}
-                  />
-                ))}
-              </div>
-              {/* Paging, not a longer scroll. Fifteen candidates in one
-                  scroll is a list nobody compares; five at a time with a
-                  position indicator is one they can read against the
-                  count they were told about. */}
-              {candidatePage.pageCount > 1 && (
-                <div className="flex items-center justify-between gap-2 pt-3 mt-1 border-t border-border/40">
-                  <span className="text-[11px] text-muted-foreground font-mono">
-                    第 {candidatePage.page} / {candidatePage.pageCount} 页 · 共{' '}
-                    {candidatePage.total} 个候选
-                  </span>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPage((p) => Math.max(1, p - 1))}
-                      disabled={candidatePage.page <= 1}
-                      className="h-7 px-2 text-xs"
-                    >
-                      上一页
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        setPage((p) =>
-                          Math.min(candidatePage.pageCount, p + 1),
-                        )
-                      }
-                      disabled={candidatePage.page >= candidatePage.pageCount}
-                      className="h-7 px-2 text-xs"
-                    >
-                      下一页
-                    </Button>
-                  </div>
+              // Direction B layout: the card list and a pinned "将写入的标签"
+              // panel share the row. On lg+ the panel sticks to the top of a
+              // fixed-width right column so it stays visible while the user
+              // scrolls the cards; below lg it stacks above the cards as a
+              // compact live summary (the mobile "bottom sheet" role, kept
+              // inline here since the whole inspector is already a scroll
+              // surface on a phone).
+              <div className="flex flex-col-reverse gap-4 lg:flex-row lg:items-start">
+                <div className="min-w-0 flex-1 space-y-2">
+                  {candidatePage.items.map((c, i) => {
+                    const lyricKey = `${c.source ?? ''}::${c.id}`;
+                    return (
+                      <CandidateCard
+                        key={`${c.source ?? ''}-${c.id}-${i}`}
+                        candidate={c}
+                        onApply={handleApplyCandidate}
+                        cachedLyric={lyricCache[lyricKey]}
+                        onLyricFetched={(lyric) =>
+                          setLyricCache((prev) => ({ ...prev, [lyricKey]: lyric }))
+                        }
+                      />
+                    );
+                  })}
+                  {/* Paging, not a longer scroll. Fifteen candidates in one
+                      scroll is a list nobody compares; five at a time with a
+                      position indicator is one they can read against the
+                      count they were told about. */}
+                  {candidatePage.pageCount > 1 && (
+                    <div className="flex items-center justify-between gap-2 pt-3 mt-1 border-t border-border/40">
+                      <span className="text-[11px] text-muted-foreground font-mono">
+                        第 {candidatePage.page} / {candidatePage.pageCount} 页 · 共{' '}
+                        {candidatePage.total} 个候选
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setPage((p) => Math.max(1, p - 1))}
+                          disabled={candidatePage.page <= 1}
+                          className="h-7 px-2 text-xs"
+                        >
+                          上一页
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setPage((p) =>
+                              Math.min(candidatePage.pageCount, p + 1),
+                            )
+                          }
+                          disabled={candidatePage.page >= candidatePage.pageCount}
+                          className="h-7 px-2 text-xs"
+                        >
+                          下一页
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
-              </>
+                <ScrapeTargetPanel
+                  formData={formData}
+                  fieldSources={fieldSources}
+                  flashField={flashField}
+                  sources={SOURCES}
+                  className="w-full shrink-0 lg:sticky lg:top-0 lg:w-72"
+                />
+              </div>
             )}
           </ScrollArea>
         </TabsContent>
 
         {/* Tab 3: Lyrics Editor & Sync */}
         <TabsContent value="lyrics" className="flex-1 flex flex-col min-h-0 m-0 p-6 space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-sm font-semibold text-foreground">LRC 歌词文本</span>
-            <Button
-              variant="outline"
-              onClick={handleFetchLyric}
-              className="h-8 px-3 text-xs gap-1.5 text-primary"
+            <div className="flex items-center gap-3">
+              {/* The lyric is embedded into the audio file on 保存 regardless.
+                  Ticking this also drops a `<base>.lrc` beside it for players
+                  that read sidecars — honoured by handleSaveTags, not a
+                  separate action. */}
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <Checkbox
+                  checked={saveLyricSidecar}
+                  onCheckedChange={(v) => setSaveLyricSidecar(v === true)}
+                  aria-label="保存到外部文件"
+                />
+                <span className="text-xs text-muted-foreground whitespace-nowrap">
+                  保存时同时写入 .lrc 外部文件
+                </span>
+              </label>
+              <Button
+                variant="outline"
+                onClick={handleFetchLyric}
+                disabled={fetchingLyric}
+                className="h-8 px-3 text-xs gap-1.5 text-primary"
               >
-              <Search className="w-4 h-4" />
-              <span>在线获取歌词</span>
-            </Button>
+                {fetchingLyric ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Search className="w-4 h-4" />
+                )}
+                <span>{fetchingLyric ? '获取中…' : '在线获取歌词'}</span>
+              </Button>
+            </div>
           </div>
           <Textarea
             value={formData.lyrics || ''}

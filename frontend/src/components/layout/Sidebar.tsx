@@ -1,5 +1,4 @@
 import {
-  Music2,
   Sparkles,
   Search,
   History,
@@ -13,7 +12,7 @@ import { useWorklistStore } from '@/store/useWorklistStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { cn } from '@/lib/utils';
 
-export type NavSection = 'library' | 'scraper' | 'search' | 'audit' | 'settings';
+export type NavSection = 'scraper' | 'search' | 'audit' | 'settings';
 
 interface Props {
   activeSection: NavSection;
@@ -30,12 +29,6 @@ interface Props {
 }
 
 const NAV_ITEMS: { id: NavSection; label: string; icon: React.ElementType; description: string }[] = [
-  {
-    id: 'library',
-    label: '本地曲库',
-    icon: Music2,
-    description: '本地音乐与即时播放',
-  },
   {
     id: 'scraper',
     label: '智能刮削',

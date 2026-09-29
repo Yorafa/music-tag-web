@@ -1,5 +1,4 @@
 import {
-  Music2,
   Sparkles,
   Search,
   History,
@@ -12,7 +11,6 @@ import { TaskCenterDropdown } from './TaskCenterDropdown';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { NoticeCenterButton } from '@/components/notice/NoticeCenterButton';
 import { useWorklistStore } from '@/store/useWorklistStore';
-import { useLibraryStore } from '@/store/useLibraryStore';
 import { useAuthStore } from '@/store/useAuthStore';
 
 interface Props {
@@ -24,11 +22,6 @@ const SECTION_HEADERS: Record<
   NavSection,
   { title: string; subtitle: string; icon: React.ElementType }
 > = {
-  library: {
-    title: '本地曲库',
-    subtitle: '管理并试听本地音乐库中的音频与标签',
-    icon: Music2,
-  },
   scraper: {
     title: '智能刮削',
     subtitle: '多源元数据匹配、批量标签更新与文件规范整理',
@@ -56,7 +49,6 @@ export function TopHeader({ activeSection, onOpenMobileNav }: Props) {
   const Icon = current.icon;
 
   const logout = useAuthStore((s) => s.logout);
-  const libraryRows = useLibraryStore((s) => s.rows.length);
   const worklistRows = useWorklistStore((s) => s.rows.length);
   const selectedRows = useWorklistStore((s) => s.selectedIds.length);
 
@@ -91,11 +83,6 @@ export function TopHeader({ activeSection, onOpenMobileNav }: Props) {
 
       {/* Right Stats & Task Center */}
       <div className="flex items-center gap-2 text-xs">
-        {activeSection === 'library' && libraryRows > 0 && (
-          <span className="hidden sm:inline-block px-2 py-0.5 rounded-full bg-muted/60 text-muted-foreground text-[11px] font-mono">
-            共 {libraryRows} 首本地曲目
-          </span>
-        )}
         {activeSection === 'scraper' && (
           <span className="hidden sm:inline-block px-2 py-0.5 rounded-full bg-muted/60 text-muted-foreground text-[11px] font-mono">
             {selectedRows > 0 ? (

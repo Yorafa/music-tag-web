@@ -1,9 +1,9 @@
 // Specs for reading a rename out of an update_id3/ response, and for the
 // store actions that follow it.
 //
-// A row's id in this app IS its path (`WorklistRow.id == fullPath`, and
-// so is `LibraryRow.id`). If a save renames the file and the rows are not
-// moved, the table keeps a path that no longer resolves: streaming it
+// A row's id in this app IS its path (`WorklistRow.id == fullPath`). If a
+// save renames the file and the rows are not moved, the table keeps a path
+// that no longer resolves: streaming it
 // 404s, re-editing it fails, saving it again errors. The file has been
 // dropped from the queue without anything looking broken — which is why
 // this is worth pinning rather than trusting.
@@ -11,7 +11,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renamedPathFromUpdate, sidecarWarningsFromUpdate, baseNameOf, joinDir, renamedPathsFromUpdate } from './renameResult';
 import { useWorklistStore } from '@/store/useWorklistStore';
-import { useLibraryStore } from '@/store/useLibraryStore';
 import { useDetailStore } from '@/store/useDetailStore';
 import type { WorklistRow } from '@/types';
 
@@ -161,26 +160,6 @@ describe('worklist renameRow', () => {
   });
 });
 
-describe('library renameRow', () => {
-  beforeEach(() => {
-    useLibraryStore.setState({
-      rows: [{ id: OLD, fullPath: OLD, fileName: 'old.mp3' }],
-    });
-  });
-
-  it('moves the row', () => {
-    useLibraryStore.getState().renameRow(OLD, 'Artist/Album/new.mp3', 'new.mp3');
-    const r = useLibraryStore.getState().rows[0];
-    expect(r.id).toBe('Artist/Album/new.mp3');
-    expect(r.fileName).toBe('new.mp3');
-  });
-
-  it('ignores an unknown row', () => {
-    useLibraryStore.getState().renameRow('nope.mp3', 'x.mp3', 'x.mp3');
-    expect(useLibraryStore.getState().rows[0].fullPath).toBe(OLD);
-  });
-});
-
 describe('detail renameTarget', () => {
   beforeEach(() => {
     useDetailStore.setState({ target: { fullPath: OLD, fileName: 'old.mp3' } });
@@ -216,7 +195,6 @@ describe('the stores and the response agree', () => {
     // disagreeing about where the file lives.
     vi.useRealTimers();
     useWorklistStore.setState({ rows: [row()], selectedIds: [OLD] });
-    useLibraryStore.setState({ rows: [{ id: OLD, fullPath: OLD, fileName: 'old.mp3' }] });
     useDetailStore.setState({ target: { fullPath: OLD, fileName: 'old.mp3' } });
 
     const newPath = renamedPathFromUpdate(
@@ -228,12 +206,10 @@ describe('the stores and the response agree', () => {
     const newName = baseNameOf(newPath);
 
     useWorklistStore.getState().renameRow(OLD, newPath, newName);
-    useLibraryStore.getState().renameRow(OLD, newPath, newName);
     useDetailStore.getState().renameTarget(OLD, newPath, newName);
 
     expect(useWorklistStore.getState().rows[0].fullPath).toBe(newPath);
     expect(useWorklistStore.getState().selectedIds).toEqual([newPath]);
-    expect(useLibraryStore.getState().rows[0].fullPath).toBe(newPath);
     expect(useDetailStore.getState().target!.fullPath).toBe(newPath);
   });
 });

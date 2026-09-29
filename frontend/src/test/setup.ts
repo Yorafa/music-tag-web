@@ -14,7 +14,7 @@
  * Symptom before this file: every store spec that calls `localStorage.clear()`
  * in `beforeEach` dies with
  *     TypeError: Cannot read properties of undefined (reading 'clear')
- * and the whole `useWorklistStore` / `useLibraryStore` suites go red even
+ * and the whole `useWorklistStore` suite goes red even
  * though nothing in `src/` is broken.
  *
  * Why a polyfill instead of `--localstorage-file`

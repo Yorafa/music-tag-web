@@ -1,17 +1,9 @@
 // Shared directory-picker drawer.
 //
-// Frozen contract with Plan B (β-side):
-//   destination: 'library' | 'worklist'
-//     - 'worklist' → useWorklistStore.getState().enqueueDirs(selected)
-//       (this file owns that store, so the static import is safe)
-//     - 'library'  → useLibraryStore.getState().enqueueDirs(selected)
-//       Originally a dynamic import with `/* @vite-ignore */` so Plan A
-//       could ship on a base branch before Plan B's store existed. Now
-//       that Plan B is merged the static import is safe AND necessary:
-//       the `@/` path alias is resolved by the Vite/dev build but NOT by
-//       the browser at runtime, so a production dynamic import('@/store/
-//       useLibraryStore') would fail path resolution, fall into the
-//       catch branch, and silently drop the user's selection.
+// Enqueues the selected directories/files into the worklist via
+// useWorklistStore.getState().enqueueDirs(selected). (It once also served
+// a 'library' destination for the removed 本地曲库 mode; the scraper
+// absorbed that surface, so only the worklist remains — see git history.)
 //
 // UI: right-side slide-in on desktop, bottom-sheet on mobile via the
 // Tailwind `sm:` breakpoint (matches the rest of the app's mobile
@@ -43,7 +35,6 @@ import {
 import { getFileList } from '@/api/client';
 import { selectionKind } from '@/utils/expandDirs';
 import { useWorklistStore } from '@/store/useWorklistStore';
-import { useLibraryStore } from '@/store/useLibraryStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import {
   PATH_ALIAS,
@@ -66,11 +57,8 @@ import type { FileNode } from '@/types';
 interface DirPickerDrawerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  destination: 'library' | 'worklist';
-  /** Optional badge list — preserved on the contract so Plan B's
-   *  PlayView can pass it without a re-coordinated signature change.
-   *  Today we don't render "already added" chrome; this prop is a
-   *  forward-compat slot, intentionally unused. */
+  /** Optional badge list — a forward-compat slot for "already added"
+   *  chrome we don't render today; intentionally unused. */
   existingDirs?: string[];
 }
 
@@ -83,7 +71,6 @@ type TreeCache = Record<string, FileNode[] | undefined>;
 export function DirPickerDrawer({
   open,
   onOpenChange,
-  destination,
 }: DirPickerDrawerProps) {
   // We deliberately don't subscribe to `useBrowserStore.filePath` here —
   // the picker maintains its own current-dir navigation stack so the
@@ -188,10 +175,7 @@ export function DirPickerDrawer({
       return;
     }
 
-    const result =
-      destination === 'worklist'
-        ? await useWorklistStore.getState().enqueueDirs(selectedArr)
-        : await useLibraryStore.getState().enqueueDirs(selectedArr);
+    const result = await useWorklistStore.getState().enqueueDirs(selectedArr);
 
     // Two units, because the selection can hold both. "已收录 1 个新增目录"
     // after ticking three files is true and useless; the file count is what
@@ -205,7 +189,7 @@ export function DirPickerDrawer({
     );
     setSelected(new Set());
     onOpenChange(false);
-  }, [selected, destination, onOpenChange]);
+  }, [selected, onOpenChange]);
 
   // Compose submit-disabled state. We keep the button rather than hiding
   // it so the affordance is discoverable; disabled state is friendlier

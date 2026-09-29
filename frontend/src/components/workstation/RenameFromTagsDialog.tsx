@@ -45,7 +45,6 @@ import {
   type RenamePlanRow,
 } from '@/api/client';
 import { useWorklistStore } from '@/store/useWorklistStore';
-import { useLibraryStore } from '@/store/useLibraryStore';
 import {
   RENAME_FIELDS,
   RENAME_FIELD_LABELS,
@@ -90,7 +89,6 @@ export function RenameFromTagsDialog({
   const [previewNonce, setPreviewNonce] = useState(0);
 
   const renameWorklistRow = useWorklistStore((s) => s.renameRow);
-  const renameLibraryRow = useLibraryStore((s) => s.renameRow);
 
   const chosen = useMemo(() => fieldsFromTemplate(template), [template]);
   const problem = useMemo(() => templateProblem(template), [template]);
@@ -176,7 +174,6 @@ export function RenameFromTagsDialog({
         if (r.status !== 'ok') continue;
         const newPath = joinDir(r.path, r.new_name);
         renameWorklistRow(r.path, newPath, r.new_name);
-        renameLibraryRow(r.path, newPath, r.new_name);
       }
       onOpenChange(false);
     } catch (e: unknown) {
