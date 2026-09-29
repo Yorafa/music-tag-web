@@ -35,6 +35,7 @@ import { CandidateCard } from '@/components/detail/CandidateCard';
 import { ScrapeTargetPanel } from '@/components/detail/ScrapeTargetPanel';
 import { SourcePickerDialog } from '@/components/detail/SourcePickerDialog';
 import { CANDIDATES_PER_PAGE, CANDIDATE_PAGE_SIZES, paginateCandidates } from '@/components/detail/candidates';
+import { resolveCandidateSearchQuery } from '@/components/workstation/scrapedInfo';
 import {
   CANDIDATE_FETCH_LIMIT,
   SOURCES,
@@ -184,7 +185,23 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
   useEffect(() => {
     rememberSources(scrapeSources);
   }, [scrapeSources]);
-  const [searchQuery, setSearchQuery] = useState(() => formData.title || row.fileName.replace(/\.[^/.]+$/, '').trim());
+  // Seeded from the title the row opened with, but NOT the source of truth
+  // once the user edits it. It used to be: `searchQuery` was initialised
+  // from `formData.title` and then never updated, while
+  // handleSearchCandidates preferred `searchQuery` over `formData.title`.
+  // So correcting a wrong title — the single most common reason to search
+  // candidates at all — searched the OLD title, and every candidate came
+  // back matching the thing the user had just decided was wrong. The search
+  // now reads the live title; `searchQuery` survives only as the user-facing
+  // override box, which is emptied whenever the title changes so it cannot
+  // shadow it.
+  const [searchQueryOverride, setSearchQueryOverride] = useState('');
+  // The visible value of the 候选 search box: the title when the user has
+  // not typed anything of their own, whatever they have typed when they have.
+  // Derived rather than stored so it cannot drift out of sync with the
+  // title — a stored copy is what made the box (and the search) keep showing
+  // the title the dialog opened with.
+  const searchQuery = searchQueryOverride || formData.title || row.fileName.replace(/\.[^/.]+$/, '').trim();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Background fetch full ID3 if cover or lyrics missing
@@ -222,11 +239,14 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
   // it, so "no candidates" was indistinguishable from "wrong source".
   const handleSearchCandidates = useCallback(
     async (customQuery?: string, sources?: MusicSource[], limit?: number) => {
-      const query =
-        customQuery ||
-        searchQuery ||
-        formData.title ||
-        row.fileName.replace(/\.[^/.]+$/, '');
+      // Precedence is resolveCandidateSearchQuery's; see its comment for why
+      // the live title has to outrank anything seeded at open time.
+      const query = resolveCandidateSearchQuery({
+        explicit: customQuery,
+        override: searchQueryOverride,
+        title: formData.title,
+        fileName: row.fileName,
+      });
       if (!query) return;
       const chosen = sources && sources.length > 0 ? sources : scrapeSources;
 
@@ -261,7 +281,7 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
         setLoadingCandidates(false);
       }
     },
-    [row, searchQuery, formData.title, scrapeSources],
+    [row, searchQueryOverride, formData.title, scrapeSources],
   );
 
   /** 指纹 tab: fingerprint the audio with AcoustID alone. Kept separate
@@ -784,7 +804,7 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
             <div className="flex items-center gap-2">
               <Input
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => setSearchQueryOverride(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSearchCandidates()}
                 placeholder="输入歌名/关键字检索..."
                 className="h-9 text-sm flex-1 bg-background"
@@ -1066,7 +1086,7 @@ function TrackInspectorInner({ row }: { row: DetailTarget }) {
           loading={loadingCandidates}
           onSearch={(sources, query) => {
             setScrapeSources(sources);
-            setSearchQuery(query);
+            setSearchQueryOverride(query);
             void handleSearchCandidates(query, sources, CANDIDATE_FETCH_LIMIT);
           }}
         />

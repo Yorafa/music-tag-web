@@ -106,20 +106,42 @@ export function resolveDownloadUrl(
   return url;
 }
 
-/** Build a filesystem-safe "Artist - Title.ogg" basename for downloads. */
+/** Build a filesystem-safe "<Title>.ogg" basename for downloads.
+ *
+ *  Title only, no artist prefix. The artist is already IN the file: a
+ *  download is scraped and written with artist/album/year tags, so
+ *  "Artist - Title.ogg" said the same thing twice and made every filename in
+ *  the library twice as long. This name is also what a search result shows
+ *  in the browser's download shelf, where "晴天【Official MV】.ogg" reads
+ *  better than "周杰倫 Jay Chou - 晴天【Official MV】.ogg".
+ *
+ *  `artist` stays in the signature because both call sites already pass it
+ *  and it documents the deliberate omission — but it is not read. Removing
+ *  the parameter outright would churn both call sites for no behaviour
+ *  change, and a future caller that does want the artist form should add it
+ *  back as an option rather than by editing this.
+ *
+ *  Sanitizing is unchanged from when the artist was included: filesystem-
+ *  illegal characters become underscores, runs of whitespace collapse, and
+ *  the extension is normalized. A title that sanitizes to nothing falls
+ *  back to a usable name rather than producing ".ogg".
+ */
 export function audioDownloadBasename(
-  artist: string | undefined,
+  _artist: string | undefined,
   title: string | undefined,
   ext: string = 'ogg',
 ): string {
-  const a = (artist || '未知艺术家').trim() || '未知艺术家';
   const t = (title || 'audio').trim() || 'audio';
-  const base = `${a} - ${t}`
+  const base = t
     .replace(/[\\/:*?"<>|]/g, '_')
     .replace(/\s+/g, ' ')
     .trim();
+  // A title made entirely of illegal characters ("///" → "___" is fine, but
+  // e.g. ":" alone sanitizes to "_", while a title of only dots or spaces
+  // can leave nothing usable) must not produce a bare ".ogg".
+  const safeBase = base && base !== '.' && base !== '..' ? base : 'audio';
   const cleanExt = (ext || 'ogg').replace(/^\./, '').toLowerCase() || 'ogg';
-  return `${base}.${cleanExt}`;
+  return `${safeBase}.${cleanExt}`;
 }
 
 export function metadataOnlyMessage(): string {

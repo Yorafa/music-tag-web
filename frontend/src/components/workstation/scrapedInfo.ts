@@ -98,6 +98,92 @@ export function candidateTagValue(
   return orOmit(value);
 }
 
+/** The lyric a candidate can actually offer, preferring one already
+ *  fetched over anything the search carried.
+ *
+ *  A search response never carries lyrics — the proto Song message has no
+ *  lyric field — so `lyric`/`lyrics` on a fresh candidate are always empty
+ *  and a fetched one lives outside the candidate entirely, in the parent's
+ *  cache. A card that shows a lyric it fetched must hand THAT to the apply
+ *  path; passing the raw candidate applies an empty field, and the user has
+ *  to open 详情 and fetch the lyric a second time.
+ *
+ *  Returns undefined rather than '' so callers can use it as "there is
+ *  nothing here" without having to remember that '' is a real (empty) lyric
+ *  the user already fetched. */
+export function effectiveCandidateLyric(
+  candidate: ScrapeCandidate,
+  cachedLyric?: string,
+): string | undefined {
+  return (
+    orOmit(cachedLyric) ?? orOmit(candidate.lyric) ?? orOmit(candidate.lyrics)
+  );
+}
+
+/** The candidate as an apply should receive it, with a fetched lyric folded
+ *  in.
+ *
+ *  Narrow on purpose: only the lyric is overridden. Every other field must
+ *  come from the candidate, so a card cannot accidentally "apply" something
+ *  the user did not choose. A candidate with no lyric available comes back
+ *  unchanged, which keeps the "leave my tag alone" rule for lyrics intact
+ *  rather than overwriting with an empty string.
+ *
+ *  Every apply path that can be reached after the user pressed 获取歌词 must
+ *  go through here — the whole-candidate 应用此标签 and the per-field
+ *  应用歌词 alike. They previously disagreed: the per-field button spread
+ *  the lyric in by hand and the whole-candidate button passed the raw
+ *  candidate, which is why the preview showed a lyric that 保存 did not
+ *  write. */
+export function candidateWithLyric<T extends ScrapeCandidate>(
+  candidate: T,
+  cachedLyric?: string,
+): T {
+  const lyric = effectiveCandidateLyric(candidate, cachedLyric);
+  return lyric ? { ...candidate, lyric } : candidate;
+}
+
+/** What to actually search a scrape source for.
+ *
+ *  This exists because the precedence used to be baked into a component and
+ *  got it wrong. The candidate search seeded a `searchQuery` state from the
+ *  row's title ONCE, on open, and never updated it when the user edited the
+ *  title — while the search preferred `searchQuery` over the live title. So
+ *  correcting a wrong title, which is the single most common reason to search
+ *  candidates at all, searched the old title and returned matches for the
+ *  thing the user had just decided was wrong. The symptom read as "the search
+ *  ignores my edit".
+ *
+ *  Precedence, highest first:
+ *    1. `explicit` — a query handed in by the caller (the fingerprint search,
+ *       or the source picker's "search these sources for this").
+ *    2. `override` — what the user typed into the search box. Only set once
+ *       they type, and cleared by the UI when they go back to editing the
+ *       title, so it can never silently shadow a title edit.
+ *    3. the CURRENT title.
+ *    4. the filename stem, for a row that never had a title at all.
+ *
+ *  Returns undefined when nothing usable is available, which the caller
+ *  treats as "do not search" rather than searching for an empty string. */
+export function resolveCandidateSearchQuery(
+  args: {
+    explicit?: string;
+    override?: string;
+    title?: string;
+    fileName?: string;
+  },
+): string | undefined {
+  const candidates = [args.explicit, args.override, args.title];
+  for (const c of candidates) {
+    const trimmed = (c ?? '').trim();
+    if (trimmed) return trimmed;
+  }
+  // Filename last, and stripped of its extension — "song.flac" as a search
+  // term matches nothing, while "song" is what the user meant.
+  const stem = (args.fileName ?? '').replace(/\.[^/.]+$/, '').trim();
+  return stem || undefined;
+}
+
 /** The tags to write for `candidate`, ready to hand to the batch endpoint.
  *
  *  `fallbackTitle` is the query that produced no usable title — the file's

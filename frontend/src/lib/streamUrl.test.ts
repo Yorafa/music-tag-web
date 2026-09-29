@@ -183,12 +183,51 @@ describe('resolveDownloadUrl', () => {
 });
 
 describe('audioDownloadBasename', () => {
-  it('builds artist - title.ogg', () => {
-    expect(audioDownloadBasename('Ado', 'ウタ', 'ogg')).toBe('Ado - ウタ.ogg');
+  it('uses the title only — no artist prefix', () => {
+    // The artist is already in the file's tags, so "Artist - Title.ogg"
+    // said it twice and made every library filename twice as long. The
+    // artist argument is still accepted and still ignored.
+    expect(audioDownloadBasename('Ado', 'ウタ', 'ogg')).toBe('ウタ.ogg');
+    expect(audioDownloadBasename('周杰倫 Jay Chou', '晴天【Official MV】', 'ogg')).toBe(
+      '晴天【Official MV】.ogg',
+    );
   });
 
-  it('sanitizes unsafe path chars', () => {
-    expect(audioDownloadBasename('A/B', 'C:D', 'ogg')).toBe('A_B - C_D.ogg');
+  it('produces the same name whatever artist is passed', () => {
+    // Pins the omission as deliberate rather than incidental.
+    expect(audioDownloadBasename('A', 'T', 'ogg')).toBe(
+      audioDownloadBasename('完全不同的艺术家', 'T', 'ogg'),
+    );
+    expect(audioDownloadBasename(undefined, 'T', 'ogg')).toBe('T.ogg');
+  });
+
+  it('sanitizes unsafe path chars in the title', () => {
+    expect(audioDownloadBasename('artist', 'A/B', 'ogg')).toBe('A_B.ogg');
+    expect(audioDownloadBasename('artist', 'C:D', 'ogg')).toBe('C_D.ogg');
+    expect(audioDownloadBasename('artist', 'E?F*G"H<I>J|K', 'ogg')).toBe(
+      'E_F_G_H_I_J_K.ogg',
+    );
+  });
+
+  it('collapses whitespace runs', () => {
+    expect(audioDownloadBasename('artist', 'a   b', 'ogg')).toBe('a b.ogg');
+  });
+
+  it('falls back to a usable name for an empty or missing title', () => {
+    // Never produce a bare ".ogg" — that is a file the user cannot find.
+    expect(audioDownloadBasename('artist', '', 'ogg')).toBe('audio.ogg');
+    expect(audioDownloadBasename('artist', undefined, 'ogg')).toBe('audio.ogg');
+    expect(audioDownloadBasename('artist', '   ', 'ogg')).toBe('audio.ogg');
+  });
+
+  it('refuses dot-only titles, which would be a traversal-ish name', () => {
+    expect(audioDownloadBasename('artist', '.', 'ogg')).toBe('audio.ogg');
+    expect(audioDownloadBasename('artist', '..', 'ogg')).toBe('audio.ogg');
+  });
+
+  it('normalizes the extension', () => {
+    expect(audioDownloadBasename('artist', 'T', '.FLAC')).toBe('T.flac');
+    expect(audioDownloadBasename('artist', 'T', '')).toBe('T.ogg');
   });
 });
 

@@ -20,7 +20,7 @@ import { ChevronDown, ChevronRight, Fingerprint, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { fieldLabel, type ApplyableField } from '@/components/workstation/scrapedInfo';
+import { fieldLabel, type ApplyableField, candidateWithLyric } from '@/components/workstation/scrapedInfo';
 import { fetchLyricForSong } from '@/api/lyrics';
 import type { SongInfo } from '@/types';
 
@@ -87,7 +87,11 @@ function Fact({
 
 export function CandidateCard({ candidate: c, onApply, cachedLyric, onLyricFetched }: Props) {
   const [open, setOpen] = useState(false);
-  const applyOnly = (field: ApplyableField) => onApply(c, [field]);
+  // The candidate as the parent should receive it. Reads the lyric at CALL
+  // time, so a card fetched after render still applies what it fetched.
+  const withLyric = (): SongInfo => candidateWithLyric(c, cachedLyric);
+  const applyOnly = (field: ApplyableField) =>
+    onApply(field === 'lyrics' ? withLyric() : c, [field]);
 
   // Lyrics are not part of a candidate: the proto Song message has no lyric
   // field, so a search never carries one and `c.lyric`/`c.lyrics` are always
@@ -105,6 +109,11 @@ export function CandidateCard({ candidate: c, onApply, cachedLyric, onLyricFetch
   const lyricTried = cachedLyric !== undefined;
 
   const canFetchLyric = Boolean(c.id && c.source);
+  // The lyric actually on offer: the one this card fetched, else whatever the
+  // search carried (which for lyrics is essentially always nothing — see the
+  // note above). Declared before withLyric's USERS read it at call time, so
+  // ordering does not matter for them, but it must exist by render.
+  const effectiveLyric = cachedLyric || c.lyric || c.lyrics || '';
   // Fetch only — never auto-apply. The user asked to keep 获取 and 应用
   // separate so fetching a lyric to read it doesn't overwrite the field they
   // may have already set from another source. The fetched text is previewed;
@@ -135,7 +144,7 @@ export function CandidateCard({ candidate: c, onApply, cachedLyric, onLyricFetch
         : null;
   // The fetched lyric wins over the (structurally always-empty) candidate
   // fields, so a card that has been fetched shows and applies the real thing.
-  const effectiveLyric = cachedLyric || c.lyric || c.lyrics || '';
+  // (Declared above with the rest of the lyric state.)
 
   return (
     <div className="p-4 rounded-xl border border-border/70 bg-surface-2/60 hover:bg-surface-2 hover:border-primary/50 transition-all space-y-3">
@@ -238,7 +247,7 @@ export function CandidateCard({ candidate: c, onApply, cachedLyric, onLyricFetch
               {effectiveLyric ? (
                 <button
                   type="button"
-                  onClick={() => onApply({ ...c, lyric: effectiveLyric }, ['lyrics'])}
+                  onClick={() => onApply(withLyric(), ['lyrics'])}
                   className="text-[11px] px-2 py-0.5 rounded text-primary hover:bg-primary/10 transition-colors"
                   title="只应用歌词"
                 >
@@ -301,7 +310,10 @@ export function CandidateCard({ candidate: c, onApply, cachedLyric, onLyricFetch
           </Button>
           <Button
             variant="secondary"
-            onClick={() => onApply(c)}
+            // withLyric(), not c: 「应用此标签」 is the whole candidate, and
+            // a lyric the user fetched on THIS card is part of what they are
+            // looking at when they press it.
+            onClick={() => onApply(withLyric())}
             className="h-8 px-3 text-xs text-primary hover:bg-primary hover:text-primary-foreground font-semibold"
           >
             应用此标签
