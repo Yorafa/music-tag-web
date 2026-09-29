@@ -60,10 +60,15 @@ export function NowPlaying({ open, onClose }: Props) {
   // tracked previous id) rather than an effect — no cascading render, no
   // setState-in-effect lint bite.
   const [showLyrics, setShowLyrics] = useState(false);
+  // Manual lyric sync offset in seconds. A track's LRC can be a beat ahead of
+  // or behind the audio; +/- buttons let the listener nudge it. Reset on track
+  // change alongside the cover flip so one song's correction doesn't carry.
+  const [lyricOffset, setLyricOffset] = useState(0);
   const prevTrackId = useRef<string | undefined>(currentTrack?.id);
   if (prevTrackId.current !== currentTrack?.id) {
     prevTrackId.current = currentTrack?.id;
     if (showLyrics) setShowLyrics(false);
+    if (lyricOffset !== 0) setLyricOffset(0);
   }
 
   // Drag-down state — vertical displacement (px) the sheet has been
@@ -174,12 +179,49 @@ export function NowPlaying({ open, onClose }: Props) {
           playhead (LyricsView handles LRC vs plain text). */}
       <div className="flex-1 min-h-0 flex items-center justify-center">
         {showLyrics ? (
-          <LyricsView
-            lyrics={currentTrack.lyrics}
-            currentTime={currentTime}
-            variant="full"
-            className="w-[min(90vw,26rem)] h-full py-4 px-2"
-          />
+          <div className="flex flex-col items-center h-full w-[min(90vw,26rem)]">
+            <LyricsView
+              lyrics={currentTrack.lyrics}
+              currentTime={currentTime}
+              variant="full"
+              offset={lyricOffset}
+              // Highlight uses currentTime + offset, so to land the playhead
+              // on the tapped line we undo the same offset when seeking.
+              onSeek={(t) => seek(Math.max(0, t - lyricOffset))}
+              className="flex-1 min-h-0 w-full py-4 px-2"
+            />
+            {/* Lyric sync nudge. LRC that runs ahead of or behind the audio
+                gets corrected here; the value resets on track change. */}
+            <div className="flex items-center gap-2 shrink-0 pb-1 text-sm">
+              <button
+                type="button"
+                onClick={() => setLyricOffset((v) => Math.round((v - 0.5) * 10) / 10)}
+                aria-label="歌词延后 0.5 秒"
+                title="歌词延后 0.5 秒"
+                className="px-2.5 py-1 rounded hover:bg-surface-2 text-muted-foreground hover:text-foreground tabular-nums"
+              >
+                −0.5s
+              </button>
+              <button
+                type="button"
+                onClick={() => setLyricOffset(0)}
+                aria-label="重置歌词偏移"
+                title="重置歌词偏移"
+                className="min-w-[3.5rem] px-2 py-1 rounded hover:bg-surface-2 text-muted-foreground hover:text-foreground tabular-nums"
+              >
+                {lyricOffset === 0 ? '偏移' : `${lyricOffset > 0 ? '+' : ''}${lyricOffset}s`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setLyricOffset((v) => Math.round((v + 0.5) * 10) / 10)}
+                aria-label="歌词提前 0.5 秒"
+                title="歌词提前 0.5 秒"
+                className="px-2.5 py-1 rounded hover:bg-surface-2 text-muted-foreground hover:text-foreground tabular-nums"
+              >
+                +0.5s
+              </button>
+            </div>
+          </div>
         ) : (
           <button
             type="button"

@@ -3,6 +3,7 @@ import { Play, Pause, Loader2 } from 'lucide-react';
 import { usePlayerStore, type PlayerTrack } from '@/store/usePlayerStore';
 import { useSourceStore } from '@/store/useSourceStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
+import { readTagsFromPath } from '@/lib/id3Reader';
 import { recordOperationLog } from '@/api/client';
 import {
   resolveStreamUrl,
@@ -91,6 +92,23 @@ export function PlayButton({ track, size = 'sm', className }: Props) {
     try {
       await waitForStreamReady(r.url);
       playTrack({ ...track, url: r.url });
+      // Lazy lyrics self-heal for local files. Scan-time reads skip the
+      // lyric body and the boot hydrate only re-reads on a missing cover,
+      // so a freshly-queued local track plays with no lyrics in the player
+      // even when the file has an embedded tag or sidecar .lrc. Fetch them
+      // once, after playback commits, and patch the live track. Guarded to
+      // local sources: streaming rows carry their own lyrics (or none) and
+      // have no MUSIC_DIR path to read. setTrackLyrics no-ops unless the id
+      // still matches the current track, so a late fetch from a row the
+      // user has since skipped past cannot clobber the new track's lyrics.
+      if (track.source.kind === 'local' && !track.lyrics) {
+        readTagsFromPath(track.id)
+          .then((tags) => {
+            const lyrics = tags.lyrics?.trim();
+            if (lyrics) usePlayerStore.getState().setTrackLyrics(track.id, lyrics);
+          })
+          .catch(() => {});
+      }
     } catch (err) {
       const sourceName =
         track.source.kind === 'plugin' ? track.source.source : undefined;

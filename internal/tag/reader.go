@@ -172,6 +172,13 @@ func Read(path string) (*TagInfo, error) {
 		info.Codec = string(ProbeFile(path))
 	}
 
+	// A lyric that lives only in a `<base>.lrc` sidecar is invisible to the
+	// embedded-tag read above. Fall back to it so a track with external-only
+	// lyrics stops reading as 暂无歌词. Embedded wins when both exist.
+	if strings.TrimSpace(info.Lyrics) == "" {
+		info.Lyrics = ReadLyricsSidecar(path)
+	}
+
 	return info, nil
 }
 
@@ -272,6 +279,12 @@ func readWithDhowden(path string, cfg os.FileInfo, info *TagInfo) (*TagInfo, err
 	// is the only signal dhowden does not provide.
 	info.Duration = estimateDuration(path, format, cfg.Size())
 	info.BitRate = estimateBitrate(path, format, cfg.Size())
+
+	// Same sidecar fallback as the taglib path: external-only lyrics should
+	// not read as 暂无歌词.
+	if strings.TrimSpace(info.Lyrics) == "" {
+		info.Lyrics = ReadLyricsSidecar(path)
+	}
 
 	return info, nil
 }

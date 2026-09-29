@@ -20,6 +20,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -125,9 +126,9 @@ func (s *Server) FetchLyric(ctx context.Context, req *pb.FetchLyricRequest) (*pb
 	_ = json.Unmarshal(body, &raw)
 	if raw != nil {
 		if lyric, ok := raw["lyric"].(string); ok && lyric != "" {
-			// QQ 加密过的 lyric 走 utf-16 → base64 → 解码流程。这里不做解码，只直接返回原始内容，
-			// 由前端决定是否解析（多数 LRC 浏览器解析接受 raw JSON）。
-			return &pb.FetchLyricResponse{Lyric: lyric}, nil
+			// QQ 返回的 lyric 是 base64（内部再 utf-16）。之前直接透传，前端拿到的是
+			// W3RpOi4uLl0... 这种 base64 串。这里统一用 tryDecodeLRC 解成纯 LRC 文本。
+			return &pb.FetchLyricResponse{Lyric: tryDecodeLRC(lyric)}, nil
 		}
 		// 兜底：尝试从 translate 字段再 fallback
 		if tl, ok := raw["trans"].(string); ok && tl != "" {
@@ -324,14 +325,17 @@ func (s *Server) doSearch(ctx context.Context, query string, page, limit int) ([
 		sg := song{
 			ID:   str(item["mid"]), // 用 mid 作为 id，与 qmusic 客户端约定一致
 			Mid:  str(item["mid"]),
-			Name: str(firstNonEmpty(item, "title", "name")),
+			// QQ 的搜索结果把命中的关键词用 <em>…</em> 高亮标签包起来，
+			// 例如 "<em>Everybody Dies…</em>"，直接写进 id3 会带上标签。
+			// cleanText 去掉 HTML 标签并还原实体。
+			Name: cleanText(firstNonEmpty(item, "title", "name")),
 		}
 		// artist 数组
 		if singers, ok := item["singer"].([]interface{}); ok {
 			var names []string
 			for _, sd := range singers {
 				if m, ok := sd.(map[string]interface{}); ok {
-					names = append(names, str(m["name"]))
+					names = append(names, cleanText(str(m["name"])))
 					if sg.ArtistID == "" {
 						sg.ArtistID = str(m["id"])
 					}
@@ -340,7 +344,7 @@ func (s *Server) doSearch(ctx context.Context, query string, page, limit int) ([
 			sg.Artist = strings.Join(names, ",")
 		}
 		if album, ok := item["album"].(map[string]interface{}); ok {
-			sg.Album = str(firstNonEmpty(album, "title", "name"))
+			sg.Album = cleanText(str(firstNonEmpty(album, "title", "name")))
 			sg.AlbumID = str(album["mid"])
 		}
 		sg.Year = str(item["time_public"])
@@ -368,6 +372,40 @@ func str(v interface{}) string {
 		return ""
 	}
 	return fmt.Sprintf("%v", v)
+}
+
+// qmusicHighlightTag matches the <em>…</em> highlight markup QQ Music wraps
+// around the portion of a title/artist that matched the query. Left in, it
+// ends up written verbatim into the id3 title ("<em>Everybody Dies…</em>").
+var qmusicHighlightTag = regexp.MustCompile(`</?[a-zA-Z][^>]*>`)
+
+// stripHTML removes QQ's search-highlight tags and unescapes the handful of
+// HTML entities their responses carry, so a matched title lands as plain
+// text. Applied to the human-readable fields (title/artist/album), never to
+// ids — those are opaque and must pass through untouched.
+func stripHTML(s string) string {
+	if s == "" || !strings.ContainsAny(s, "<&") {
+		return s
+	}
+	s = qmusicHighlightTag.ReplaceAllString(s, "")
+	// The entities QQ actually emits in highlighted text. html.UnescapeString
+	// would cover more, but keeping the set explicit avoids pulling the
+	// package in for four cases and documents what the API is known to send.
+	s = strings.NewReplacer(
+		"&amp;", "&",
+		"&lt;", "<",
+		"&gt;", ">",
+		"&quot;", `"`,
+		"&#39;", "'",
+		"&apos;", "'",
+	).Replace(s)
+	return strings.TrimSpace(s)
+}
+
+// cleanText trims and strips QQ's search-highlight markup from a human-readable
+// field (title/artist/album). Never apply to ids.
+func cleanText(s string) string {
+	return strings.TrimSpace(stripHTML(s))
 }
 
 // firstNonEmpty returns the first non-empty string among the given keys of

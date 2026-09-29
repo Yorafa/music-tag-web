@@ -1,6 +1,8 @@
 package tag
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -51,5 +53,28 @@ func TestLyricsSidecarFor(t *testing.T) {
 		if base, ok := LyricsSidecarFor(name); ok {
 			t.Errorf("LyricsSidecarFor(%q) = %q, want no match", name, base)
 		}
+	}
+}
+
+// ReadLyricsSidecar is the read-side counterpart to HandleSidecars: a lyric
+// that lives only in a `<base>.lrc` must surface, or the player shows 暂无歌词
+// for a track whose lyrics the file browser already flags with an icon.
+func TestReadLyricsSidecar(t *testing.T) {
+	dir := t.TempDir()
+	audio := filepath.Join(dir, "song.mp3")
+
+	// No sidecar: the common case, returns "".
+	if got := ReadLyricsSidecar(audio); got != "" {
+		t.Errorf("ReadLyricsSidecar with no sidecar = %q, want \"\"", got)
+	}
+
+	// A sidecar next to the audio is read back, with the trailing newline the
+	// writer leaves off already trimmed.
+	body := "[00:01.00]line one\n[00:02.00]line two"
+	if err := os.WriteFile(LyricsSidecarName(audio), []byte(body+"\r\n"), 0o644); err != nil {
+		t.Fatalf("write sidecar: %v", err)
+	}
+	if got := ReadLyricsSidecar(audio); got != body {
+		t.Errorf("ReadLyricsSidecar = %q, want %q", got, body)
 	}
 }

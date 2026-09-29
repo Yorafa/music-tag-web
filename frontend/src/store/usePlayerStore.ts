@@ -24,8 +24,9 @@ export interface PlayerTrack {
   durationSec?: number;
   /** Lyric body for display in the player. Either plain text or LRC with
    *  `[mm:ss.xx]` time tags — LyricsView parses both. Populated from the
-   *  local file's id3 `lyrics` tag (PlayView) or the inspector's edited
-   *  lyrics (TrackInspector). Absent for most streaming rows. */
+   *  local file's id3 `lyrics` tag (WorkstationTable row) or the
+   *  inspector's edited lyrics (TrackInspector). Absent for most streaming
+   *  rows. */
   lyrics?: string;
   source: PlayerSource;
 }
@@ -47,6 +48,13 @@ interface PlayerState {
    *  particular preview is stalling" signal right next to the row
    *  that triggered it, rather than burying it in a global toast. */
   isBuffering: boolean;
+  /** Bumped by every seek() call. PlayerBar watches this counter (NOT
+   *  currentTime) to push the target position into the <audio> element.
+   *  Keying on a nonce is what lets seek() reach the audio element from
+   *  anywhere — the fullscreen NowPlaying slider, a lyric-line tap —
+   *  without looping with the onTimeUpdate mirror, which writes
+   *  currentTime but never touches this counter. */
+  seekNonce: number;
 
   /** Start playing a new track. Replaces currentTrack; resets currentTime
    *  to 0. Single-track only — there is no multi-track queue (previews are
@@ -60,6 +68,13 @@ interface PlayerState {
    *  onChange, not by a reactive effect (avoids a loop with onTimeUpdate). */
   seek: (sec: number) => void;
   setVolume: (v: number) => void;
+  /** Patch the currently-playing track's lyrics in place. Lyrics are often
+   *  absent from the store cache (scan-time reads skip them and the boot
+   *  hydrate only re-reads on a missing cover), so PlayButton fetches them
+   *  lazily after playback starts and calls this. No-op unless `id` matches
+   *  the current track — a late-arriving fetch from a row the user has since
+   *  navigated away from must not overwrite the new track's lyrics. */
+  setTrackLyrics: (id: string, lyrics: string) => void;
 
   // Mirrors from native <audio> events. Don't call from UI directly.
   setCurrentTime: (sec: number) => void;
@@ -84,6 +99,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   isPlaying: false,
   currentTime: 0,
   duration: 0,
+  seekNonce: 0,
   volume: loadInitialVolume(),
   error: null,
   isBuffering: false,
@@ -107,13 +123,25 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   pause: () => set({ isPlaying: false }),
   resume: () => set({ isPlaying: true }),
 
-  seek: (sec) => set({ currentTime: Math.max(0, sec) }),
+  // Bump seekNonce so PlayerBar's seek effect pushes the target into the
+  // <audio> element. Keyed on the nonce, not currentTime, so the
+  // onTimeUpdate mirror (which calls setCurrentTime, never seek) can't
+  // retrigger it into a loop.
+  seek: (sec) =>
+    set((s) => ({ currentTime: Math.max(0, sec), seekNonce: s.seekNonce + 1 })),
 
   setVolume: (v) => {
     const clamped = Math.max(0, Math.min(1, v));
     writeNumber(VOLUME_KEY, clamped);
     set({ volume: clamped });
   },
+
+  setTrackLyrics: (id, lyrics) =>
+    set((s) =>
+      s.currentTrack && s.currentTrack.id === id
+        ? { currentTrack: { ...s.currentTrack, lyrics } }
+        : {},
+    ),
 
   setCurrentTime: (sec) => set({ currentTime: sec }),
   setDuration: (sec) => set({ duration: sec }),

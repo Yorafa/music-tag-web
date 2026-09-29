@@ -1,6 +1,7 @@
 package tag
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -18,6 +19,22 @@ const lrcExt = ".lrc"
 // them is a reader that stops finding the file the app just wrote.
 func LyricsSidecarName(audioPath string) string {
 	return strings.TrimSuffix(audioPath, filepath.Ext(audioPath)) + lrcExt
+}
+
+// ReadLyricsSidecar returns the contents of the `<base>.lrc` sitting next to
+// audioPath, or "" when there is none (the common case) or it cannot be read.
+//
+// The read path (tag.Read) only sees embedded lyrics; a lyric that lives only
+// in a sidecar — written by an external tool, or by our own "保存到外部文件"
+// option on a file where the embed did not stick — would otherwise surface as
+// 暂无歌词 even though the file browser flags the track with a lyrics icon.
+// This is the read-side counterpart to HandleSidecars' write.
+func ReadLyricsSidecar(audioPath string) string {
+	b, err := os.ReadFile(LyricsSidecarName(audioPath))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(string(b), "\r\n")
 }
 
 // LyricsSidecarFor reports whether name is a lyrics sidecar and, if so, the

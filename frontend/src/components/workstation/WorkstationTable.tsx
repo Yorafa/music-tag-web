@@ -267,6 +267,7 @@ export function WorkstationTable({ activeRow, onSelectRow }: Props) {
                                   title: row.musicInfo?.title || row.fileName,
                                   artist: row.musicInfo?.artist || '',
                                   cover: coverSrc,
+                                  lyrics: row.musicInfo?.lyrics || undefined,
                                   source: {
                                     kind: 'local',
                                     fileName: row.fileName,

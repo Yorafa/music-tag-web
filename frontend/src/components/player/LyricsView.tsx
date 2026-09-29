@@ -18,12 +18,22 @@ interface Props {
   currentTime: number;
   /** Compact desktop-popover styling vs. roomy full-screen mobile. */
   variant?: 'compact' | 'full';
+  /** Seconds to shift the playhead by when picking the active line. A
+   *  positive value makes lines light up earlier (the track's lyrics run
+   *  ahead of the audio), negative later. Only affects synced LRC. */
+  offset?: number;
+  /** Seek to a line's timestamp when the listener taps it. Only wired for
+   *  synced LRC lines (a plain-text line has no time to jump to). The
+   *  passed time is the raw line timestamp; the caller (player) applies the
+   *  same `offset` correction on playback so tap-to-jump lands where the
+   *  highlight is. */
+  onSeek?: (time: number) => void;
   className?: string;
 }
 
-export function LyricsView({ lyrics, currentTime, variant = 'full', className }: Props) {
+export function LyricsView({ lyrics, currentTime, variant = 'full', offset = 0, onSeek, className }: Props) {
   const { lines, synced } = useMemo(() => parseLyrics(lyrics ?? ''), [lyrics]);
-  const activeIdx = synced ? activeLyricIndex(lines, currentTime) : -1;
+  const activeIdx = synced ? activeLyricIndex(lines, currentTime + offset) : -1;
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLParagraphElement>(null);
 
@@ -66,10 +76,27 @@ export function LyricsView({ lyrics, currentTime, variant = 'full', className }:
     >
       {lines.map((line, i) => {
         const isActive = synced && i === activeIdx;
+        // A synced line carries a timestamp, so tapping it can jump the
+        // playhead there. Plain-text lines (time === null) and the case
+        // where no onSeek handler is wired stay non-interactive.
+        const seekable = onSeek != null && line.time !== null;
         return (
           <p
             key={i}
             ref={isActive ? activeRef : undefined}
+            onClick={seekable ? () => onSeek(line.time as number) : undefined}
+            role={seekable ? 'button' : undefined}
+            tabIndex={seekable ? 0 : undefined}
+            onKeyDown={
+              seekable
+                ? (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onSeek(line.time as number);
+                    }
+                  }
+                : undefined
+            }
             className={cn(
               'transition-colors duration-300',
               synced
@@ -77,6 +104,7 @@ export function LyricsView({ lyrics, currentTime, variant = 'full', className }:
                   ? 'text-foreground font-medium'
                   : 'text-muted-foreground/50'
                 : 'text-foreground/80',
+              seekable && 'cursor-pointer hover:text-foreground',
               !line.text && 'h-4', // keep blank lines as spacing
             )}
           >

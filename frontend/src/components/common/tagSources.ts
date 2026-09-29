@@ -22,6 +22,30 @@ export const SOURCES: { id: MusicSource; name: string }[] = [
   { id: 'acoustid', name: 'AcoustID 声纹' },
 ];
 
+/** The sources whose plugins implement FetchLyric (SupportsLyric=true on
+ *  the backend: netease/qmusic/kugou/kuwo/migu). musicbrainz and acoustid
+ *  never return a lyric, so a lyric fetch that asked them would waste a
+ *  round trip and could mask a real hit behind a slower source. Ordered by
+ *  rough reliability so a fall-through fetch tries the likeliest first. */
+export const LYRIC_CAPABLE_SOURCES: MusicSource[] = [
+  'netease',
+  'qmusic',
+  'kugou',
+  'kuwo',
+  'migu',
+];
+
+/** The order to try sources for a lyric fetch: the user's own selection
+ *  first (so their preferred source wins), narrowed to the ones that can
+ *  actually return a lyric, then the remaining lyric-capable sources as a
+ *  fallback so a user who only ticked musicbrainz still gets lyrics from
+ *  somewhere rather than nothing. */
+export function lyricSourceOrder(chosen: MusicSource[]): MusicSource[] {
+  const preferred = chosen.filter((s) => LYRIC_CAPABLE_SOURCES.includes(s));
+  const rest = LYRIC_CAPABLE_SOURCES.filter((s) => !preferred.includes(s));
+  return [...preferred, ...rest];
+}
+
 /** Add or remove one source from a selection.
  *
  *  The last remaining source cannot be removed. A zero-source search is not

@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Pause, Volume2, VolumeX, Mic2 } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX } from 'lucide-react';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import { recordOperationLog } from '@/api/client';
 import { sourceErrorMessage } from '@/lib/streamUrl';
 import { NowPlaying } from '@/components/player/NowPlaying';
-import { LyricsView } from '@/components/player/LyricsView';
-import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 
 function formatTime(s: number): string {
   if (!Number.isFinite(s) || s < 0) return '0:00';
@@ -71,6 +69,7 @@ export function PlayerBar() {
   const togglePlay = usePlayerStore((s) => s.togglePlay);
   const pause = usePlayerStore((s) => s.pause);
   const seek = usePlayerStore((s) => s.seek);
+  const seekNonce = usePlayerStore((s) => s.seekNonce);
   const setVolume = usePlayerStore((s) => s.setVolume);
   const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
   const setDuration = usePlayerStore((s) => s.setDuration);
@@ -82,6 +81,25 @@ export function PlayerBar() {
     if (!el) return;
     el.volume = volume;
   }, [volume]);
+
+  // Reactive seek: push the requested time into the <audio> element when a
+  // seek is issued from OUTSIDE this bar (NowPlaying's slider, a lyric tap).
+  // Those surfaces can only reach the store, not the element, so without this
+  // they'd move `currentTime` for one render and the next onTimeUpdate would
+  // mirror the real (unchanged) playhead right back — the "highlight jumps to
+  // the tapped line, then the song snaps back" bug.
+  //
+  // Keyed on seekNonce, NOT currentTime: the onTimeUpdate mirror writes
+  // currentTime every ~250ms via setCurrentTime, which does NOT bump the
+  // nonce, so this effect stays inert during normal playback and can't loop
+  // with the mirror. It fires only when seek() is actually called. The
+  // initial nonce=0 render is skipped so a fresh mount doesn't force a seek.
+  useEffect(() => {
+    if (seekNonce === 0) return;
+    const el = audioRef.current;
+    if (!el) return;
+    el.currentTime = usePlayerStore.getState().currentTime;
+  }, [seekNonce]);
 
   // Track swap OR play/pause toggle: load + play / pause accordingly.
   // Combined effect (instead of two with overlapping deps) to avoid
@@ -258,8 +276,18 @@ export function PlayerBar() {
         onPause={() => setIsBuffering(false)}
       />
 
-      {/* Cover */}
-      <div className="w-10 h-10 rounded overflow-hidden bg-muted shrink-0">
+      {/* Cover — tap to open the full-screen NowPlaying view (same
+          interaction as the mobile mini bar: cover → fullscreen, then a
+          second tap inside flips to lyrics). Disabled with nothing playing
+          so it doesn't pop an empty overlay. */}
+      <button
+        type="button"
+        onClick={() => currentTrack && setNowPlayingOpen(true)}
+        disabled={!currentTrack}
+        aria-label="展开播放界面"
+        title="展开播放界面"
+        className="w-10 h-10 rounded overflow-hidden bg-muted shrink-0 disabled:cursor-default enabled:cursor-pointer enabled:hover:ring-2 enabled:hover:ring-primary/40"
+      >
         {currentTrack?.cover ? (
           <img
             src={currentTrack.cover}
@@ -271,7 +299,7 @@ export function PlayerBar() {
             ♪
           </div>
         )}
-      </div>
+      </button>
 
       {/* Track meta */}
       <div className="min-w-0 w-44 shrink-0">
@@ -345,38 +373,6 @@ export function PlayerBar() {
         />
       </div>
 
-      {/* Lyrics — popover panel anchored to the bar so the thin strip
-          doesn't have to grow. Disabled when the current track carries no
-          lyric body (most streaming rows). */}
-      <Popover>
-        <PopoverTrigger
-          render={
-            <button
-              type="button"
-              disabled={!currentTrack?.lyrics}
-              aria-label="歌词"
-              title={currentTrack?.lyrics ? '歌词' : '暂无歌词'}
-              className="p-1.5 rounded hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed text-muted-foreground hover:text-foreground shrink-0"
-            >
-              <Mic2 className="w-4 h-4" />
-            </button>
-          }
-        />
-        <PopoverContent align="end" sideOffset={8} className="w-80">
-          <div className="mb-2 min-w-0">
-            <div className="text-sm font-medium truncate">{currentTrack?.title}</div>
-            <div className="text-xs text-muted-foreground truncate">
-              {currentTrack?.artist || '未知艺术家'}
-            </div>
-          </div>
-          <LyricsView
-            lyrics={currentTrack?.lyrics}
-            currentTime={currentTime}
-            variant="compact"
-            className="max-h-72"
-          />
-        </PopoverContent>
-      </Popover>
       </div>
 
       {/* Mobile mini bar (below 640px). Plan B decision #10: bottom
