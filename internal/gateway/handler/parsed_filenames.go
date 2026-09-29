@@ -27,8 +27,7 @@
 //
 // Security: every path is SafeJoined here and SafeAbs'd again on the way
 // out — TrimPrefix is a no-op when the prefix does not match, so
-// SafeJoin would otherwise treat an absolute path as relative (REVIEW.md
-// P2-6).
+// SafeJoin would otherwise treat an absolute path as relative.
 package handler
 
 import (
@@ -181,8 +180,7 @@ func ApplyParsedFilenames(c *gin.Context) {
 		// Cheap; runs once per row. SafeAbs rather than
 		// SafeJoin(TrimPrefix(...)) for the reason in update.go —
 		// TrimPrefix is a no-op when the prefix does not match, and
-		// SafeJoin would then treat the absolute path as relative
-		// (REVIEW.md P2-6).
+		// SafeJoin would then treat the absolute path as relative.
 		safe, sErr := utils.SafeAbs(root, row.Path)
 		if sErr != nil {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{

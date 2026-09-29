@@ -58,7 +58,7 @@ function setAuthCookie(token: string) {
   // is — same-origin SPA) and on top-level GET navigations. Lax blocks
   // cross-site POST CSRF without breaking our cross-page navigation.
   //
-  // Secure (REVIEW.md P1-1) is added only under HTTPS. Emitting it
+  // Secure is added only under HTTPS. Emitting it
   // unconditionally would make browsers drop the cookie on a plain-HTTP
   // install, breaking every <audio> stream — the common case for a
   // self-hosted tool on http://192.168.x.x.

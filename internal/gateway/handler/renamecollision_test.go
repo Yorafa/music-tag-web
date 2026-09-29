@@ -12,7 +12,7 @@ import (
 	"go-music-tag/internal/utils"
 )
 
-// TestApplyFileUpdate_RefusesToOverwrite pins REVIEW.md P2-6.
+// TestApplyFileUpdate_RefusesToOverwrite
 //
 // os.Rename silently replaces its destination. Two tracks whose filename
 // templates render to the same name — which happens as soon as the template

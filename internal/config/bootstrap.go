@@ -199,7 +199,7 @@ func loadOrGenerate() *bootstrapCreds {
 	}
 	if err := writeBootstrap(c); err != nil {
 		log.Fatalf("[config] FATAL: cannot persist bootstrap creds to %s: %v\n"+
-			"  The containers now run as uid/gid 10001 (REVIEW.md P3-2), so the host\n"+
+			"  The containers run as uid/gid 10001, so the host\n"+
 			"  bind mount has to belong to that user — a ./data left root-owned by an\n"+
 			"  earlier version is the usual cause.\n"+
 			"  Fix: chown -R 10001:10001 ./data ./music (and ./music for the library),\n"+

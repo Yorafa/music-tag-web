@@ -54,8 +54,8 @@ func TestMain(m *testing.M) {
 		config.OverrideBootstrapPathForTest(filepath.Join(dir, ".bootstrap-creds"))
 	}
 
-	// REVIEW.md P1-2: the stream handler now runs every plugin-supplied
-	// upstream URL through netguard, which default-denies loopback. The
+	// The stream handler runs every plugin-supplied upstream URL through
+	// netguard, which default-denies loopback. The
 	// stream specs deliberately point at httptest servers on 127.0.0.1, so
 	// the guard has to resolve to a public IP for this test binary only.
 	// The deny path is not lost — TestStreamAudio_SSRFGuardRejectsPrivateUpstream

@@ -150,7 +150,7 @@ func TestCORS_NoOriginHeaderOmitsHeaders(t *testing.T) {
 	}
 }
 
-// TestCORS_PreflightAllowsRangeHeader is REVIEW.md P3-6.
+// TestCORS_PreflightAllowsRangeHeader
 //
 // `Range` is not a CORS-safelisted request header, so a cross-origin
 // ranged request is preflighted and the browser compares the header it

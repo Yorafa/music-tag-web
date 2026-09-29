@@ -3,8 +3,8 @@ FROM golang:alpine AS builder
 # go-sqlite3 needs cgo; pure alpine + CGO_ENABLED=0 produces a stub that
 # crashes worker at boot with "Binary was compiled with 'CGO_ENABLED=0'".
 #
-# REVIEW.md P3-3: UPX is gone — packing a cgo/musl binary is fragile and
-# breaks the debugger and the profiler, for a few MB.
+# 不做 UPX 压缩：cgo/musl 二进制压缩后脆弱，调试器和 profiler 都失效，换来的
+# 只有几 MB。
 RUN apk add --no-cache git gcc musl-dev
 
 WORKDIR /build
@@ -33,9 +33,8 @@ FROM fpcalbase
 # Dockerfile.base.
 ENV TZ=Asia/Shanghai
 
-# REVIEW.md P3-2: run unprivileged. The worker writes into the music
-# library (tagging, tidy, yt-dlp staging), so a root process here would
-# hand a compromised plugin a root shell on the host.
+# 以非 root 运行。worker 对音乐库有写权限（写标签、整理目录、yt-dlp 落盘），
+# 所以这里的 root 意味着「被攻破的插件能拿到宿主机 root shell」。
 #
 # See Dockerfile.gateway for why the uid is fixed and what the operator has
 # to chown on the host.

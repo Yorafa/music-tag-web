@@ -271,7 +271,7 @@ var miguListenURL = "http://pd.musicapp.migu.cn/MIGUM3.0/v1.0/content/sub/listen
 // data/sources/migu.yaml are silently no-ops in
 // (*plugin.Registry).RefreshOverrides.
 func (s *Server) SetAPIBase(apiBase string) {
-	// Reject anything that is not https (REVIEW.md P1-4): both baseURL and
+	// Reject anything that is not https: both baseURL and
 	// miguListenURL feed requests carrying the user's search term and the
 	// signed audio URL, so an unvalidated override would expose both in
 	// transit and redirect them to a caller-chosen host. Checked before any

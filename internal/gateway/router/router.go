@@ -115,7 +115,7 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// because a rename is an os.Rename and the work is bounded by
 		// the selection the operator just made.
 		authed.POST("/tag/apply_rename_from_tags/", handler.ApplyRenameFromTags)
-		// Side-effecting task routes are POST, not GET (REVIEW.md P1-1).
+		// Side-effecting task routes are POST, not GET.
 		// JWTAuth also accepts the JWT from an AUTHORIZATION cookie (the
 		// frontend writes a JS-readable one so <audio> can authenticate),
 		// and SameSite=Lax still sends that cookie on a top-level GET
@@ -133,10 +133,9 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		authed.POST("/audio_cache/clear/", handler.ClearAudioCache)
 		authed.POST("/full_scan_folder/", handler.FullScanFolder)
 		// Incremental scan. The handler and the worker-side registration
-		// (tasks.NewUpdateScanMux → TypeUpdateScanFolder) both existed, but
-		// the route was never mounted, so the feature was unreachable over
-		// HTTP — a complete double failure (REVIEW.md P2-4). POST for the
-		// same reason as the routes above.
+		// (tasks.NewUpdateScanMux → TypeUpdateScanFolder) both exist, so
+		// the route must be mounted — POST for the same reason as the
+		// routes above.
 		authed.POST("/update_scan_folder/", handler.UpdateScanFolder)
 		// 空目录清理: what TidyFolder leaves behind. POST for the same
 		// reason as its neighbours — it mutates the filesystem.

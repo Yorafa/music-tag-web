@@ -27,9 +27,9 @@ func newScanTestDB(t *testing.T) *gorm.DB {
 	return d
 }
 
-// TestUpdateScan_RecordsAudioFiles pins REVIEW.md P2-4.
+// TestUpdateScan_RecordsAudioFiles.
 //
-// The old updateScan did `os.ReadDir(dir)` and skipped on error *before*
+// updateScan must not `os.ReadDir(dir)` and skip on error *before*
 // checking whether dir was a file. ReadDir on a file always returns
 // ENOTDIR, so the `if !isDir` branch was unreachable: an incremental scan
 // of a subtree of plain files recorded nothing at all.

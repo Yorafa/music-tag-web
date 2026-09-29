@@ -206,7 +206,7 @@ func UpdateScanFolder(c *gin.Context) {
 	})
 }
 
-// Pagination bounds shared by every list endpoint (REVIEW.md P2-9).
+// Pagination bounds shared by every list endpoint.
 //
 // ListTaskRecords previously passed page_size straight into Limit(), so
 // ?page_size=99999999 asked the DB for the whole table; audit.Query had

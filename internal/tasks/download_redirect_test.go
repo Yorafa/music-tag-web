@@ -8,10 +8,10 @@ import (
 )
 
 // The audio-download client caps redirects at 5 hops AND re-validates every
-// redirect target with downloadGuard (REVIEW.md P1-2). Before the per-hop
-// check, a plugin-supplied public URL could 302 the worker to
-// http://169.254.169.254/ or an RFC 1918 host and the hop-count cap alone
-// would follow it — the SSRF guard only ran on the initial URL. These specs
+// redirect target with downloadGuard. Both are required: a hop-count cap
+// alone still follows a plugin-supplied public URL that 302s the worker to
+// http://169.254.169.254/ or an RFC 1918 host, because the guard would
+// only ever have run on the initial URL. These specs
 // exercise the downloadCheckRedirect policy directly so the assertion does not
 // depend on a live redirect round-trip.
 

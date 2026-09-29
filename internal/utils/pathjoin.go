@@ -107,7 +107,7 @@ func SafeAbs(root, absPath string) (string, error) {
 // the check this replaces was strings.Contains(cleaned, ".."), which
 // rejected the perfectly ordinary directory name "Album..Deluxe" and
 // "1997..2000 Remaster" while every real traversal — "../x", "a/../../x" —
-// is segment-shaped and caught either way (REVIEW.md P3-7).
+// is segment-shaped and caught either way.
 //
 // This validates the SHAPE of the path. Containment is proved separately by
 // joining through SafeJoin at the point of use, so the check at the request

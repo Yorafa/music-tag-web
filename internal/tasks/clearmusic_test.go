@@ -6,9 +6,9 @@ import (
 	"go-music-tag/internal/db"
 )
 
-// TestClearMusicUsesModelTableNames pins REVIEW.md P2-10.
+// TestClearMusicUsesModelTableNames.
 //
-// clear_music's MySQL scrub listed tables as string literals — "track",
+// clear_music's MySQL scrub must not list tables as string literals — "track",
 // "album", "task_record", "track_attachment" — none of which match the
 // models' actual TableName() (music_track, music_album, task_taskrecord,
 // music_attachment). Because the OPTIMIZE error was logged and ignored,

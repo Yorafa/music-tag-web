@@ -29,9 +29,8 @@ FROM golang:alpine AS builder
 
 ARG PLUGIN=netease
 #
-# REVIEW.md P3-3: UPX is gone. Packing Go binaries is fragile (a packed
-# binary that traps in the wrong place is undebuggable) and it disables the
-# profiler for a ~10 MB saving.
+# 不做 UPX 压缩：压缩过的 Go 二进制出了错就很难定位，而且会关掉 profiler，
+# 换来的是 ~10 MB。
 RUN apk add --no-cache git
 
 WORKDIR /build
@@ -60,9 +59,8 @@ FROM alpine:3.20 AS runtime_plain
 #
 # yt-dlp is installed fresh via pip rather than Alpine's frozen 2024.x
 # package, which breaks YouTube signature extraction weekly — but the
-# version is PINNED (REVIEW.md P3-10). `--pre` used to pull the nightly, so
-# two builds of the same commit shipped different binaries and a nightly
-# regression was indistinguishable from a code change. Bump YTDLP_VERSION
+# version is PINNED. 固定版本而不是拉 nightly：否则同一个 commit 的两次构建
+# 会带进不同的二进制，nightly 的回归和代码改动无法区分。Bump YTDLP_VERSION
 # deliberately; it is a build arg, so pinning it in CI is one --build-arg
 # away rather than an edit.
 # ffmpeg is required by yt-dlp's --extract-audio post-processor (the worker
@@ -92,7 +90,7 @@ FROM alpine:3.20 AS runtime_plain
 ARG PLUGIN=netease
 FROM ${RUNTIME_BASE} AS runtime
 ARG PLUGIN=netease
-# REVIEW.md P3-10. Latest stable at the time of writing; Alpine 3.20 ships
+# Latest stable at the time of writing; Alpine 3.20 ships
 # Python 3.12, which yt-dlp supports.
 ARG YTDLP_VERSION=2026.8.19
 RUN apk add --no-cache ca-certificates tzdata
@@ -126,7 +124,7 @@ RUN if [ "${PLUGIN}" = "youtube" ]; then \
          # /usr/lib/python3.12/... literally stopped matching anything the
          # day Alpine moved its Python, and `rm -rf` on a stale path fails
          # silently, so the "optimisation" would just quietly stop
-         # happening (REVIEW.md P3-10).
+         # happening.
          && PYSITE="$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" \
          && rm -rf "${PYSITE}/pip" "${PYSITE}"/setuptools* \
                    "${PYSITE}"/pkg_resources* "${PYSITE}"/_distutils_hack \
@@ -144,10 +142,9 @@ RUN if [ "${PLUGIN}" = "youtube" ]; then \
        fi
 ENV TZ=Asia/Shanghai
 
-# REVIEW.md P3-2: run unprivileged. A plugin is the least trusted process in
-# the stack — it parses third-party API responses and shells out to yt-dlp —
-# and the youtube one writes into the shared audio cache, so root here is
-# root on the host.
+# 以非 root 运行。插件是整条链路里最不可信的进程——
+# 它解析第三方 API 的响应、shell out 到 yt-dlp，youtube 插件还会写共享的音频
+# 缓存，所以这里的 root 就是宿主机的 root。
 #
 # See Dockerfile.gateway for why the uid is fixed and what the operator has
 # to chown on the host. The audio cache is a NAMED volume, so Docker seeds a

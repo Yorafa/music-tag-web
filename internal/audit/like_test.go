@@ -7,7 +7,7 @@ import (
 	"go-music-tag/internal/audit"
 )
 
-// TestQuery_SearchTreatsWildcardsAsLiterals covers REVIEW.md P3-5.
+// TestQuery_SearchTreatsWildcardsAsLiterals
 //
 // The search term is user input bound into a LIKE pattern, so a `%` or `_`
 // in it acted as a wildcard: searching the audit log for `100%` matched

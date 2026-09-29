@@ -104,11 +104,10 @@ func TestFullScanSkipsSymlinks(t *testing.T) {
 	}
 }
 
-// TestFullScan_Idempotent is the acceptance criterion for REVIEW.md P2-5:
-// "重复全量扫描后行数不变".
+// TestFullScan_Idempotent: "重复全量扫描后行数不变".
 //
-// The pre-fix scanner minted a fresh uid per entry and blind-INSERTed it,
-// so every run added a complete second (third, fourth...) copy of the
+// A scanner that mints a fresh uid per entry and blind-INSERTs it adds a
+// complete second (third, fourth...) copy of the
 // library. This asserts the row count is stable across repeated scans, and
 // — just as important — that the uids are stable too: children point at
 // their parent's uid, so a scanner that only deduplicated by path while

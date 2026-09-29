@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-// TestSafeRelPath_RejectsTraversal pins the shape check that replaced
-// `strings.Contains(cleaned, "..")` in the download handlers (REVIEW.md
-// P3-7).
+// TestSafeRelPath_RejectsTraversal pins the shape check the download
+// handlers use. A substring test on ".." is the wrong shape: it also
+// rejects the ordinary directory name "Album..Deluxe".
 func TestSafeRelPath_RejectsTraversal(t *testing.T) {
 	bad := []string{
 		"..",

@@ -57,7 +57,7 @@ func doGuarded(t *testing.T, r *gin.Engine, authHeader string) *httptest.Respons
 	return w
 }
 
-// TestJWTAuth_RejectsRefreshToken pins REVIEW.md P2-8. The refresh token is
+// TestJWTAuth_RejectsRefreshToken. The refresh token is
 // only meant to be redeemed at /api/token/refresh/; if the route guard accepts
 // it as a bearer credential the 2h/7d access/refresh split buys nothing — a
 // leaked 7-day refresh token would grant a week of full API access.

@@ -144,10 +144,10 @@ func containsPlaceholderAdminPair(raw string) bool {
 	return false
 }
 
-// ─── Boot-time vs request-time config (REVIEW.md P0-3) ────────────────────
+// ─── Boot-time vs request-time config ────────────────────────────────────
 //
-// Load() used to be called from BOTH main() and every auth handler. Because
-// Load() unconditionally ran ensureBootstrap() — which reads AND rewrites
+// Load() belongs in main() and nowhere else. Because
+// Load() unconditionally runs ensureBootstrap() — which reads AND rewrites
 // ./data/.bootstrap-creds — that meant every unauthenticated POST
 // /api/token/ performed a file read + write + rename. Three consequences:
 //

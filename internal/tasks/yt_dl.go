@@ -29,7 +29,7 @@ import (
 //
 // A download has two possible keys — the video id (its long-term identity:
 // the same video fetched again must update one row, not accumulate copies)
-// and the path it landed on (unique since REVIEW.md P2-5, and already
+// and the path it landed on (unique, and already
 // claimed by the scanner for anything it has walked). The two can disagree,
 // so all four combinations are handled explicitly:
 //
@@ -329,7 +329,7 @@ func (h *DownloadHandler) runDownloadSource(ctx context.Context, payload *Downlo
 }
 
 // downloadGuard is the SSRF guard applied to plugin-supplied audio URLs
-// in runTagSource (REVIEW.md P1-2). Package-level so the resolver is
+// in runTagSource. Package-level so the resolver is
 // resolved once; tests inject their own via downloadGuard.Resolver.
 var downloadGuard = netguard.NewGuard()
 
@@ -356,7 +356,7 @@ func downloadCheckRedirect(req *http.Request, via []*http.Request) error {
 //
 // Security: audioURL is plugin-supplied, so it is SSRF-relevant input —
 // the guard below rejects private / loopback / link-local targets before
-// we connect (REVIEW.md P1-2). We also use an explicit outbound client
+// we connect. We also use an explicit outbound client
 // with a timeout and a 50 MiB body cap so a malicious upstream can't
 // exhaust the worker. We send a generic browser User-Agent and a
 // music-platform Referer because several CDNs 403 without them.
@@ -378,7 +378,7 @@ func (h *DownloadHandler) runTagSource(ctx context.Context, payload *DownloadPay
 		return fmt.Errorf("download: unsupported audio URL scheme %q", u.Scheme)
 	}
 
-	// SSRF gate (REVIEW.md P1-2). audioURL came from the plugin's
+	// SSRF gate. audioURL came from the plugin's
 	// GetAudioURL, so a buggy or compromised plugin could aim the worker at
 	// 127.0.0.1 or a link-local metadata endpoint. Default-deny, matching
 	// the gateway's stream handler and the cover-art fetch path.
@@ -495,7 +495,7 @@ func (h *DownloadHandler) runTagSource(ctx context.Context, payload *DownloadPay
 // streamable set, because a cache file whose extension the gateway's
 // filterAudioMatches does not recognise is invisible to /api/stream — the
 // download "succeeds" and playback then 202-loops until the frontend's
-// retry budget is exhausted (REVIEW.md P0-4).
+// retry budget is exhausted.
 //
 // This previously used mime.ExtensionsByType and returned exts[0], which on
 // this platform yields:
@@ -565,7 +565,7 @@ func findDownloadedFile(dir, videoID string) (string, int64, error) {
 		if !strings.HasPrefix(name, videoID+".") {
 			continue
 		}
-		// Shared whitelist (REVIEW.md P0-4): must agree with the
+		// Shared whitelist: must agree with the
 		// gateway's filterAudioMatches, or the worker reports success for
 		// a file /api/stream will never serve.
 		if !audioext.IsStreamablePath(name) {
@@ -642,7 +642,7 @@ func copyFile(src, dst string) error {
 // (e.g. frontend asks for .ogg but yt-dlp kept .opus), the real cache
 // extension wins so the on-disk file stays playable.
 //
-// The join goes through utils.SafeJoin (REVIEW.md P3-7) so containment is
+// The join goes through utils.SafeJoin so containment is
 // proven where the path is built rather than inferred from a check that ran
 // somewhere else on a possibly different string.
 func resolveLibraryDest(musicRoot, dest, cachePath string) (string, error) {

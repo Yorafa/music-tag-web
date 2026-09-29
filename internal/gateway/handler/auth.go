@@ -143,11 +143,9 @@ func Login(c *gin.Context) {
 
 	cfg := config.Current()
 
-	// Two genuinely different tokens (REVIEW.md P2-8). Both used to be
-	// generateJWT(secret, username) with identical claims and a 7-day TTL,
-	// so the refresh token WAS the access token: leaking either gave full
-	// access for a week, and the refresh endpoint bought no extra security
-	// boundary at all.
+	// access token 和 refresh token 必须是真的两种：claim 不同、有效期不同。
+	// 两者可以互换的话，泄露任意一个都等于泄露全部，refresh 接口也不再构成
+	// 任何安全边界。
 	accessToken, _ := generateAccessToken(cfg.JWTSecret, req.Username)
 	refreshToken, _ := generateRefreshToken(cfg.JWTSecret, req.Username)
 
@@ -229,7 +227,7 @@ func VerifyToken(c *gin.Context) {
 	SuccessData(c, gin.H{})
 }
 
-// Token lifetimes and the discriminator claim (REVIEW.md P2-8).
+// Token lifetimes and the discriminator claim.
 //
 // The access token is what the browser sends on every request, including
 // from the JS-readable cookie, so it is deliberately short-lived. The

@@ -68,12 +68,12 @@ func (h *ClearMusicHandler) ProcessTask(ctx context.Context, _ Task) error {
 		}
 	case "mysql":
 		// Table names come from the models' own TableName() rather than
-		// string literals (REVIEW.md P2-10). The old literals were all
-		// wrong — "track" vs music_track, "task_record" vs
-		// task_taskrecord, "track_attachment" vs music_attachment — and
-		// because the error was logged and ignored, every OPTIMIZE had
-		// been failing silently for the life of the feature. Deriving the
-		// names means a future model rename cannot desync this list.
+		// string literals: the real names are music_track /
+		// task_taskrecord / music_attachment, and a hand-written list
+		// desyncs the moment a model is renamed. The error here is
+		// logged and ignored on purpose — an OPTIMIZE that cannot run is
+		// not worth failing a destructive clear over — which is exactly
+		// why the names must be derived rather than typed.
 		for _, table := range []string{
 			db.TaskRecord{}.TableName(),
 			db.Track{}.TableName(),

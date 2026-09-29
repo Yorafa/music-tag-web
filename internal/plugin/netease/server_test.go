@@ -500,10 +500,9 @@ func TestRandomString_NoModuloBias(t *testing.T) {
 	}
 }
 
-// TestEncryptWeapi_PropagatesRandomFailure is REVIEW.md P3-4's actual
-// point: the old code swallowed a crypto/rand failure and produced a
-// secKey from an unseeded math/rand, so a broken entropy source silently
-// downgraded the key instead of refusing the request. crypto/rand cannot
+// TestEncryptWeapi_PropagatesRandomFailure pins the actual point: a
+// crypto/rand failure must refuse the request, not silently downgrade the
+// secKey to a predictable math/rand value. crypto/rand cannot
 // be made to fail on demand, so the read is behind a seam and stubbed
 // here.
 func TestEncryptWeapi_PropagatesRandomFailure(t *testing.T) {

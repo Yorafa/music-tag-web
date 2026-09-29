@@ -519,7 +519,7 @@ func contains(s, sub string) bool {
 	return false
 }
 
-// ─── SSRF guard (REVIEW.md P1-2) ───────────────────────────────────────────
+// ─── SSRF guard ───────────────────────────────────────────────────────────
 
 // TestStreamAudio_SSRFGuardRejectsPrivateUpstream pins the deny path.
 //

@@ -16,7 +16,7 @@ type folderRow struct {
 }
 
 // DedupeFolderPaths collapses duplicate music_folder rows down to one per
-// path, so the unique index on `path` (REVIEW.md P2-5) can be created.
+// path, so the unique index on `path` can be created.
 //
 // Legacy DBs are exactly the ones that need this: fullScan blind-INSERTed
 // a fresh uid for every entry on every run, so a library scanned N times

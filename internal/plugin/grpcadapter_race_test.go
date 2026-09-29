@@ -7,11 +7,11 @@ import (
 	pb "go-music-tag/api/proto/tagplugin"
 )
 
-// TestGRPCTagSource_AccessorsBeforeHandshake pins REVIEW.md P2-11's nil
-// case. SupportsSearch and SupportsLyric dereferenced the cached info
-// without a nil guard, while their siblings SupportsId3 / SupportsAudioURL
-// did guard. That was safe only under an implicit invariant nothing
-// enforced: "no accessor is called before a successful handshake".
+// TestGRPCTagSource_AccessorsBeforeHandshake pins the nil case on every
+// accessor. SupportsSearch and SupportsLyric used to dereference the cached
+// info without a nil guard while their siblings SupportsId3 /
+// SupportsAudioURL did guard — safe only under an implicit invariant
+// nothing enforced: "no accessor is called before a successful handshake".
 //
 // Name() breaks that invariant on its own — on a failed ensureConn it
 // returns with nothing cached — so a caller that touches Name() then asks

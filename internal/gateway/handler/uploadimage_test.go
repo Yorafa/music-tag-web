@@ -102,9 +102,8 @@ func assertRejected(t *testing.T, w *httptest.ResponseRecorder, wantMsg string) 
 	}
 }
 
-// TestUploadImage_RejectsNonImage pins REVIEW.md P2-12: the bytes go
-// straight into an APIC frame, so a non-image body must be refused rather
-// than poisoning the tag.
+// TestUploadImage_RejectsNonImage: the bytes go straight into an APIC
+// frame, so a non-image body must be refused rather than poisoning the tag.
 func TestUploadImage_RejectsNonImage(t *testing.T) {
 	cases := map[string][]byte{
 		"plain text":  []byte("this is definitely not an image"),

@@ -99,21 +99,16 @@ func FileList(c *gin.Context) {
 			continue
 		}
 
-		// Case-insensitive via audioext (REVIEW.md P2-2): the previous
-		// literal map was keyed on lowercase but compared against the raw
-		// extension, so `Track.MP3` / `song.FLAC` were silently dropped from
-		// the listing even though the tag editor would happily write them.
+		// 扩展名先转小写再交给 audioext 判定：`Track.MP3` / `song.FLAC` 这类
+		// 大写扩展名标签编辑器写得进去，不能在列表里看不见。
 		ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))
 		if !audioext.IsLibraryExt(ext) {
 			continue
 		}
 
-		// Sidecar lyric detection (REVIEW.md P2-3): the old code checked
-		// `lyricExts[ext]` *after* the audio-extension guard above, so the
-		// branch was unreachable (lrc/txt are not audio) and lrcMap stayed
-		// empty forever — `icon-script-files` could never be emitted. Probe
-		// the filesystem for a same-stem .lrc instead, which is what the
-		// icon actually means: "this track has lyrics next to it".
+		// 歌词图标探的是磁盘上有没有同名的 .lrc，而不是拿 lrc/txt 扩展名去猜：
+		// 这个图标的含义是「这首歌旁边放着歌词」，而 lrc/txt 本身不是音频，
+		// 走上面那道音频扩展名守卫的话这个分支永远进不去。
 		baseName := strings.TrimSuffix(name, "."+ext)
 		icon := "icon-script-file"
 		for lyricExt := range lyricExts {

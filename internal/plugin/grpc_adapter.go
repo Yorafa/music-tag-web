@@ -91,10 +91,10 @@ type GRPCTagSource struct {
 	client pb.TagSourceClient
 
 	// info is read by Supports* / Name / DisplayName on request goroutines
-	// while ensureConn writes it, so it is atomic rather than a plain field
-	// (REVIEW.md P2-11). The old code wrote it under g.mu but read it with
-	// no lock at all — a genuine data race on the reconnect path, where a
-	// Shutdown-then-dial overlaps in-flight requests.
+	// while ensureConn writes it, so it is atomic rather than a plain field.
+	// It must NOT be guarded by g.mu: reading it happens on request
+	// goroutines, and taking the write lock there would serialise every
+	// request behind a reconnect.
 	info atomic.Pointer[pb.PluginInfoResponse]
 }
 
@@ -176,7 +176,7 @@ func (g *GRPCTagSource) DisplayName() string {
 	return ""
 }
 
-// The Supports* gates all nil-guard (REVIEW.md P2-11). SupportsSearch and
+// The Supports* gates all nil-guard. SupportsSearch and
 // SupportsLyric used to dereference g.info directly while their siblings
 // checked for nil; that only stayed safe because of an implicit invariant —
 // "nothing calls these before a successful handshake". Nothing enforced it,
@@ -288,7 +288,7 @@ type GRPCDownloadSource struct {
 	conn   *grpc.ClientConn
 	client pb.DownloadSourceClient
 
-	// Same reasoning as GRPCTagSource.info (REVIEW.md P2-11): written by
+	// Same reasoning as GRPCTagSource.info: written by
 	// ensureConn under mu, read by Name/DisplayName without it.
 	info atomic.Pointer[pb.DownloadPluginInfoResponse]
 }

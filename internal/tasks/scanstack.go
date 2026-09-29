@@ -32,7 +32,7 @@ import (
 // Two things this deliberately does NOT do:
 //
 //   - It does not resolve symlinks. The scanner already skips symlinked
-//     entries (REVIEW.md P1-5 H5), so a link inside the tree cannot lead the
+//     entries, so a link inside the tree cannot lead the
 //     walk out; resolving here would instead reject a legitimate
 //     MUSIC_DIR that IS a symlink, which is a supported deployment.
 //   - It does not validate parent_uid. That is untrusted too, but with the

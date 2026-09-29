@@ -11,10 +11,10 @@ import (
 	"go-music-tag/internal/db"
 )
 
-// sub_paths arrives in a request body and used to become the walk root
-// verbatim, in all three handlers that take it. The prunes' half was fixed
-// because it deletes; these two only wrote index rows, so it was recorded as
-// a known gap (REVIEW.md 6-1) rather than fixed. The harm is real either way:
+// sub_paths arrives in a request body and can become the walk root
+// verbatim, in all three handlers that take it. The prunes' half is fixed
+// because it deletes; these two only write index rows, so the gap is
+// recorded here rather than fixed. The harm is real either way:
 // a scanned directory becomes a db.Folder row, and rows are what the
 // duplicate-detection candidate queries and the stream handler read.
 //

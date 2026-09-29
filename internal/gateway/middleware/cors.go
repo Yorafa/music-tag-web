@@ -47,7 +47,7 @@ func CORS(cfg *config.Config) gin.HandlerFunc {
 			c.Header("Vary", "Origin")
 		}
 		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-		// REVIEW.md P3-6: `Range` was missing, so a cross-origin ranged
+		// `Range` must be allowed explicitly, or a cross-origin ranged
 		// request — anything a browser only sends after a preflight, i.e.
 		// any fetch() that wants to seek in /media/* — was rejected at the
 		// preflight and never reached the handler. Seeking in an audio

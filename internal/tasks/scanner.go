@@ -26,7 +26,7 @@ import (
 // The former `audioExt` literal here was the third of four copies of the
 // audio-extension whitelist; it now lives in internal/audioext so the
 // scanner can never diverge from the file browser / tag writer again
-// (REVIEW.md P2-1). Use audioext.IsLibraryExt for audio checks.
+// Use audioext.IsLibraryExt for audio checks.
 var coverExt = map[string]bool{"jpg": true, "jpeg": true, "png": true}
 
 // UpdateScanPayload 与 FullScanPayload 同 schema（worker 入口可选传 sub_paths）。
@@ -63,10 +63,9 @@ func (h *FullScanHandler) fullScan(ctx context.Context, subPaths [][2]string) er
 	stack := scanStack(musicFolder, subPaths)
 	const batchSize = 500
 	batch := make([]db.Folder, 0, batchSize)
-	// REVIEW.md P2-5: a second full scan used to INSERT a brand-new uid for
-	// every path, doubling the table each time. Reuse the uid already on
-	// disk so the folder tree keeps its identity, and let flushBatch's
-	// upsert refresh the row in place.
+	// Reuse the uid already on disk for every path, and let flushBatch's
+	// upsert refresh the row in place. A blind INSERT here would give every
+	// path a fresh uid on each scan and double the table every time.
 	uidByPath := loadFolderUIDs(h.DB)
 	for len(stack) > 0 {
 		select {
@@ -212,7 +211,7 @@ func uidForPath(m map[string]string, path string) string {
 }
 
 // flushBatch writes a batch of folder rows, refreshing any path that is
-// already on disk rather than inserting beside it (REVIEW.md P2-5).
+// already on disk rather than inserting beside it.
 //
 // `uid` is deliberately absent from the update list: the uid is the row's
 // identity, children point at it, and the caller has just re-read it from
@@ -299,7 +298,7 @@ func (h *UpdateScanHandler) updateScan(ctx context.Context, subPaths [][2]string
 		if dir == ignoreData {
 			continue
 		}
-		// Type-check BEFORE ReadDir (REVIEW.md P2-4). ReadDir on a file
+		// Type-check BEFORE ReadDir. ReadDir on a file
 		// always fails with ENOTDIR, and the old ordering did
 		// `entries, err := os.ReadDir(dir); if err != nil { continue }`
 		// first — so a file path never reached the !isDir branch below and

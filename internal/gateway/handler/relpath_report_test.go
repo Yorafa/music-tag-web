@@ -14,11 +14,11 @@ import (
 	"go-music-tag/internal/testaudio"
 )
 
-// TestBatchUpdateID3_ReportsRelativePaths is REVIEW.md P3-9 driven through
-// the real handler.
+// TestBatchUpdateID3_ReportsRelativePaths drives the relative-path
+// contract through the real handler.
 //
-// UpdateID3 echoed the relative path the client had sent; BatchUpdateID3
-// echoed the absolute leaf it built internally from SafeJoin. Same
+// UpdateID3 echoes the relative path the client sent; BatchUpdateID3 must
+// too, not the absolute leaf it built internally from SafeJoin. Same
 // `done[].file_full_path` field, two shapes, depending on which endpoint
 // answered — so a caller that fed one answer into the other got a path
 // rejected for being absolute. Nothing consumed the field, which is why it

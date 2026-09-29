@@ -463,7 +463,7 @@ func UploadImage(c *gin.Context) {
 		return
 	}
 
-	// Content-shape validation (REVIEW.md P2-12). The bytes go straight into
+	// Content-shape validation. The bytes go straight into
 	// the ID3/APIC frame, so a non-image body would be written to the tag
 	// and every player would then fail on that track. fetchRemoteBytes
 	// already does this for the download path; uploads did not, which made
@@ -557,7 +557,7 @@ func (e ErrDuplicateSkipped) Error() string {
 // ─── internal ─────────────────────────────────────────────────────────────
 
 // relToMusicRoot converts a path under MUSIC_DIR back into the relative form
-// this API speaks everywhere else (REVIEW.md P3-9).
+// this API speaks everywhere else.
 //
 // UpdateID3 echoed back the relative path the client had sent, while
 // BatchUpdateID3 echoed the absolute leaf it built internally from
@@ -774,7 +774,7 @@ func applyFileUpdate(filePath string, info map[string]interface{}) (applyResult,
 		newName = utils.SanitizePath(newName)
 		parent := filepath.Dir(filePath)
 		target := filepath.Join(parent, newName)
-		// SafeAbs, not SafeJoin(TrimPrefix(...)) (REVIEW.md P2-6).
+		// SafeAbs, not SafeJoin(TrimPrefix(...)).
 		// TrimPrefix returns its input unchanged when the prefix does not
 		// match — which is exactly what happens when MUSIC_DIR is a
 		// symlink, a relative path, or differs in case. SafeJoin then
@@ -974,7 +974,7 @@ func stringValue(v interface{}) string {
 
 // isAudioFile reports whether path is a library audio container we can
 // tag-write. Delegates to audioext so this predicate can never drift from
-// the file browser's listing filter again (REVIEW.md P2-1).
+// the file browser's listing filter again.
 func isAudioFile(path string) bool {
 	return audioext.IsLibraryPath(path)
 }

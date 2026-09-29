@@ -26,10 +26,10 @@ func parseClaims(t *testing.T, token string) jwt.MapClaims {
 	return claims
 }
 
-// TestAccessAndRefreshTokensDiffer pins REVIEW.md P2-8. Both tokens used
-// to come from the same generateJWT(secret, username) call with the same
-// 7-day TTL and no type claim, so they were byte-identical in every field
-// and the refresh endpoint provided no additional security boundary.
+// TestAccessAndRefreshTokensDiffer pins that the two tokens differ in
+// every field. Sharing one generateJWT(secret, username) call, TTL and all,
+// would make them interchangeable, and the refresh endpoint would then
+// provide no additional security boundary at all.
 func TestAccessAndRefreshTokensDiffer(t *testing.T) {
 	access, err := generateAccessToken(testSecret, "admin")
 	if err != nil {

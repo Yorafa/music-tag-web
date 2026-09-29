@@ -10,9 +10,8 @@ import "time"
 type Folder struct {
 	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
 
-	// One filesystem path is one row (REVIEW.md P2-5): fullScan used to
-	// blind-INSERT a fresh uid per run, so every repeated scan doubled the
-	// table.
+	// 一个文件系统路径 = 一行。fullScan 复用盘上已有的 uid（见 scanner.go 的
+	// loadFolderUIDs），所以反复扫描不会让表翻倍。
 	//
 	// The index is NAMED on purpose. GORM derives an unnamed index's name
 	// from the column alone (`idx_music_folder_path`) whether or not it is

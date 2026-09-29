@@ -97,11 +97,11 @@ var randRead = rand.Read
 // randomString generates a size-char alphanumeric string for the weapi
 // secKey.
 //
-// The error is returned rather than papered over (REVIEW.md P3-4). The old
-// fallback was an UNSEEDED math/rand — Go 1.20+ auto-seeds the global source,
-// so it looked fine, but the value is then derived from a source the process
-// has no control over, and the secKey is what the weapi body is encrypted
-// with. A predictable key there means a request anybody can forge. A
+// The error is returned rather than papered over. Falling back to math/rand
+// would look fine (Go 1.20+ auto-seeds the global source) but the value then
+// comes from a source the process has no control over, and the secKey is what
+// the weapi body is encrypted with — a predictable key there means a request
+// anybody can forge. A
 // crypto/rand failure is a broken platform or a broken container; refusing
 // the request is the honest response, and the caller already treats a
 // failure here as "no audio URL".

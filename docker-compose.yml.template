@@ -110,11 +110,9 @@ services:
       PLUGIN_ACOUSTID_ADDR: ${PLUGIN_ACOUSTID_ADDR:-acoustid:50057}
       PLUGIN_YOUTUBE_ADDR: ${PLUGIN_YOUTUBE_ADDR:-youtube:50058}
     restart: unless-stopped
-    # REVIEW.md P1-5: the gateway registers tag sources at boot with a
-    # single 5s blocking dial per plugin. A plugin not yet accepting is
-    # skipped for the rest of the process lifetime — ListTagSources()
-    # reports only registered keys, so nothing retries. Waiting on
-    # service_healthy makes the ordering explicit instead of racy.
+    # gateway/worker 在启动时对每个插件做一次 5s 阻塞拨号，只注册成功的那
+    # 几个；失败的插件在这个进程剩余的生命周期里都不会重试。所以这里必须
+    # 等到每个插件真的 healthy，而不能只等「容器起来了」。
     depends_on:
       redis:
         condition: service_started
@@ -184,12 +182,8 @@ services:
       WEBHOOK_INTERNAL_TOKEN: ${WEBHOOK_INTERNAL_TOKEN:-}
       ALLOW_INSECURE_DEFAULTS: ${ALLOW_INSECURE_DEFAULTS:-}
     restart: unless-stopped
-    # REVIEW.md P1-5: wait for every plugin to report healthy before the
-    # worker registers sources. Registration dials each plugin once with a
-    # 5s blocking dial; a plugin that is not yet accepting is skipped
-    # permanently, because ListTagSources() reports only registered keys
-    # and no lazy retry path ever revisits it. service_healthy on a real
-    # /healthz is what turns that race into an ordering guarantee.
+    # 同上：worker 启动时对每个插件只拨一次，拨不通就整个进程周期都不再重试。
+    # 等真实的 /healthz 而不是「容器在跑」，这条依赖才是排序保证而不是竞态。
     depends_on:
       redis:
         condition: service_started
@@ -226,24 +220,15 @@ services:
       args:
         PLUGIN: netease
     container_name: go-music-netease
-    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
-    # be two copies of one number kept in sync by hand — compose passed no
-    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
-    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
-    # variable, so changing it in .env moves them together. (Compose cannot
-    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
-    # still has to be set by hand when a port changes.)
+    # expose 和插件自己的 <PLUGIN>_PORT 读同一个变量，改 .env 里一处两边一起动。
+    # 插件自己那份不是可选项：缺了它插件会静默退回 cmd/plugins/*/main.go 里的
+    # 硬编码默认值，端口对不上时表现为「插件启动着但连不上」。
+    # compose 不能嵌套插值，所以 gateway/worker 上对应的 PLUGIN_*_ADDR 仍需手改。
     expose:
       - "${NETEASE_PORT:-50051}"
-    # REVIEW.md P1-5: without this the container reports "running" the
-    # moment the process exists, which is before Serve() accepts and with
-    # no signal at all if the plugin then dies on a bad config. gateway and
-    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
-    # plugin that misses that window is absent from the registry for the
-    # rest of the process lifetime, because ListTagSources() reports only
-    # registered keys and nothing retries. The health endpoint
-    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
-    # below waits on.
+    # 容器「在跑」只说明进程存在，早于 Serve() 开始 accept，配置错误导致插件
+    # 随后退出时也毫无信号。gateway/worker 启动时只拨一次，所以健康检查必须
+    # 打真实的 /healthz——下面的 `depends_on: service_healthy` 等的就是它。
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18081/healthz"]
       interval: 10s
@@ -262,24 +247,15 @@ services:
       args:
         PLUGIN: kugou
     container_name: go-music-kugou
-    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
-    # be two copies of one number kept in sync by hand — compose passed no
-    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
-    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
-    # variable, so changing it in .env moves them together. (Compose cannot
-    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
-    # still has to be set by hand when a port changes.)
+    # expose 和插件自己的 <PLUGIN>_PORT 读同一个变量，改 .env 里一处两边一起动。
+    # 插件自己那份不是可选项：缺了它插件会静默退回 cmd/plugins/*/main.go 里的
+    # 硬编码默认值，端口对不上时表现为「插件启动着但连不上」。
+    # compose 不能嵌套插值，所以 gateway/worker 上对应的 PLUGIN_*_ADDR 仍需手改。
     expose:
       - "${KUGOU_PORT:-50052}"
-    # REVIEW.md P1-5: without this the container reports "running" the
-    # moment the process exists, which is before Serve() accepts and with
-    # no signal at all if the plugin then dies on a bad config. gateway and
-    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
-    # plugin that misses that window is absent from the registry for the
-    # rest of the process lifetime, because ListTagSources() reports only
-    # registered keys and nothing retries. The health endpoint
-    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
-    # below waits on.
+    # 容器「在跑」只说明进程存在，早于 Serve() 开始 accept，配置错误导致插件
+    # 随后退出时也毫无信号。gateway/worker 启动时只拨一次，所以健康检查必须
+    # 打真实的 /healthz——下面的 `depends_on: service_healthy` 等的就是它。
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18082/healthz"]
       interval: 10s
@@ -298,24 +274,15 @@ services:
       args:
         PLUGIN: kuwo
     container_name: go-music-kuwo
-    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
-    # be two copies of one number kept in sync by hand — compose passed no
-    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
-    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
-    # variable, so changing it in .env moves them together. (Compose cannot
-    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
-    # still has to be set by hand when a port changes.)
+    # expose 和插件自己的 <PLUGIN>_PORT 读同一个变量，改 .env 里一处两边一起动。
+    # 插件自己那份不是可选项：缺了它插件会静默退回 cmd/plugins/*/main.go 里的
+    # 硬编码默认值，端口对不上时表现为「插件启动着但连不上」。
+    # compose 不能嵌套插值，所以 gateway/worker 上对应的 PLUGIN_*_ADDR 仍需手改。
     expose:
       - "${KUWO_PORT:-50053}"
-    # REVIEW.md P1-5: without this the container reports "running" the
-    # moment the process exists, which is before Serve() accepts and with
-    # no signal at all if the plugin then dies on a bad config. gateway and
-    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
-    # plugin that misses that window is absent from the registry for the
-    # rest of the process lifetime, because ListTagSources() reports only
-    # registered keys and nothing retries. The health endpoint
-    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
-    # below waits on.
+    # 容器「在跑」只说明进程存在，早于 Serve() 开始 accept，配置错误导致插件
+    # 随后退出时也毫无信号。gateway/worker 启动时只拨一次，所以健康检查必须
+    # 打真实的 /healthz——下面的 `depends_on: service_healthy` 等的就是它。
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18083/healthz"]
       interval: 10s
@@ -334,24 +301,15 @@ services:
       args:
         PLUGIN: migu
     container_name: go-music-migu
-    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
-    # be two copies of one number kept in sync by hand — compose passed no
-    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
-    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
-    # variable, so changing it in .env moves them together. (Compose cannot
-    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
-    # still has to be set by hand when a port changes.)
+    # expose 和插件自己的 <PLUGIN>_PORT 读同一个变量，改 .env 里一处两边一起动。
+    # 插件自己那份不是可选项：缺了它插件会静默退回 cmd/plugins/*/main.go 里的
+    # 硬编码默认值，端口对不上时表现为「插件启动着但连不上」。
+    # compose 不能嵌套插值，所以 gateway/worker 上对应的 PLUGIN_*_ADDR 仍需手改。
     expose:
       - "${MIGU_PORT:-50054}"
-    # REVIEW.md P1-5: without this the container reports "running" the
-    # moment the process exists, which is before Serve() accepts and with
-    # no signal at all if the plugin then dies on a bad config. gateway and
-    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
-    # plugin that misses that window is absent from the registry for the
-    # rest of the process lifetime, because ListTagSources() reports only
-    # registered keys and nothing retries. The health endpoint
-    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
-    # below waits on.
+    # 容器「在跑」只说明进程存在，早于 Serve() 开始 accept，配置错误导致插件
+    # 随后退出时也毫无信号。gateway/worker 启动时只拨一次，所以健康检查必须
+    # 打真实的 /healthz——下面的 `depends_on: service_healthy` 等的就是它。
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18084/healthz"]
       interval: 10s
@@ -370,24 +328,15 @@ services:
       args:
         PLUGIN: qmusic
     container_name: go-music-qmusic
-    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
-    # be two copies of one number kept in sync by hand — compose passed no
-    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
-    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
-    # variable, so changing it in .env moves them together. (Compose cannot
-    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
-    # still has to be set by hand when a port changes.)
+    # expose 和插件自己的 <PLUGIN>_PORT 读同一个变量，改 .env 里一处两边一起动。
+    # 插件自己那份不是可选项：缺了它插件会静默退回 cmd/plugins/*/main.go 里的
+    # 硬编码默认值，端口对不上时表现为「插件启动着但连不上」。
+    # compose 不能嵌套插值，所以 gateway/worker 上对应的 PLUGIN_*_ADDR 仍需手改。
     expose:
       - "${QMUSIC_PORT:-50055}"
-    # REVIEW.md P1-5: without this the container reports "running" the
-    # moment the process exists, which is before Serve() accepts and with
-    # no signal at all if the plugin then dies on a bad config. gateway and
-    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
-    # plugin that misses that window is absent from the registry for the
-    # rest of the process lifetime, because ListTagSources() reports only
-    # registered keys and nothing retries. The health endpoint
-    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
-    # below waits on.
+    # 容器「在跑」只说明进程存在，早于 Serve() 开始 accept，配置错误导致插件
+    # 随后退出时也毫无信号。gateway/worker 启动时只拨一次，所以健康检查必须
+    # 打真实的 /healthz——下面的 `depends_on: service_healthy` 等的就是它。
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18085/healthz"]
       interval: 10s
@@ -406,24 +355,15 @@ services:
       args:
         PLUGIN: musicbrainz
     container_name: go-music-musicbrainz
-    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
-    # be two copies of one number kept in sync by hand — compose passed no
-    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
-    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
-    # variable, so changing it in .env moves them together. (Compose cannot
-    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
-    # still has to be set by hand when a port changes.)
+    # expose 和插件自己的 <PLUGIN>_PORT 读同一个变量，改 .env 里一处两边一起动。
+    # 插件自己那份不是可选项：缺了它插件会静默退回 cmd/plugins/*/main.go 里的
+    # 硬编码默认值，端口对不上时表现为「插件启动着但连不上」。
+    # compose 不能嵌套插值，所以 gateway/worker 上对应的 PLUGIN_*_ADDR 仍需手改。
     expose:
       - "${MUSICBRAINZ_PORT:-50056}"
-    # REVIEW.md P1-5: without this the container reports "running" the
-    # moment the process exists, which is before Serve() accepts and with
-    # no signal at all if the plugin then dies on a bad config. gateway and
-    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
-    # plugin that misses that window is absent from the registry for the
-    # rest of the process lifetime, because ListTagSources() reports only
-    # registered keys and nothing retries. The health endpoint
-    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
-    # below waits on.
+    # 容器「在跑」只说明进程存在，早于 Serve() 开始 accept，配置错误导致插件
+    # 随后退出时也毫无信号。gateway/worker 启动时只拨一次，所以健康检查必须
+    # 打真实的 /healthz——下面的 `depends_on: service_healthy` 等的就是它。
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18086/healthz"]
       interval: 10s
@@ -446,24 +386,15 @@ services:
         # The only plugin that needs fpcalc; see Dockerfile.base.
         RUNTIME_BASE: runtime_fpcalc
     container_name: go-music-acoustid
-    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
-    # be two copies of one number kept in sync by hand — compose passed no
-    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
-    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
-    # variable, so changing it in .env moves them together. (Compose cannot
-    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
-    # still has to be set by hand when a port changes.)
+    # expose 和插件自己的 <PLUGIN>_PORT 读同一个变量，改 .env 里一处两边一起动。
+    # 插件自己那份不是可选项：缺了它插件会静默退回 cmd/plugins/*/main.go 里的
+    # 硬编码默认值，端口对不上时表现为「插件启动着但连不上」。
+    # compose 不能嵌套插值，所以 gateway/worker 上对应的 PLUGIN_*_ADDR 仍需手改。
     expose:
       - "${ACOUSTID_PORT:-50057}"
-    # REVIEW.md P1-5: without this the container reports "running" the
-    # moment the process exists, which is before Serve() accepts and with
-    # no signal at all if the plugin then dies on a bad config. gateway and
-    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
-    # plugin that misses that window is absent from the registry for the
-    # rest of the process lifetime, because ListTagSources() reports only
-    # registered keys and nothing retries. The health endpoint
-    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
-    # below waits on.
+    # 容器「在跑」只说明进程存在，早于 Serve() 开始 accept，配置错误导致插件
+    # 随后退出时也毫无信号。gateway/worker 启动时只拨一次，所以健康检查必须
+    # 打真实的 /healthz——下面的 `depends_on: service_healthy` 等的就是它。
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18087/healthz"]
       interval: 10s
@@ -500,13 +431,10 @@ services:
         # layer. See the youtube branch in Dockerfile.plugin.
         RUNTIME_BASE: runtime_fpcalc
     container_name: go-music-youtube
-    # REVIEW.md P3-11: `expose` and the plugin's own <PLUGIN>_PORT env used to
-    # be two copies of one number kept in sync by hand — compose passed no
-    # <PLUGIN>_PORT at all, so every plugin silently fell back to the
-    # hardcoded default in cmd/plugins/*/main.go. Both now read the same
-    # variable, so changing it in .env moves them together. (Compose cannot
-    # nest interpolations, so the matching PLUGIN_*_ADDR on gateway/worker
-    # still has to be set by hand when a port changes.)
+    # expose 和插件自己的 <PLUGIN>_PORT 读同一个变量，改 .env 里一处两边一起动。
+    # 插件自己那份不是可选项：缺了它插件会静默退回 cmd/plugins/*/main.go 里的
+    # 硬编码默认值，端口对不上时表现为「插件启动着但连不上」。
+    # compose 不能嵌套插值，所以 gateway/worker 上对应的 PLUGIN_*_ADDR 仍需手改。
     expose:
       - "${YOUTUBE_PORT:-50058}"
     # The youtube plugin is the process that actually RUNS yt-dlp and writes
@@ -519,7 +447,7 @@ services:
     #     MUSIC_DIR for the "加入库" path.
     # Without this mount the plugin wrote into its own container layer, so
     # every download "succeeded" while both consumers saw an empty directory —
-    # surfacing to the user as a bogus "下载超时". See REVIEW.md P0-1.
+    # surfacing to the user as a bogus "下载超时".
     volumes:
       - audio-cache:/tmp/audio_cache
     environment:
@@ -528,15 +456,9 @@ services:
       AUDIO_CACHE_DIR: /tmp/audio_cache
       YOUTUBE_PORT: "${YOUTUBE_PORT:-50058}"
       YOUTUBE_HEALTH_PORT: "18088"
-    # REVIEW.md P1-5: without this the container reports "running" the
-    # moment the process exists, which is before Serve() accepts and with
-    # no signal at all if the plugin then dies on a bad config. gateway and
-    # worker dial each plugin ONCE with a 5s blocking dial at boot; a
-    # plugin that misses that window is absent from the registry for the
-    # rest of the process lifetime, because ListTagSources() reports only
-    # registered keys and nothing retries. The health endpoint
-    # (plugin.StartHealthServer) is what `depends_on: service_healthy`
-    # below waits on.
+    # 容器「在跑」只说明进程存在，早于 Serve() 开始 accept，配置错误导致插件
+    # 随后退出时也毫无信号。gateway/worker 启动时只拨一次，所以健康检查必须
+    # 打真实的 /healthz——下面的 `depends_on: service_healthy` 等的就是它。
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18088/healthz"]
       interval: 10s

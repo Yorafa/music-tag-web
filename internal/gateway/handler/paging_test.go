@@ -5,9 +5,10 @@ import (
 	"testing"
 )
 
-// TestClampPaging pins REVIEW.md P2-9: page_size reached Limit() unclamped,
-// and a large page overflowed (page-1)*pageSize into a negative offset,
-// which GORM renders as "no LIMIT" — i.e. the whole table.
+// TestClampPaging pins the two bounds every list endpoint shares.
+// Unclamped, page_size reaches Limit() as given, and a large page overflows
+// (page-1)*pageSize into a negative offset — which GORM renders as
+// "no LIMIT", i.e. the whole table.
 func TestClampPaging(t *testing.T) {
 	cases := []struct {
 		name             string

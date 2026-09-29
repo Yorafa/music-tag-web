@@ -98,29 +98,22 @@ func ListSources(c *gin.Context) {
 	SuccessData(c, out)
 }
 
-// ─── Stage B (runtime source overrides): retired ───────────────────────────
+// ─── 运行时 source 覆盖：不可用 ────────────────────────────────────────────
 //
-// REVIEW.md P0-2. The previous implementation of the two handlers below
-// looked functional and returned 200 with a `refreshed` count, but the
-// count was structurally always 0 and no override was ever applied.
+// 下面两个 handler 返回 501，因为这个能力在当前架构下做不到。
 //
-// Why it could not work: RefreshOverrides walks the plugin registry and
-// type-asserts each entry to plugin.SecretConfigurable /
-// plugin.APIBaseConfigurable. In every real deployment the registry holds
-// *plugin.GRPCTagSource values, which implement neither interface. The
-// types that DO implement them (*migu.Server, *kuwo.Server, *kg.Server,
-// *qmusic.Server) live in separate plugin processes/containers, and the
-// gRPC contract in api/proto has no RPC capable of carrying an override
-// across that boundary. So both assertions were always false.
+// 做不到的原因：RefreshOverrides 遍历插件注册表，把每个条目断言成
+// plugin.SecretConfigurable / plugin.APIBaseConfigurable。而任何真实部署里
+// 注册表装的全是 *plugin.GRPCTagSource，它不实现这两个接口；真正实现它们的
+// 类型（*migu.Server / *kuwo.Server / *kg.Server / *qmusic.Server）在各自独立的
+// 插件进程里，而 api/proto 里没有任何 RPC 能把一次覆盖送过这个边界。所以两次
+// 断言恒为 false。
 //
-// The unit tests passed because they registered in-process mocks that did
-// implement the interfaces — a shape that never occurs in production.
+// 单测覆盖不到它，是因为测试注册的是实现了那两个接口的进程内 mock——生产里
+// 不存在这种形状。
 //
-// Decision: report the capability honestly (501) rather than keep a UI
-// affirmation of work that does not happen. Reviving this feature requires
-// a new `ApplyOverride` RPC in tag_source.proto plus locking and
-// scheme-validation on the plugin-side setters (REVIEW.md P1-4); that is a
-// feature, tracked separately, not a bug fix.
+// 要真的支持它，需要在 tag_source.proto 里新增 `ApplyOverride` RPC，
+// 并给插件侧的 setter 加锁和 scheme 校验。那是一项新功能，不是修 bug。
 //
 // Kept as registered routes returning 501 (rather than deleting them) so an
 // older cached frontend bundle gets a clear machine-readable answer instead

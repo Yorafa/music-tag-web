@@ -100,7 +100,7 @@ func audioCacheDir(source string) string {
 	return audiocache.Dir(source)
 }
 
-// streamGuard is the SSRF guard for upstream audio URLs (REVIEW.md P1-2).
+// streamGuard is the SSRF guard for upstream audio URLs.
 //
 // upstreamURL is whatever the plugin's GetAudioURL returned, so it is
 // plugin-controlled input: a compromised or buggy plugin could point the
@@ -114,7 +114,7 @@ func audioCacheDir(source string) string {
 var streamGuard = netguard.NewGuard()
 
 // streamPassthroughHeaders is the allowlist for upstream response headers
-// copied to the client (REVIEW.md P1-2).
+// copied to the client.
 //
 // The previous code forwarded every header verbatim:
 //
@@ -371,10 +371,10 @@ func streamDownload(c *gin.Context, source, videoID string) {
 func filterAudioMatches(paths []string) []string {
 	out := make([]string, 0, len(paths))
 	for _, p := range paths {
-		// audioext.IsStreamablePath is the shared whitelist (REVIEW.md
-		// P0-4 / P2-1). It notably INCLUDES .flac, which this switch used
-		// to omit while resolveLibraryDest accepted it — a lossless
-		// download therefore landed in the cache and could never be
+		// audioext.IsStreamablePath is the shared whitelist. It notably
+		// INCLUDES .flac, and so must this switch: a lossless download
+		// that resolveLibraryDest accepted has to be streamable too, or it
+		// lands in the cache and can never be
 		// served.
 		if !audioext.IsStreamablePath(p) {
 			continue
@@ -608,7 +608,7 @@ func streamFromPlugin(c *gin.Context, src, id string) {
 		method = http.MethodGet
 	}
 
-	// SSRF gate (REVIEW.md P1-2): upstreamURL is plugin-supplied, so refuse
+	// SSRF gate: upstreamURL is plugin-supplied, so refuse
 	// anything that resolves to a private / loopback / link-local address
 	// before we spend a request on it. Done before the request is built so
 	// a rejected URL never reaches the transport at all.

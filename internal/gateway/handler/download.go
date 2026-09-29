@@ -118,8 +118,8 @@ func Download(c *gin.Context) {
 	if req.DestDir != "" {
 		// utils.SafeRelPath checks path SEGMENTS, not substrings: the old
 		// strings.Contains(cleaned, "..") refused "Album..Deluxe/x.ogg"
-		// while every real traversal is segment-shaped anyway
-		// (REVIEW.md P3-7). Containment is proved again in
+		// while every real traversal is segment-shaped anyway.
+		// Containment is proved again in
 		// resolveLibraryDestPath via SafeJoin.
 		cleaned, err := utils.SafeRelPath(req.DestDir)
 		if err != nil {
@@ -278,8 +278,8 @@ func persistCacheToLibrary(cachePath, downloadPath string) (string, error) {
 // file-path vs directory semantics for download_path. Kept local so the
 // gateway package does not need to export the worker helper.
 //
-// It joins through utils.SafeJoin rather than filepath.Join (REVIEW.md
-// P3-7). A bare Join makes the containment guarantee depend entirely on
+// It joins through utils.SafeJoin rather than filepath.Join.
+// A bare Join makes the containment guarantee depend entirely on
 // the request-boundary check having run, in the right order, with the
 // right value — and the destination is computed here from a *second*
 // argument, so "the same string that was checked" is an assumption rather

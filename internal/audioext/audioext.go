@@ -11,10 +11,9 @@
 //	tasks/yt_dl.go::findDownloadedFile     8 dotted exts (no .flac)
 //	tasks/yt_dl.go::resolveLibraryDest     9 dotted exts (with .flac)
 //
-// The drift caused two real bugs (see REVIEW.md P0-4 and P2-2): a downloaded
-// `.flac` was accepted as a library destination but then filtered out of the
-// stream cache, and an uppercase `Track.MP3` was invisible in the file
-// browser while being perfectly writable by the tag editor.
+// 这份清单必须被两边共用：曲库扩展名、流式缓存过滤、文件浏览器的类型图标、
+// 标签编辑器的可写判定。任何一处自己抄一份，`Track.MP3` 这种大写扩展名就会
+// 在某个入口看得见、在另一个入口看不见。
 //
 // # Two distinct sets, deliberately
 //
@@ -182,7 +181,7 @@ func FileTypeForRow(path string) string {
 //
 // This replaces mime.ExtensionsByType, whose first-result-wins behaviour
 // produced extensions outside streamableExts and therefore silently broke
-// playback of successfully-downloaded files (REVIEW.md P0-4). Measured
+// playback of successfully-downloaded files. Measured
 // stdlib output on this platform:
 //
 //	audio/ogg  -> [.oga .ogg .opus]  ⇒ picked .oga  ✗ not streamable

@@ -305,8 +305,8 @@ func (s *Server) SetSecret(secret string) {
 
 // SetAPIBase overwrites the package-level kuwoAudioURL. Same lifecycle as
 // SetSecret above.
-// SetAPIBase repoints the upstream. Rejects anything that is not https
-// (REVIEW.md P1-4): kuwoAudioURL is the base for convert_url3, so an
+// SetAPIBase repoints the upstream. Rejects anything that is not https:
+// kuwoAudioURL is the base for convert_url3, so an
 // unvalidated override would redirect signed-audio-URL resolution to a
 // host of the caller's choosing. On rejection the previous value is kept.
 func (s *Server) SetAPIBase(apiBase string) {

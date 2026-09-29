@@ -124,7 +124,7 @@ func craftAlgNoneToken(subject string) string {
 // happy-path tests AND alg-mismatch tests so we can isolate the alg gate
 // from key validity). The token type claim is written verbatim, so specs
 // can exercise both the typed path and the legacy no-typ path that
-// VerifyToken still tolerates (REVIEW.md P2-8); pass "" to omit it.
+// VerifyToken still tolerates; pass "" to omit it.
 func craftHS256Token(secret []byte, method jwt.SigningMethod, subject, typ string) string {
 	claims := jwt.MapClaims{
 		"sub": subject,

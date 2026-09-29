@@ -9,9 +9,8 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
-// Server-side gRPC defaults shared by all eight plugin binaries
-// (REVIEW.md P1-6).
-//
+// Server-side gRPC defaults shared by all eight plugin binaries.
+// //
 // Why this exists: the client (internal/plugin/grpc_adapter.go) sets
 // keepalive.ClientParameters{Time: 30s, PermitWithoutStream: true}, but
 // every plugin main called a bare grpc.NewServer(). gRPC servers default
@@ -75,7 +74,7 @@ func NewGRPCServer(opts ...grpc.ServerOption) *grpc.Server {
 }
 
 // StartHealthServer exposes a plain-HTTP 200 on /healthz for the lifetime
-// of the process (REVIEW.md P1-5).
+// of the process.
 //
 // Plugin containers have no healthcheck, so compose reports them "up" the
 // instant the process exists — which is *before* Serve() is accepting, and

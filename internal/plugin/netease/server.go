@@ -37,7 +37,7 @@ const baseURL = "https://music.163.com"
 // cloudsearch endpoint (see crypto.go::encryptLinux). Response is the plain
 // cloudsearch JSON shape (result.songs[].ar/al).
 //
-// https, not http (REVIEW.md P1-4): this carries the user's search term and
+// https, not http: this carries the user's search term and
 // the returned song metadata, both of which were plaintext on the wire and
 // modifiable in transit.
 const forwardURL = "https://music.163.com/api/linux/forward"
@@ -49,7 +49,7 @@ const searchURL = baseURL + "/api/search/get"
 // weapiURL is the weapi audio-stream endpoint used by GetAudioURL
 // (AES-128-CBC + RSA form body, see crypto.go::encryptWeapi).
 //
-// https, not http (REVIEW.md P1-4): the response carries the signed CDN
+// https, not http: the response carries the signed CDN
 // audio URL, so plaintext here let a network position swap the stream for
 // one of their choosing.
 const weapiURL = "https://music.163.com/weapi/song/enhance/player/url"

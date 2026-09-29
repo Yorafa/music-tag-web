@@ -116,14 +116,12 @@ func main() {
 
 	router.Setup(r, cfg, gormDB)
 
-	// NOTE (REVIEW.md P0-2): the Stage B source-override load used to run
-	// here (config.LoadSourceOverrides + plugin.RefreshOverrides). It was a
-	// guaranteed no-op: the registry holds *plugin.GRPCTagSource values,
-	// which implement neither SecretConfigurable nor APIBaseConfigurable —
-	// those live on the plugin-side *migu.Server / *kuwo.Server structs in
-	// separate containers, and no proto RPC exists to reach them. Removed
-	// rather than left in place so the startup log can't imply that
-	// data/sources/*.yaml is being applied.
+	// data/sources/*.yaml 的运行时覆盖（config.LoadSourceOverrides +
+	// plugin.RefreshOverrides）不在这里加载，而且现在也不能加载：插件注册表
+	// 里是 *plugin.GRPCTagSource，它既不实现 SecretConfigurable 也不实现
+	// APIBaseConfigurable——那两个接口在独立容器的 *migu.Server / *kuwo.Server
+	// 上，proto 里没有任何 RPC 能跨到那边。见 handler/source.go 里那两个
+	// 返回 501 的 handler。
 
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
 	log.Printf("[gateway] listening on %s", addr)

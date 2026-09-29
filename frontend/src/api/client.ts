@@ -111,7 +111,7 @@ export async function uploadImage(file: File) {
 
 // Library-level operations surfaced in the toolbar.
 //
-// These are POST (not GET) as of REVIEW.md P1-1: they enqueue asynq tasks,
+// These are POST, not GET: they enqueue asynq tasks,
 // and the gateway accepts a JWT from the `AUTHORIZATION` cookie as a
 // fallback to the Authorization header (middleware/auth.go). A state-changing
 // GET reachable with cookie auth is CSRF-able via a plain link / <img>, since
@@ -384,7 +384,7 @@ export async function purgeTrash(
 }
 
 /** POST /api/clear_async_tasks/ — deletes every pending asynq task.
- *  Destructive, hence POST (REVIEW.md P1-1). Same interceptor rationale
+ *  Destructive, hence POST. Same interceptor rationale
  *  as getActiveQueue above. */
 export async function clearAsyncTasks() {
   const { data } = await api.post('clear_async_tasks/');
@@ -449,8 +449,8 @@ export async function downloadToLibrary(params: {
 }
 
 // NOTE: `sources/refresh/` and `sources/override/` are intentionally
-// absent. Both routes have answered 501 since REVIEW.md P0-2 retired
-// runtime overrides — the plugins live in their own containers and the
+// absent. Both routes answer 501: runtime overrides are retired, because
+// the plugins live in their own containers and the
 // gRPC contract has no RPC able to carry an override across that
 // boundary, so the old handlers could only ever have applied nothing.
 // The routes stay registered (see handler/source.go) so a cached bundle

@@ -25,12 +25,12 @@ const CAPABILITIES: ReadonlyArray<{
 /**
  * 音源 — a read-only view of the plugin registry.
  *
- * This panel used to show runtime `api_base` / secret overrides and a
- * 「重载配置」 button, both of which call endpoints that have returned 501
- * since REVIEW.md P0-2 retired them: the plugins run in their own
+ * This panel does not offer runtime `api_base` / secret overrides, and
+ * there is no 「重载配置」 button, because the two endpoints behind them
+ * answer 501: the plugins run in their own
  * containers and the gRPC contract has no RPC able to carry an override
- * across that boundary, so the feature could never have applied one. The
- * UI kept asking anyway, and every visit to this tab showed a red
+ * across that boundary, so the feature could never have applied one. A
+ * button that always returns red
  * "GET /api/sources/override/ 失败: … 501" banner above an empty list.
  *
  * What replaces it is the part that does work: which plugins the gateway

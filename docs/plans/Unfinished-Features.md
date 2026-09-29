@@ -5,7 +5,6 @@
 > **Status:** `[shipped]` — Tracks C.2, C.3, C.4 已在 round-10 (2026-07-24) 完整 ship。Frontend `npx tsc --noEmit` + `npx eslint --max-warnings 0 .` + `npm test` (130 vitest) 全绿。Backend `go build`/`vet`/tests 待非-snap Go install 才能跑完整 (本机 `/snap/go/11227/` stdlib 损坏,环境问题,非代码)。
 > **Owner:** You
 > **Source of truth:** [`../FEATURE-COVERAGE.md`](../FEATURE-COVERAGE.md) — 表里的 🚧 Partial 与 ❌ Aspirational 是本 plan 的候选清单(本轮 ship 后已大幅收窄)。
-> **Predecessor:** `docs/plans/frontend-layout-refactor/` (Plan A = Scrape Workflow + Plan B = Play + Mobile + Visual) 已 ship,目录已删除。
 > **Review log**: round-1 架构定型 -> round-2 typo + const→var + sync.Map>channel + deep-equal + idempotency + caveats -> round-3 garbled cleanup -> round-4 fresh eyes 补 H1/H2/H3 + G2/G3/G4 -> round-5 验证全部 7 项 fix 落地 -> round-6 (Implementation reality check) -> round-8 mojibake cleanup -> round-9 移除 C.1 + reuse ref (用户 决定 "完全删除 C.1") -> **round-10 ship + doc sync (本轮)**。
 > **Removed in round 9**: `Plan C.1 (Bulk Text Replace + Gibberish + OperationLog)` + Step 0 notice-poll 通道 + `OperationLog` model + `audit_only_min_occurrences` idempotency —— 用户决定 C.1 不再 ship,3 track 完整。
 

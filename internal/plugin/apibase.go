@@ -7,7 +7,7 @@ import (
 )
 
 // ValidateAPIBase checks a runtime-supplied upstream base URL before a
-// plugin adopts it (REVIEW.md P1-4).
+// plugin adopts it.
 //
 // The four target plugins (kg / kuwo / migu / qmusic) each expose
 // SetAPIBase, which assigns the value straight into a package-level var

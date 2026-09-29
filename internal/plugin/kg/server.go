@@ -250,8 +250,8 @@ var (
 
 // SetAPIBase overwrites the package-level kgAudioURL for the plugin YAML
 // override flow.
-// SetAPIBase repoints the upstream. Rejects anything that is not https
-// (REVIEW.md P1-4): kgAudioURL is concatenated into every subsequent
+// SetAPIBase repoints the upstream. Rejects anything that is not https:
+// kgAudioURL is concatenated into every subsequent
 // request, so an unvalidated override could both downgrade the connection
 // and redirect it to an attacker-controlled host. On rejection the previous
 // value is kept — a bad config file must not break a running plugin.

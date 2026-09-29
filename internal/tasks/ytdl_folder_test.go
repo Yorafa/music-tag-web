@@ -9,10 +9,10 @@ import (
 )
 
 // TestUpsertDownloadFolder_AdoptsScannedPath covers the collision the
-// unique index on Folder.Path (REVIEW.md P2-5) creates for the download
+// unique index on Folder.Path creates for the download
 // path: the scanner has usually already walked the destination, so the
 // video lands on a path that already has a row — under a random scan uid,
-// not the video id. The uid-keyed write that yt_dl used to do plain fails
+// not the video id. A uid-keyed write plain fails
 // on the unique constraint, and failing there fails the whole task even
 // though the audio is already on disk.
 func TestUpsertDownloadFolder_AdoptsScannedPath(t *testing.T) {

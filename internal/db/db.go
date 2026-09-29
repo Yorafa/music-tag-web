@@ -124,8 +124,8 @@ func Open(c Config) (*gorm.DB, error) {
 // PlaylistTrack 以服务 getPlaylists 的 songCount/duration 计算。
 func AutoMigrate(db *gorm.DB) error {
 	log.Printf("[db] running auto-migrate")
-	// Must precede the AutoMigrate below: Folder.Path gained a unique index
-	// (REVIEW.md P2-5) and GORM cannot create it while duplicate rows exist.
+	// Must precede the AutoMigrate below: Folder.Path carries a unique
+	// index and GORM cannot create it while duplicate rows exist.
 	// Both entry points (gateway, worker) abort on an AutoMigrate error, so
 	// a failed index creation would keep the service down until someone
 	// hand-edited the table.

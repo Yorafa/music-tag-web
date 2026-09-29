@@ -195,7 +195,7 @@ func Query(ctx context.Context, opts QueryOptions) ([]db.OperationLog, int64, er
 		tx = tx.Where("status = ?", opts.Status)
 	}
 	if opts.Search != "" {
-		// REVIEW.md P3-5: the search term is user input, so `%` and `_` in
+		// The search term is user input, so `%` and `_` in
 		// it are LIKE metacharacters — searching for `100%` matched every
 		// row, and `_` matched any character. Not an injection (the value
 		// is still a bound parameter) but a filter the caller cannot

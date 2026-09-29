@@ -30,10 +30,8 @@ FROM golang:alpine AS builder
 # protoc / protobuf-dev are NOT needed: the api/proto/*.pb.go files are
 # checked in, and `go build` never invokes protoc.
 #
-# REVIEW.md P3-3: UPX is gone. Packing a cgo/musl binary is a known-fragile
-# combination, it defeats the debugger and the profiler, and it made crash
-# reports from a user's machine unreproducible — a few MB was not worth it.
-# -ldflags="-s -w" already strips the symbol table.
+# 不做 UPX 压缩：cgo/musl 二进制压缩后行为脆弱，调试器和 profiler 都失效，
+# 用户机器上的崩溃报告也无法复现。-ldflags="-s -w" 已经去掉了符号表。
 RUN apk add --no-cache git gcc musl-dev
 
 WORKDIR /build
@@ -69,10 +67,9 @@ FROM fpcalbase
 # not.
 ENV TZ=Asia/Shanghai
 
-# REVIEW.md P3-2: run unprivileged. The gateway hosts the unauthenticated
-# /media/* file server and holds write access to the whole music library,
-# so a root process here turns any remote code execution into full host
-# compromise — the single cheapest thing to take away.
+# 以非 root 运行。gateway 对外提供免鉴权的 /media/* 文件服务，
+# 并且对整个音乐库有写权限，所以这里的进程一旦是 root，任何一次远程代码执行
+# 都等于宿主机沦陷——这是最便宜的一道防线。
 #
 # The uid/gid are fixed and numeric so they can be reproduced on the host
 # side. /app/media and /app/data are BIND mounts, so their ownership comes
