@@ -22,9 +22,21 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { getFileList } from '@/api/client';
 import { useWorklistStore, type WorklistFilter } from '@/store/useWorklistStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
+import { readString, writeString } from '@/utils/persist';
+import {
+  SEARCH_KEY,
+  MAX_STORED_QUERY,
+  sanitizeSearchQuery,
+} from '@/utils/workstationUiCache';
 import { cn } from '@/lib/utils';
 import { formatDisplayPath } from '@/utils/path';
 import type { FileNode } from '@/types';
+
+/** The remembered query, cleaned before use. Sanitizing lives in
+ *  workstationUiCache so it is unit-testable rather than inlined here. */
+function loadSearchQuery(): string {
+  return sanitizeSearchQuery(readString(SEARCH_KEY));
+}
 
 interface TreeNode {
   path: string;
@@ -49,8 +61,22 @@ export function FileTreeBrowser({ className, onOpenDirPicker }: Props) {
   const [treeRoot, setTreeRoot] = useState<TreeNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeDirPath, setActiveDirPath] = useState<string>('');
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  // Restored on mount so a reload leaves the tree filtered the way the user
+  // left it. Only the query persists — expandedPaths and activeDirPath are
+  // session state: restoring an expanded tree would mean re-fetching every
+  // expanded subtree on load, and restoring the highlight would point at a
+  // directory the user can no longer see without the expansion.
+  const [searchQuery, setSearchQuery] = useState<string>(loadSearchQuery);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set(['']));
+
+  const handleSearchChange = useCallback((next: string) => {
+    setSearchQuery(next);
+    // An emptied box stores "" rather than removing the key. A tombstone
+    // reads back as '' through the same sanitizer, so the two are
+    // indistinguishable to the only consumer — and writeString has no
+    // remove, so storing "" is the same number of writes.
+    writeString(SEARCH_KEY, next.slice(0, MAX_STORED_QUERY));
+  }, []);
 
   // Fetch directory nodes
   const loadDirectory = useCallback(async (dirPath: string) => {
@@ -335,7 +361,7 @@ export function FileTreeBrowser({ className, onOpenDirPicker }: Props) {
           <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2" />
           <Input
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
             placeholder="搜索目录..."
             className="h-7 text-xs pl-8 pr-2 bg-surface-2"
           />

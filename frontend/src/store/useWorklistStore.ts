@@ -6,10 +6,11 @@
 // Persistence layers (Plan C.3 Open Details E):
 //   - `worklist.v1`             → rows + lightweight musicInfo
 //   - `worklist.grouping.v1`    → grouping choice (none / album / artist)
+//   - `worklist.filter.v1`      → the 状态筛选 (all / pending / scraped /
+//                                 failed / duplicate)
 //
 // What is session-only:
 //   - selectedIds
-//   - filter
 //   - row `duplicate` verdicts (a check is a point-in-time fact: the file
 //     it described may since have been replaced or deleted, and a badge
 //     restored from localStorage would assert a verdict nobody re-checked)
@@ -42,6 +43,7 @@ import {
   writeJson,
   writeString,
 } from '@/utils/persist';
+import { FILTER_KEY, sanitizeFilter } from '@/utils/workstationUiCache';
 import {
   needsMusicInfoRefetch,
   stripHeavyFromRows,
@@ -192,6 +194,18 @@ const GROUPING_STORAGE_KEY = 'worklist.grouping.v1';
 
 const VALID_STATUS = new Set<ScrapeStatus>(['pending', 'scraped', 'failed']);
 const VALID_GROUPING = new Set<WorklistGrouping>(['none', 'album', 'artist']);
+/** The filter values a call may set. `sanitizeFilter` holds the same list
+ *  for the load path; reusing it here keeps write-side coercion and
+ *  read-side fallback from drifting apart, which would let a value be
+ *  rejected on reload but accepted on set. */
+const VALID_FILTER = new Set<WorklistFilter>([
+  'all',
+  'pending',
+  'scraped',
+  'failed',
+  'duplicate',
+]);
+
 /** Order matters for `toggleGrouping()` cycle step. */
 const GROUPING_CYCLE: WorklistGrouping[] = ['none', 'album', 'artist'];
 
@@ -246,6 +260,26 @@ function persistGrouping(g: WorklistGrouping): boolean {
   // and falls back to 'none' on the next load. The verdict is returned
   // only so this mirrors persistRows's shape.
   return writeString(GROUPING_STORAGE_KEY, g);
+}
+
+/** Hydrate the 状态筛选 from its dedicated key.
+ *
+ *  Validated by sanitizeFilter (workstationUiCache), not trusted. The
+ *  failure mode of a bad stored value is a queue that renders as empty:
+ *  `filter` decides what the table shows, and a value no sidebar chip
+ *  matches would leave the user staring at a blank table with no visible
+ *  way to tell which filter is on or how to get back to 「所有曲目」.
+ *
+ *  Separate key from `rows` on purpose. One combined key would mean every
+ *  filter change rewrote the whole queue — the exact O(N²) write the
+ *  batching in setMusicInfoBatch exists to avoid. */
+function loadFilter(): WorklistFilter {
+  return sanitizeFilter(readString(FILTER_KEY));
+}
+
+function persistFilter(f: WorklistFilter): boolean {
+  // Like grouping: one enum, falls back to 'all', not worth a notice.
+  return writeString(FILTER_KEY, f);
 }
 
 /** The wire shape the server sends for one row, minus the path key the
@@ -327,7 +361,7 @@ function expandedToRows(expanded: ExpandedFile[]): WorklistRow[] {
 export const useWorklistStore = create<WorklistState>((set, get) => ({
   rows: loadPersisted(),
   selectedIds: [],
-  filter: 'all',
+  filter: loadFilter(),
   grouping: loadGrouping(),
   collapsedGroups: new Set(),
 
@@ -536,7 +570,15 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
     });
   },
 
-  setFilter: (f) => set({ filter: f }),
+  setFilter: (f) => {
+    // Coerce an unknown value rather than storing it: `filter` decides what
+    // the table renders, so a value with no matching sidebar chip is a
+    // blank table the user cannot get out of. setGrouping coerces for the
+    // same reason.
+    const safe: WorklistFilter = VALID_FILTER.has(f) ? f : 'all';
+    set({ filter: safe });
+    persistFilter(safe);
+  },
 
   setDuplicates: (verdicts) => {
     if (verdicts.length === 0) return;

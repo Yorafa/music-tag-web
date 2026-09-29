@@ -18,8 +18,15 @@ import { AudioCacheSection } from './AudioCacheSection';
 const DOWNLOAD_PATH_KEY = 'settings.downloadPath';
 
 export function SettingsView() {
-  const [downloadPath, setDownloadPath] = useState<string>(() =>
-    parseDisplayPath(readString(DOWNLOAD_PATH_KEY) || ''),
+  // The stored value is ALREADY the relative form (handleSave / onBlur below
+  // both write `parseDisplayPath(...)`). Read it back verbatim — do NOT parse
+  // again: parseDisplayPath is not idempotent for a bare relative segment
+  // (e.g. "Download" has no "/music/" and doesn't start with "music/", so it
+  // hits the legacy host-absolute branch and collapses to "" = root). That
+  // double-parse was why a saved download path reverted to the default on
+  // reopen.
+  const [downloadPath, setDownloadPath] = useState<string>(
+    () => readString(DOWNLOAD_PATH_KEY) || '',
   );
   const [pathBarInput, setPathBarInput] = useState<string>(() =>
     formatDisplayPath(downloadPath),
