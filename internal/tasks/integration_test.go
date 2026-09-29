@@ -660,7 +660,7 @@ func TestIntegration_TidyFolder_RenamesFile(t *testing.T) {
 	rig.Enqueue(t, tasks.TypeTidyFolder, &tasks.TidyFolderPayload{
 		MusicPaths: []string{srcPath},
 		RootPath:   rig.MusicRoot,
-		FirstDir:   "album",
+		Segments:   []string{"${album}"},
 	})
 
 	rig.WaitForCompletion(t, 8*time.Second)

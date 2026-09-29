@@ -35,11 +35,24 @@ type FullScanPayload struct {
 	SubPaths [][2]string `json:"sub_paths"` // [(parentUID, path), ...]
 }
 
+// TidyFolderPayload moves each file to root_path/<levels>/<its own name>,
+// where the levels are rendered from that file's tags.
+//
+// Segments is an ORDERED list of directory levels, and the list length is
+// the depth: one entry is a flat directory, three is artist/album/disc.
+// Each entry is itself a template, so a level may mix tag values with
+// fixed text — "${year} - ${album}" is one directory, not two.
+//
+// This replaced a fixed first_dir/second_dir pair, which capped the depth
+// at two and made every level a bare field name. A library that wants
+// "${artist}/${year} - ${album}/${discnumber}" had no way to say so, and
+// the only honest thing the UI could do was pretend the shape it offered
+// was the shape everyone wanted. See tidyDestPath for the single place the
+// destination is derived.
 type TidyFolderPayload struct {
 	MusicPaths []string `json:"music_paths"`
 	RootPath   string   `json:"root_path"`
-	FirstDir   string   `json:"first_dir"`
-	SecondDir  string   `json:"second_dir"`
+	Segments   []string `json:"segments"`
 }
 
 // DownloadPayload is the generic, source-routed download task body.

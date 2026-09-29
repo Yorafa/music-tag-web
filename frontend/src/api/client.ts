@@ -93,6 +93,92 @@ export async function tidyFolder(params: Record<string, unknown>) {
   return data;
 }
 
+/** One file's planned destination under 整理目录. Mirrors
+ *  `tasks.TidyPlanRow`.
+ *
+ *  `old_path` / `new_path` are ABSOLUTE, unlike every other path the
+ *  frontend sends. The operator is checking these two against a
+ *  filesystem, and a root-relative pair would make them compare against a
+ *  different thing per row. `missing` lists template fields this file
+ *  did not have — the file still moves, into a directory with a gap in
+ *  its name, which is why it is a warning and not a block. */
+export interface TidyPlanRow {
+  old_path: string;
+  new_path: string;
+  status: TidyPlanStatus;
+  reason?: string;
+  missing?: string[];
+}
+
+/** Mirrors the five `tasks.TidyPlan*` constants. */
+export const TIDY_STATUSES = {
+  /** The file will move here. */
+  move: 'move',
+  /** Already at that path. Not a failure — half a library being
+   *  correctly filed is the normal state of a tidy that was run before. */
+  same: 'same',
+  /** Something non-directory is already there. This is the case that
+   *  loses data, and it is the one an operator cannot see by reading the
+   *  old and new paths. */
+  taken: 'taken',
+  /** Two files in this batch want one destination. */
+  duplicate: 'duplicate',
+  /** This file cannot be planned: unreadable, outside the library, or a
+   *  level that renders to nothing usable. */
+  blocked: 'blocked',
+} as const;
+
+export type TidyPlanStatus =
+  (typeof TIDY_STATUSES)[keyof typeof TIDY_STATUSES];
+
+/** The plan's counts, computed server-side by the same `TallyTidy` the
+ *  worker would use. Sent rather than recomputed in the dialog so the
+ *  number in the summary line and the number gating the apply button
+ *  cannot come from two different tallies. */
+export interface TidyPlanSummary {
+  total: number;
+  move: number;
+  same: number;
+  taken: number;
+  duplicate: number;
+  blocked: number;
+  with_gaps: number;
+  movable: number;
+}
+
+export interface TidyPlanResponse {
+  rows: TidyPlanRow[];
+  summary: TidyPlanSummary;
+}
+
+/** POST /api/tidy_folder/preview/ — where 整理目录 WOULD put each file.
+ *  Nothing is written.
+ *
+ *  This has to be a server call rather than something the dialog can work
+ *  out locally, and the reason is the whole value of it: the destination
+ *  depends on each file's real tags read off disk, and the verdict that
+ *  actually matters — whether the destination is already occupied, and
+ *  whether two files in the batch want the same one — is decided by the
+ *  same sanitising and containment rules the move obeys. A client-side
+ *  preview would be free to disagree with the move on exactly the cases
+ *  where being wrong costs a file.
+ *
+ *  It reuses the worker's own `tidyDestPath`, so the plan is not a
+ *  parallel implementation of "where does this go".
+ */
+export async function previewTidyFolder(
+  paths: string[],
+  rootPath: string,
+  segments: string[],
+): Promise<TidyPlanResponse> {
+  const { data } = await api.post('tidy_folder/preview/', {
+    music_paths: paths,
+    root_path: rootPath,
+    segments,
+  });
+  return unwrapEnvelope<TidyPlanResponse>(data, 'tidy_folder/preview');
+}
+
 export async function uploadImage(file: File) {
   const formData = new FormData();
   formData.append('upload_file', file);

@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/hibiken/asynq"
@@ -49,8 +50,33 @@ func (h *TidyFolderHandler) ProcessTask(ctx context.Context, t Task) error {
 	if raw, ok := t.Payload.(*TidyFolderPayload); ok && raw != nil {
 		p = *raw
 	}
-	if len(p.MusicPaths) == 0 || p.RootPath == "" || p.FirstDir == "" {
+	if len(p.MusicPaths) == 0 || p.RootPath == "" || len(p.Segments) == 0 {
 		return fmt.Errorf("invalid tidy payload")
+	}
+	// The templates are validated up front, before anything moves. An
+	// unknown key is a typo in the dialog, and finding it out one file at
+	// a time means 500 identical failures in the log and a batch that
+	// half-ran before the first real refusal.
+	//
+	// An EMPTY var map is enough to do it: the expander decides
+	// unknown-key purely from the allow-list, not from what resolved. Every
+	// real field comes back in Expansion.Empty here, which this call site
+	// ignores on purpose — that list is about this file's tags, which are
+	// not read yet.
+	//
+	// Note what is NOT checked: that a level contains a placeholder.
+	// utils.TemplateFieldError requires one, but its reason is that a
+	// filename template with none renames every file to the same literal
+	// name. A directory level has no such problem — "Live" or
+	// "Various Artists" is a legitimate fixed grouping, and refusing it
+	// would forbid the case this feature exists for.
+	for i, seg := range p.Segments {
+		if strings.TrimSpace(seg) == "" {
+			return fmt.Errorf("invalid tidy payload: 第 %d 层是空的", i+1)
+		}
+		if _, err := utils.ExpandFilenameTemplate(seg, map[string]string{}); err != nil {
+			return fmt.Errorf("invalid tidy payload: 第 %d 层：%w", i+1, err)
+		}
 	}
 	// Contain the destination before anything moves.
 	//
@@ -90,11 +116,10 @@ func (h *TidyFolderHandler) ProcessTask(ctx context.Context, t Task) error {
 		if asynqRetryCount(ctx) == 0 {
 			audit.Log(ctx, audit.ActionTidyFolder, p.RootPath, "worker", audit.StatusFailed,
 				len(p.MusicPaths), map[string]interface{}{
-					"root_path":  p.RootPath,
-					"requested":  len(p.MusicPaths),
-					"refused":    "root_path is outside the library",
-					"first_dir":  p.FirstDir,
-					"second_dir": p.SecondDir,
+					"root_path": p.RootPath,
+					"requested": len(p.MusicPaths),
+					"refused":   "root_path is outside the library",
+					"segments":  p.Segments,
 				}, err)
 		}
 		return err
@@ -144,12 +169,11 @@ func (h *TidyFolderHandler) ProcessTask(ctx context.Context, t Task) error {
 		}
 		audit.Log(ctx, audit.ActionTidyFolder, p.RootPath, "worker", status, failed,
 			map[string]interface{}{
-				"root_path":  p.RootPath,
-				"requested":  len(p.MusicPaths),
-				"failed":     failed,
-				"first_dir":  p.FirstDir,
-				"second_dir": p.SecondDir,
-				"examples":   firstErrs,
+				"root_path": p.RootPath,
+				"requested": len(p.MusicPaths),
+				"failed":    failed,
+				"segments":  p.Segments,
+				"examples":  firstErrs,
 			}, nil)
 	}
 	return nil
@@ -231,30 +255,9 @@ func (h *TidyFolderHandler) tidyOne(ctx context.Context, musicPath string, p Tid
 	if err != nil {
 		return fmt.Errorf("read meta: %w", err)
 	}
-	firstRaw := pickAttr(info, p.FirstDir)
-	if firstRaw == "" {
-		firstRaw = "未知"
-	}
-	first, err := sanitizeTidySeg("first_dir", firstRaw)
+	dst, _, err := tidyDestPath(p.RootPath, p.Segments, info, filepath.Base(musicPath))
 	if err != nil {
 		return err
-	}
-	var dst string
-	if p.SecondDir != "" {
-		secondRaw := pickAttr(info, p.SecondDir)
-		if secondRaw == "" {
-			secondRaw = "未知"
-		}
-		second, sErr := sanitizeTidySeg("second_dir", secondRaw)
-		if sErr != nil {
-			return sErr
-		}
-		dst, err = utils.SafeJoin(p.RootPath, filepath.Join(first, second, filepath.Base(musicPath)))
-	} else {
-		dst, err = utils.SafeJoin(p.RootPath, filepath.Join(first, filepath.Base(musicPath)))
-	}
-	if err != nil {
-		return fmt.Errorf("tidy: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
@@ -311,26 +314,105 @@ func (h *TidyFolderHandler) tidyOne(ctx context.Context, musicPath string, p Tid
 	return nil
 }
 
-// pickAttr 把 first_dir/second_dir 字符串 (如 "album", "year", "genre") 映射到 TagInfo 字段。
-func pickAttr(info *tag.TagInfo, key string) string {
-	switch key {
-	case "album":
-		return info.Album
-	case "artist":
-		return info.Artist
-	case "genre":
-		return info.Genre
-	case "year":
-		if info.Year == 0 {
-			return ""
-		}
-		return fmt.Sprintf("%d", info.Year)
-	case "albumartist":
-		return info.AlbumArtist
-	default:
-		return ""
+// tidyVars 把 TagInfo 展开成模板变量表。
+//
+// 键集就是 utils.RenameTemplateFields——与「从标签改名」和「解析文件名」
+// 用的是同一套词汇。这里以前是一份独立的 switch，只认 album/artist/
+// genre/year/albumartist 五个键，而两个改名对话框用的是另外八个；同一份
+// 标签在两个界面里能填的字段不一样，本身就是个 bug。现在三者共用一份
+// 列表（utils.RenameTemplateFields），字段芯片不会和服务端拒绝的列表
+// 漂移。
+//
+// 原来没有 tracknumber/discnumber/title，是能力缺失而不是有意排除：
+// 「音轨 - 艺术家 - 专辑」是用户明确要的整理结构。
+func tidyVars(info *tag.TagInfo) map[string]string {
+	year := ""
+	if info.Year != 0 {
+		year = strconv.Itoa(info.Year)
+	}
+	return map[string]string{
+		"title":       info.Title,
+		"artist":      info.Artist,
+		"album":       info.Album,
+		"albumartist": info.AlbumArtist,
+		"genre":       info.Genre,
+		"year":        year,
+		"tracknumber": info.TrackNumber,
+		"discnumber":  info.DiscNumber,
 	}
 }
+
+// tidyDestPath derives where one file goes, and is the ONLY place that
+// answer is computed. The preview and the move both call it, so a plan the
+// operator read cannot disagree with what runs — which was the whole reason
+// to add a preview at all. Two implementations would be free to drift on
+// exactly the rules that matter (sanitising, containment, the empty-segment
+// fallback) and would do so silently, in the direction that shows a tidy
+// plan and then moves files somewhere else.
+//
+// `missing` lists the tags that resolved to nothing across the whole
+// template, deduplicated, in level order. The caller surfaces it rather
+// than acting on it: `${year} - ${album}` on a track with no year still
+// produces a usable directory (" - 叶惠美"), and only the operator can say
+// whether that is what they meant. A level that renders to nothing AT ALL
+// is a different matter and is an error — see below.
+func tidyDestPath(root string, segments []string, info *tag.TagInfo, filename string) (string, []string, error) {
+	if len(segments) == 0 {
+		return "", nil, fmt.Errorf("tidy: 没有指定任何目录层级")
+	}
+	vars := tidyVars(info)
+	var (
+		levels  []string
+		missing []string
+		seen    = map[string]bool{}
+	)
+	for i, tmpl := range segments {
+		if strings.TrimSpace(tmpl) == "" {
+			return "", nil, fmt.Errorf("tidy: 第 %d 层是空的", i+1)
+		}
+		// The strict expander, not RenderTemplate: an unknown key must
+		// be an error the dialog can show, never a literal "${typo}"
+		// becoming a directory name.
+		exp, err := utils.ExpandFilenameTemplate(tmpl, vars)
+		if err != nil {
+			return "", nil, fmt.Errorf("tidy: 第 %d 层：%w", i+1, err)
+		}
+		for _, k := range exp.Empty {
+			if !seen[k] {
+				seen[k] = true
+				missing = append(missing, k)
+			}
+		}
+		raw := exp.Name
+		if strings.TrimSpace(raw) == "" {
+			// Every placeholder in this level was empty AND the level had
+			// no fixed text to fall back on. The old two-level version
+			// had an unconditional "未知" for this; keeping it means an
+			// untagged track still lands somewhere instead of failing
+			// the whole batch on a level the operator never saw.
+			raw = unknownDir
+		}
+		seg, err := sanitizeTidySeg(fmt.Sprintf("第 %d 层", i+1), raw)
+		if err != nil {
+			return "", nil, err
+		}
+		levels = append(levels, seg)
+	}
+	// A fresh slice rather than `append(levels, filename)`: that would
+	// reuse levels' backing array and leave a stray filename sitting in
+	// it, which is harmless right now and a genuine bug the moment
+	// anything reads `levels` again below this line.
+	dst, err := utils.SafeJoin(root, filepath.Join(append(append([]string{}, levels...), filename)...))
+	if err != nil {
+		return "", nil, fmt.Errorf("tidy: %w", err)
+	}
+	return dst, missing, nil
+}
+
+// unknownDir is the directory name a level falls back to when the
+// template produced nothing at all. Spelled rather than symbolised because
+// it ends up in the operator's filesystem.
+const unknownDir = "未知"
 
 // sanitizeTidySeg validates a tag-derived directory segment used by
 // TidyFolder for renaming. pickAttr returns the verbatim album / artist /

@@ -67,6 +67,10 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		authed.POST("/fetch_id3_by_title/", handler.FetchID3ByTitle)
 		authed.POST("/fetch_lyric/", handler.FetchLyric)
 		authed.POST("/tidy_folder/", handler.TidyFolder)
+		// Read-only dry run of the same derivation, so the dialog can
+		// show where files would go before any of them move. Registered
+		// next to the mutation because it is meaningless apart from it.
+		authed.POST("/tidy_folder/preview/", handler.PreviewTidyFolder)
 		authed.POST("/upload_image/", handler.UploadImage)
 		// /api/search_music/ is the unified search endpoint for all
 		// registered tag- and download-source plugins (youtube search

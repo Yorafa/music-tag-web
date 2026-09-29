@@ -56,7 +56,7 @@ func TestTidy_RejectsAnOutOfLibraryRootPath(t *testing.T) {
 	err := tidyTask(t, music, TidyFolderPayload{
 		MusicPaths: []string{track},
 		RootPath:   outside,
-		FirstDir:   "artist",
+		Segments:   []string{"${artist}"},
 	})
 	if err == nil {
 		t.Error("ProcessTask accepted a root_path outside the library")
@@ -80,7 +80,7 @@ func TestTidy_RejectsASiblingOfTheLibrary(t *testing.T) {
 	err := tidyTask(t, music, TidyFolderPayload{
 		MusicPaths: []string{track},
 		RootPath:   sibling,
-		FirstDir:   "artist",
+		Segments:   []string{"${artist}"},
 	})
 	if err == nil {
 		t.Errorf("ProcessTask accepted %s as a root under %s", sibling, music)
@@ -103,7 +103,7 @@ func TestTidy_RejectsAnOutOfLibrarySource(t *testing.T) {
 	if err := tidyTask(t, music, TidyFolderPayload{
 		MusicPaths: []string{stray},
 		RootPath:   music,
-		FirstDir:   "artist",
+		Segments:   []string{"${artist}"},
 	}); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestTidy_OneBadRowDoesNotSinkTheBatch(t *testing.T) {
 	if err := tidyTask(t, music, TidyFolderPayload{
 		MusicPaths: []string{stray, track},
 		RootPath:   music,
-		FirstDir:   "artist",
+		Segments:   []string{"${artist}"},
 	}); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestTidy_StillMovesFilesWithinTheLibrary(t *testing.T) {
 	if err := tidyTask(t, music, TidyFolderPayload{
 		MusicPaths: []string{track},
 		RootPath:   sub,
-		FirstDir:   "artist",
+		Segments:   []string{"${artist}"},
 	}); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestTidy_NoMusicRootMovesNothing(t *testing.T) {
 	h := &TidyFolderHandler{} // MusicRoot deliberately unset
 	err := h.ProcessTask(context.Background(), Task{
 		Type:    TypeTidyFolder,
-		Payload: &TidyFolderPayload{MusicPaths: []string{track}, RootPath: music, FirstDir: "artist"},
+		Payload: &TidyFolderPayload{MusicPaths: []string{track}, RootPath: music, Segments: []string{"${artist}"}},
 	})
 	if err == nil {
 		t.Error("ProcessTask ran with no music root configured")

@@ -45,7 +45,7 @@ func TestTidyOne_CarriesSidecars(t *testing.T) {
 	}
 
 	h := &TidyFolderHandler{MusicRoot: root} // DB and Bus nil: no rows, no events
-	p := TidyFolderPayload{RootPath: root, FirstDir: "album"}
+	p := TidyFolderPayload{RootPath: root, Segments: []string{"${album}"}}
 	if err := h.tidyOne(context.Background(), src, p); err != nil {
 		t.Fatalf("tidyOne: %v", err)
 	}

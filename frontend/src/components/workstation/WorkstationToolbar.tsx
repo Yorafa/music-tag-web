@@ -31,17 +31,16 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { ParseFilenamesModal } from '@/components/scraper/ParseFilenamesModal';
 import { RenameFromTagsDialog } from '@/components/workstation/RenameFromTagsDialog';
+import { TidyFolderDialog } from '@/components/workstation/TidyFolderDialog';
 import { TrashDialog } from '@/components/workstation/TrashDialog';
 import { BatchEditDialog } from '@/components/workstation/BatchEditDialog';
 import { skippedNotesFromUpdate } from '@/utils/skippedNotes';
 import { useWorklistStore, type WorklistGrouping } from '@/store/useWorklistStore';
 import { useNoticeStore } from '@/store/useNoticeStore';
 import {
-  tidyFolder,
   batchUpdateId3,
   pruneEmptyFolders,
   previewPruneEmpty,
@@ -148,13 +147,9 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   // because a batch scrape is where duplicates actually pile up.
   const [dedupe, setDedupe] = useState(() => isDedupeEnabled());
 
-  // Tidy form
-  const [tidyForm, setTidyForm] = useState({
-    root_path: '',
-    first_dir: 'artist',
-    second_dir: 'album',
-  });
-  const [tidyRunning, setTidyRunning] = useState(false);
+  // Tidy form state moved into TidyFolderDialog, which owns the level
+  // list, the preview and the apply. All this surface still decides is
+  // which rows the tidy is offered.
   const [pruning, setPruning] = useState(false);
   const [pruneOpen, setPruneOpen] = useState(false);
   // What the cleanup would remove, fetched when the dialog opens. Kept as a
@@ -387,52 +382,24 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   };
 
   // Submit Tidy Folder
-  const handleSubmitTidy = async () => {
-    if (!tidyForm.root_path) {
-      useNoticeStore.getState().push('请填写整理后的根目录', 'warn');
-      return;
-    }
-    setTidyRunning(true);
-    try {
-      // music_paths is what the worker actually iterates. The old payload
-      // sent file_full_path + select_data instead — fields the endpoint
-      // never reads — so MusicPaths arrived empty and ProcessTask bailed
-      // with "invalid tidy payload" on every single submission. The UI
-      // reported success because enqueueing *did* succeed; the task died
-      // afterwards, five retries, silently. See handler.TidyFolder.
-      const targetRows = hasSelection
-        ? rows.filter((r) => selectedIds.includes(r.fullPath))
-        : rows;
-      if (targetRows.length === 0) {
-        useNoticeStore.getState().push('没有可整理的音乐行', 'warn');
-        setTidyRunning(false);
-        return;
-      }
-      const res = await tidyFolder({
-        root_path: tidyForm.root_path,
-        first_dir: tidyForm.first_dir,
-        second_dir: tidyForm.second_dir,
-        music_paths: targetRows.map((r) => r.fullPath),
-      });
-      if (res?.result) {
-        useNoticeStore.getState().push('已提交目录整理异步任务', 'info');
-        setTidyOpen(false);
-      } else {
-        // Surface the server's reason. "目录整理提交失败" on its own told the
-        // user nothing about WHICH field was wrong, and the root-directory
-        // check the gateway now runs answers 400 with a message naming the
-        // real library root — throwing that away here would leave the fix
-        // unreachable from the UI.
-        useNoticeStore
-          .getState()
-          .push(res?.message || '目录整理提交失败', 'warn');
-      }
-    } catch {
-      useNoticeStore.getState().push('目录整理提交失败', 'error');
-    } finally {
-      setTidyRunning(false);
-    }
-    };
+  //
+  // The payload shape and the submit flow both live in TidyFolderDialog
+  // now. What is left here is deciding WHICH rows it gets, which is the
+  // one piece of the old handler that was never about the form.
+  //
+  // music_paths is what the worker actually iterates. The pre-2024 payload
+  // sent file_full_path + select_data instead — fields the endpoint never
+  // reads — so MusicPaths arrived empty and ProcessTask bailed with
+  // "invalid tidy payload" on every submission. The UI reported success
+  // because enqueueing *did* succeed; the task died afterwards, five
+  // retries, silently. See handler.TidyFolder.
+  const tidyTargetPaths = useMemo(
+    () =>
+      (hasSelection ? rows.filter((r) => selectedIds.includes(r.fullPath)) : rows).map(
+        (r) => r.fullPath,
+      ),
+    [rows, selectedIds, hasSelection],
+  );
 
   // Reconcile the queued rows against disk, dropping the ones whose file
   // is gone. A row's file can leave without going through the app — a file
@@ -441,9 +408,9 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   // one that answers "is the list still true?".
   //
   // It lives beside the other row-level actions rather than over in the
-  // directory tree, which is why the two refreshes are not together: that
-  // one reloads the tree, this one edits the list. Two adjacent refresh
-  // icons on the same panel read as one button with two states.
+  // directory tree, which is why the two refreshes are no longer together:
+  // that one reloads the tree, this one edits the list. Two adjacent
+  // refresh icons on the same panel read as one button with two states.
   const handleReconcile = async () => {
     setReconciling(true);
     try {
@@ -808,7 +775,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
             setTidyOpen(true);
           }}
           className="h-8 gap-1 text-xs"
-          title="按「歌手/专辑/曲目」结构归档整理物理目录"
+          title="逐层指定目录名，按标签重新组织物理目录；可先预览方案再执行"
         >
           <FolderTree className="w-3.5 h-3.5 text-muted-foreground" />
           <span>整理目录</span>
@@ -1039,7 +1006,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           gathered into one list so a 40-row check is reviewable without
           hunting down individual rows. */}
       <Dialog open={dupResultOpen} onOpenChange={setDupResultOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="text-base flex items-center gap-2">
               <ScanSearch className="w-4 h-4 text-primary" />
@@ -1108,7 +1075,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
       <TrashDialog open={trashOpen} onOpenChange={setTrashOpen} />
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="text-base flex items-center gap-2 text-destructive">
               <Trash2 className="w-4 h-4" />
@@ -1147,7 +1114,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
       </Dialog>
 
       <Dialog open={dupDeleteOpen} onOpenChange={setDupDeleteOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="text-base flex items-center gap-2 text-destructive">
               <Trash2 className="w-4 h-4" />
@@ -1191,7 +1158,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           a count is something the user can only agree with, and this is an
           operation that removes things. */}
       <Dialog open={pruneOpen} onOpenChange={setPruneOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="text-base flex items-center gap-2">
               <FolderX className="w-4 h-4" />
@@ -1285,53 +1252,13 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         </DialogContent>
       </Dialog>
 
-      {/* Tidy Folder Modal */}
-      <Dialog open={tidyOpen} onOpenChange={setTidyOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-base flex items-center gap-2">
-              <FolderTree className="w-4 h-4 text-primary" />
-              整理音乐文件夹
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
-            <div>
-              <Label className="text-xs mb-1 block">整理后的目标根目录</Label>
-              <Input
-                value={tidyForm.root_path}
-                onChange={(e) => setTidyForm({ ...tidyForm, root_path: e.target.value })}
-                placeholder="/app/media/"
-                className="h-8 text-xs font-mono"
-              />
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">一级目录规则（如 artist / genre）</Label>
-              <Input
-                value={tidyForm.first_dir}
-                onChange={(e) => setTidyForm({ ...tidyForm, first_dir: e.target.value })}
-                className="h-8 text-xs"
-              />
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">二级目录规则（可选，如 album）</Label>
-              <Input
-                value={tidyForm.second_dir}
-                onChange={(e) => setTidyForm({ ...tidyForm, second_dir: e.target.value })}
-                className="h-8 text-xs"
-              />
-            </div>
-          </div>
-          <DialogFooter showCloseButton>
-            <Button
-              onClick={handleSubmitTidy}
-              disabled={tidyRunning}
-              className="text-xs h-8"
-            >
-              {tidyRunning ? '正在提交…' : '确认整理'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Tidy Folder — the ordered level list, its preview and its apply
+          all live in the dialog. */}
+      <TidyFolderDialog
+        open={tidyOpen}
+        onOpenChange={setTidyOpen}
+        selectedPaths={tidyTargetPaths}
+      />
     </div>
   );
 }

@@ -79,7 +79,7 @@ func TestTidy_AcceptsRootRelativeMusicPaths(t *testing.T) {
 		Payload: &TidyFolderPayload{
 			MusicPaths: []string{rel}, // relative, as the client sends
 			RootPath:   music,         // absolute, as the dialog asks for
-			FirstDir:   "artist",
+			Segments:   []string{"${artist}"},
 		},
 	}); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
@@ -115,7 +115,7 @@ func TestTidy_AcceptsMixedAbsoluteAndRelativePaths(t *testing.T) {
 		Payload: &TidyFolderPayload{
 			MusicPaths: []string{rel, absTrack},
 			RootPath:   music,
-			FirstDir:   "album",
+			Segments:   []string{"${album}"},
 		},
 	}); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
@@ -148,7 +148,7 @@ func TestTidy_AFailedBatchIsAudited(t *testing.T) {
 		Payload: &TidyFolderPayload{
 			MusicPaths: []string{track},
 			RootPath:   outside, // refused: outside the library
-			FirstDir:   "artist",
+			Segments:   []string{"${artist}"},
 		},
 	})
 	if err == nil {
@@ -193,7 +193,7 @@ func TestTidy_PartialFailureIsSummarisedIntoOneRow(t *testing.T) {
 		Payload: &TidyFolderPayload{
 			MusicPaths: []string{goodRel, outside},
 			RootPath:   music,
-			FirstDir:   "artist",
+			Segments:   []string{"${artist}"},
 		},
 	}); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
@@ -240,7 +240,7 @@ func TestTidy_RetryAttemptsDoNotDuplicateTheRefusalRow(t *testing.T) {
 	payload := &TidyFolderPayload{
 		MusicPaths: []string{track},
 		RootPath:   outside,
-		FirstDir:   "artist",
+		Segments:   []string{"${artist}"},
 	}
 
 	// asynq carries the retry count in the context; a plain context.Background()
@@ -284,7 +284,7 @@ func TestTidy_AllFilesFailingIsReportedAsFailedNotPartial(t *testing.T) {
 		Payload: &TidyFolderPayload{
 			MusicPaths: strays, // all outside the library
 			RootPath:   music,  // the root itself is fine
-			FirstDir:   "artist",
+			Segments:   []string{"${artist}"},
 		},
 	}); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
@@ -322,7 +322,7 @@ func TestTidy_StillRefusesTraversalAfterTheWidening(t *testing.T) {
 		Payload: &TidyFolderPayload{
 			MusicPaths: []string{"../canary.wav", track},
 			RootPath:   music,
-			FirstDir:   "artist",
+			Segments:   []string{"${artist}"},
 		},
 	}); err != nil {
 		t.Fatalf("ProcessTask: %v", err)

@@ -23,7 +23,7 @@ func tidyRouter() *gin.Engine {
 func postTidy(t *testing.T, r *gin.Engine, root string) string {
 	t.Helper()
 	body := `{"music_paths":["17/song.ogg"],"root_path":` +
-		mustJSON(t, root) + `,"first_dir":"artist"}`
+		mustJSON(t, root) + `,"segments":["${artist}"]}`
 	req := httptest.NewRequest("POST", "/api/tidy_folder/", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
