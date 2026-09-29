@@ -33,6 +33,7 @@ import {
   type ExpandedFile,
 } from '@/utils/expandDirs';
 import { mergeExpandedDirs } from '@/utils/mergeExpanded';
+import { getFileList } from '@/api/client';
 import { hydrateTagsBatched } from '@/lib/hydrateTags';
 import { readJson, readString, writeJson, writeString, removeString } from '@/utils/persist';
 import {
@@ -102,6 +103,26 @@ interface WorklistState {
    *  nothing-else-to-know reasons. */
   clear: () => void;
   remove: (ids: string[]) => void;
+  /** Reconcile the queue with what's actually on disk: prune rows whose
+   *  file no longer exists under its parent directory.
+   *
+   *  Why this exists separately from enqueueDirs: enqueueDirs is
+   *  append-only and short-circuits on a dir that expands to zero files
+   *  (`if (dirs.length === 0)`), so a directory the user emptied on disk
+   *  leaves its stale rows in the queue forever — re-adding the dir can't
+   *  clean them because it never revisits rows it isn't currently adding.
+   *
+   *  Method: group rows by parent dir, call getFileList(parentDir) once
+   *  per dir (non-recursive — it lists exactly that dir's entries), and
+   *  drop a row iff its fileName is absent from a SUCCESSFUL listing. A
+   *  dir whose call throws (404/500/offline) is left entirely untouched:
+   *  a transient backend failure must never wipe the queue. The empty-dir
+   *  case the backend reports as success-with-`children:[]`, which is
+   *  exactly the signal enqueueDirs can't act on — here it correctly
+   *  prunes every row under that dir.
+   *
+   *  Returns the number of rows removed so the caller can surface a notice. */
+  reconcile: () => Promise<{ removed: number; checkedDirs: number }>;
   setStatus: (id: string, status: ScrapeStatus) => void;
   setFilter: (f: WorklistFilter) => void;
   /** Record duplicate-check verdicts, keyed by row fullPath.
@@ -388,6 +409,65 @@ export const useWorklistStore = create<WorklistState>((set, get) => ({
         selectedIds: s.selectedIds.filter((x) => !drop.has(x)),
       };
     });
+  },
+
+  reconcile: async () => {
+    const rows = get().rows;
+    if (rows.length === 0) return { removed: 0, checkedDirs: 0 };
+
+    // Group rows by parent dir so each directory is listed exactly once,
+    // regardless of how many queued files sit in it. parentDir === '' is
+    // the library root — a valid key the backend lists as any other dir.
+    const byDir = new Map<string, WorklistRow[]>();
+    for (const r of rows) {
+      const i = r.fullPath.lastIndexOf('/');
+      const parentDir = i === -1 ? '' : r.fullPath.slice(0, i);
+      const bucket = byDir.get(parentDir);
+      if (bucket) bucket.push(r);
+      else byDir.set(parentDir, [r]);
+    }
+
+    // Sequential per-dir, mirroring expandOne's rationale: the backend does
+    // sync DB lookups inside each /api/file_list/ call, so a serial loop
+    // keeps load predictable and avoids hammering it.
+    const deadIds = new Set<string>();
+    let checkedDirs = 0;
+    for (const [parentDir, dirRows] of byDir) {
+      let res;
+      try {
+        res = await getFileList(parentDir);
+      } catch {
+        // Transient guard: a 404/500/offline call must NEVER wipe rows.
+        // Leave this dir's rows entirely untouched and move on.
+        continue;
+      }
+      // A malformed-but-non-throwing response is treated like a failure:
+      // we only prune against a listing we can actually trust.
+      if (!res?.result || !Array.isArray(res.data)) continue;
+      checkedDirs += 1;
+      // Non-recursive: data[0].children is exactly this dir's entries.
+      // An emptied dir reports success with children:[] — the case
+      // enqueueDirs can't act on — so `present` is empty and every row
+      // under it is (correctly) pruned.
+      const present = new Set<string>(
+        (res.data[0]?.children ?? []).map((c: { name: string }) => c.name),
+      );
+      for (const r of dirRows) {
+        if (!present.has(r.fileName)) deadIds.add(r.id);
+      }
+    }
+
+    if (deadIds.size === 0) return { removed: 0, checkedDirs };
+
+    set((s) => {
+      const nextRows = s.rows.filter((r) => !deadIds.has(r.id));
+      persistRows(nextRows);
+      return {
+        rows: nextRows,
+        selectedIds: s.selectedIds.filter((x) => !deadIds.has(x)),
+      };
+    });
+    return { removed: deadIds.size, checkedDirs };
   },
 
   setStatus: (id, status) => {

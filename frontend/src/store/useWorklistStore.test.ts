@@ -181,6 +181,119 @@ describe('useWorklistStore persistence', () => {
   });
 });
 
+// ─── reconcile: prune rows whose file has vanished on disk ────────────
+//
+// enqueueDirs is append-only and short-circuits on a dir that expands to
+// zero files, so a directory the user emptied leaves its stale rows in the
+// queue forever. reconcile walks each queued row's parent dir, calls
+// getFileList once per dir, and drops rows absent from a SUCCESSFUL listing.
+// A dir whose call throws is left untouched (transient-failure guard).
+
+describe('useWorklistStore reconcile', () => {
+  it('prunes rows whose file is gone but keeps ones still listed', async () => {
+    // Seed two rows in dir 'd': a.mp3 and b.mp3.
+    getFileListMock.mockResolvedValueOnce(
+      listResp([fileNode('a.mp3', 1), fileNode('b.mp3', 2)]),
+    );
+    await useWorklistStore.getState().enqueueDirs(['d']);
+
+    // On reconcile, dir 'd' now only lists b.mp3 — a.mp3 vanished.
+    getFileListMock.mockResolvedValueOnce(listResp([fileNode('b.mp3', 2)]));
+    const { removed, checkedDirs } = await useWorklistStore.getState().reconcile();
+
+    expect(removed).toBe(1);
+    expect(checkedDirs).toBe(1);
+    const ids = useWorklistStore.getState().rows.map((r) => r.id);
+    expect(ids).toEqual(['d/b.mp3']);
+    const stored = JSON.parse(localStorage.getItem('worklist.v1') || 'null');
+    expect(stored.rows.map((r: { id: string }) => r.id)).toEqual(['d/b.mp3']);
+  });
+
+  it('prunes every row under a dir the user emptied (success + children:[])', async () => {
+    getFileListMock.mockResolvedValueOnce(
+      listResp([fileNode('a.mp3', 1), fileNode('b.mp3', 2)]),
+    );
+    await useWorklistStore.getState().enqueueDirs(['d']);
+
+    // The emptied-dir signal the backend distinguishes from missing:
+    // result:true with an empty children list. enqueueDirs can't act on
+    // this; reconcile must.
+    getFileListMock.mockResolvedValueOnce(listResp([]));
+    const { removed } = await useWorklistStore.getState().reconcile();
+
+    expect(removed).toBe(2);
+    expect(useWorklistStore.getState().rows.length).toBe(0);
+  });
+
+  it('leaves rows untouched when the dir listing throws (transient guard)', async () => {
+    getFileListMock.mockResolvedValueOnce(
+      listResp([fileNode('a.mp3', 1), fileNode('b.mp3', 2)]),
+    );
+    await useWorklistStore.getState().enqueueDirs(['d']);
+
+    // A 500/offline must NEVER wipe the queue.
+    getFileListMock.mockRejectedValueOnce(new Error('boom'));
+    const { removed, checkedDirs } = await useWorklistStore.getState().reconcile();
+
+    expect(removed).toBe(0);
+    expect(checkedDirs).toBe(0);
+    expect(useWorklistStore.getState().rows.length).toBe(2);
+  });
+
+  it('does not prune against a malformed non-throwing response', async () => {
+    getFileListMock.mockResolvedValueOnce(listResp([fileNode('a.mp3', 1)]));
+    await useWorklistStore.getState().enqueueDirs(['d']);
+
+    // result:false — we can't trust the listing, so no pruning.
+    getFileListMock.mockResolvedValueOnce({ result: false, code: '500', data: [], message: 'err' });
+    const { removed, checkedDirs } = await useWorklistStore.getState().reconcile();
+
+    expect(removed).toBe(0);
+    expect(checkedDirs).toBe(0);
+    expect(useWorklistStore.getState().rows.length).toBe(1);
+  });
+
+  it('drops pruned rows from selectedIds too', async () => {
+    getFileListMock.mockResolvedValueOnce(
+      listResp([fileNode('a.mp3', 1), fileNode('b.mp3', 2)]),
+    );
+    await useWorklistStore.getState().enqueueDirs(['d']);
+    useWorklistStore.setState({ selectedIds: ['d/a.mp3', 'd/b.mp3'] });
+
+    getFileListMock.mockResolvedValueOnce(listResp([fileNode('b.mp3', 2)]));
+    await useWorklistStore.getState().reconcile();
+
+    expect(useWorklistStore.getState().selectedIds).toEqual(['d/b.mp3']);
+  });
+
+  it('groups rows by parent dir so each dir is listed exactly once', async () => {
+    // Two rows in 'd1', one in 'd2' — reconcile should call getFileList
+    // twice, not three times.
+    getFileListMock.mockResolvedValueOnce(
+      listResp([fileNode('a.mp3', 1), fileNode('b.mp3', 2)]),
+    );
+    await useWorklistStore.getState().enqueueDirs(['d1']);
+    getFileListMock.mockResolvedValueOnce(listResp([fileNode('c.mp3', 3)]));
+    await useWorklistStore.getState().enqueueDirs(['d2']);
+
+    getFileListMock.mockClear();
+    getFileListMock.mockResolvedValue(listResp([fileNode('a.mp3', 1), fileNode('b.mp3', 2), fileNode('c.mp3', 3)]));
+    const { checkedDirs } = await useWorklistStore.getState().reconcile();
+
+    expect(getFileListMock).toHaveBeenCalledTimes(2);
+    expect(checkedDirs).toBe(2);
+    expect(useWorklistStore.getState().rows.length).toBe(3);
+  });
+
+  it('returns zero on an empty queue without any HTTP call', async () => {
+    getFileListMock.mockClear();
+    const { removed, checkedDirs } = await useWorklistStore.getState().reconcile();
+    expect(removed).toBe(0);
+    expect(checkedDirs).toBe(0);
+    expect(getFileListMock).not.toHaveBeenCalled();
+  });
+});
+
 // ─── Plan C.3 grouping plane ──────────────────────────────────────────
 //
 // `grouping` is persisted to `worklist.grouping.v1` (separate from

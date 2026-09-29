@@ -13,6 +13,7 @@ import {
   ScanSearch,
   Tags,
   ArchiveRestore,
+  ListChecks,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -98,6 +99,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   const setGrouping = useWorklistStore((s) => s.setGrouping);
   const setDuplicates = useWorklistStore((s) => s.setDuplicates);
   const clearDuplicates = useWorklistStore((s) => s.clearDuplicates);
+  const reconcile = useWorklistStore((s) => s.reconcile);
 
   const [parseOpen, setParseOpen] = useState(false);
   const [renameFromTagsOpen, setRenameFromTagsOpen] = useState(false);
@@ -124,6 +126,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
 
   // Scrape settings
   //
@@ -430,6 +433,33 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
       setTidyRunning(false);
     }
     };
+
+  // Reconcile the queued rows against disk, dropping the ones whose file
+  // is gone. A row's file can leave without going through the app — a file
+  // manager, an rsync, a bind mount edited from the host — and nothing else
+  // here cleans that up: 移除 drops a row the *user* picked, and this is the
+  // one that answers "is the list still true?".
+  //
+  // It lives beside the other row-level actions rather than over in the
+  // directory tree, which is why the two refreshes are not together: that
+  // one reloads the tree, this one edits the list. Two adjacent refresh
+  // icons on the same panel read as one button with two states.
+  const handleReconcile = async () => {
+    setReconciling(true);
+    try {
+      const { removed, checkedDirs } = await reconcile();
+      if (removed > 0) {
+        useNoticeStore.getState().push(`已清理 ${removed} 个失效条目 (检查 ${checkedDirs} 个目录)`, 'info');
+      } else {
+        useNoticeStore.getState().push('所有条目均指向仍存在的文件', 'info');
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      useNoticeStore.getState().push(`刷新失败: ${msg}`, 'error');
+    } finally {
+      setReconciling(false);
+    }
+  };
 
   // Open the cleanup confirmation, fetching what it would remove first.
   //
@@ -867,6 +897,20 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
 
       {/* Right Operations: Selection, Grouping, Clear */}
       <div className="flex items-center gap-2">
+        {/* First in the cluster, because it acts on the row list the rest
+            of these controls then operate on. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleReconcile}
+          disabled={reconciling || rows.length === 0}
+          className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground"
+          title="刷新收录：逐个目录比对磁盘，清掉文件已不存在的条目"
+        >
+          <ListChecks className={`w-3.5 h-3.5 ${reconciling ? 'animate-pulse' : ''}`} />
+          <span className="hidden sm:inline">{reconciling ? '刷新中…' : '刷新收录'}</span>
+        </Button>
+
         {/* Grouping toggles */}
         <div className="flex items-center gap-1 border border-border/80 rounded-lg p-0.5 bg-surface-1">
           <span className="text-[10px] text-muted-foreground px-1.5 font-medium">分组:</span>
