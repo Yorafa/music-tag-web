@@ -253,7 +253,7 @@ export function TrashDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
+      <DialogContent className="sm:max-w-2xl max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="text-base flex items-center gap-2">
             <ArchiveRestore className="w-4 h-4" /> 回收站
@@ -381,7 +381,7 @@ export function TrashDialog({
       {/* The second click. A purge that fires from the first one is a purge
           nobody can cancel once they realise they meant 恢复. */}
       <Dialog open={pendingPurge !== null} onOpenChange={(v) => !v && setPendingPurge(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle className="text-base flex items-center gap-2">
               <Flame className="w-4 h-4 text-destructive" />

@@ -182,7 +182,7 @@ export function BatchEditDialog({ rows, onClose }: BatchEditDialogProps) {
 
   return (
     <Dialog open onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-base flex items-center gap-2">
             <Tags className="w-4 h-4 text-primary" />

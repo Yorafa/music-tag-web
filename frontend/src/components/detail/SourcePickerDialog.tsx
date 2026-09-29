@@ -53,7 +53,7 @@ export function SourcePickerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle className="text-base flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-primary" />

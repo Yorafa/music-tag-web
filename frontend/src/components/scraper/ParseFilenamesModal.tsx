@@ -218,7 +218,7 @@ export function ParseFilenamesModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl">
+      <DialogContent className="sm:max-w-5xl">
         <DialogHeader>
           <DialogTitle>
             <span className="inline-flex items-center gap-2">
