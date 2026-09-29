@@ -11,6 +11,12 @@ import { useNoticeStore } from '@/store/useNoticeStore';
 import { resolveDownloadUrl, audioDownloadBasename } from '@/lib/streamUrl';
 import { formatDuration, toSeconds } from '@/utils/duration';
 import { searchCoverForTrack } from '@/components/search/searchCover';
+import {
+  loadCloudSearchSnapshot,
+  reconcileSnapshot,
+  saveCloudSearchResults,
+  saveCloudSearchSettings,
+} from '@/lib/cloudSearchCache';
 import { COVER_PLACEHOLDER_GRADIENTS } from '@/utils/cover';
 import type { SearchResult } from '@/types';
 import {
@@ -21,6 +27,7 @@ import {
   FolderPlus,
   Sparkles,
   Layers,
+  History,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -36,14 +43,22 @@ export function CloudSearchView() {
   const sourceList = useSourceStore((s) => s.sources);
   const loadSources = useSourceStore((s) => s.loadSources);
 
-  const [query, setQuery] = useState('');
-  const [selectedSources, setSelectedSources] = useState<string[]>(['netease', 'qmusic']);
-  const [multiSource, setMultiSource] = useState(true);
-  const [singleSource, setSingleSource] = useState('netease');
+  // Restored from the last visit, not reset. The sources, the single/multi
+  // mode, the query AND the result list all come back: a five-source
+  // fan-out is a real network cost, and re-issuing it to look at the same
+  // list again is the waste. `restored` records that what is on screen is
+  // the previous search rather than a fresh one, so the panel can say so —
+  // 搜索音源 is what actually re-runs it.
+  const [restored] = useState(() => loadCloudSearchSnapshot());
+  const [query, setQuery] = useState(restored.query);
+  const [selectedSources, setSelectedSources] = useState<string[]>(restored.selectedSources);
+  const [multiSource, setMultiSource] = useState(restored.multiSource);
+  const [singleSource, setSingleSource] = useState(restored.singleSource);
 
-  const [results, setResults] = useState<SearchResult[]>([]);
+  const [results, setResults] = useState<SearchResult[]>(restored.results);
   const [loading, setLoading] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
+  const [hasSearched, setHasSearched] = useState(restored.results.length > 0);
+  const [fromCache, setFromCache] = useState(restored.results.length > 0);
 
   useEffect(() => {
     void loadSources();
@@ -54,13 +69,61 @@ export function CloudSearchView() {
     [sourceList],
   );
 
+  const offeredSources = useMemo(
+    () => searchableSources.map((s) => s.name),
+    [searchableSources],
+  );
+
+  // What the search actually uses, narrowed to sources this build has.
+  //
+  // The stored selection can name a plugin that was renamed or dropped, and
+  // searching a name the gateway does not know returns nothing — the panel
+  // then says "没有匹配的云端歌曲", which reads as "this song does not
+  // exist" rather than "that source is gone". singleSource is the sharper
+  // case: in single-source mode it IS the request, so a dead name there
+  // means that mode silently searches nothing at all.
+  //
+  // Derived rather than corrected in an effect, which is the version that
+  // would render one dead chip as selected for a frame before removing it.
+  // The loader cannot do this narrowing either — on the first render
+  // `sourceList` is still empty, and reconciling against nothing would
+  // wipe the selection the snapshot just restored.
+  const live = useMemo(
+    () =>
+      reconcileSnapshot(
+        { query, multiSource, singleSource, selectedSources, results },
+        offeredSources,
+      ),
+    [query, multiSource, singleSource, selectedSources, results, offeredSources],
+  );
+
+  // Settings and results are written separately. Toggling a source chip
+  // must not re-serialise — or worse, clear — the result list the user
+  // came back to look at.
+  useEffect(() => {
+    saveCloudSearchSettings({ query, multiSource, singleSource, selectedSources });
+  }, [query, multiSource, singleSource, selectedSources]);
+
+  // Results are persisted only when a search actually produced them, so a
+  // failure does not overwrite the last good list with an empty one.
+  useEffect(() => {
+    if (fromCache) return;
+    saveCloudSearchResults(results);
+  }, [fromCache, results]);
+
   const toggleSource = (name: string) => {
-    setSelectedSources((prev) =>
-      prev.includes(name)
-        ? prev.length > 1
-          ? prev.filter((s) => s !== name)
-          : prev
-        : [...prev, name],
+    // Off `live`, not the raw state. After reconcile the raw list can still
+    // hold a name this build dropped, and counting THOSE against "at least
+    // one source must stay" lets the user click away their only real
+    // source — the chip row then shows two unrelated sources selected,
+    // with the click they made nowhere in it.
+    const current = live.selectedSources;
+    setSelectedSources(
+      current.includes(name)
+        ? current.length > 1
+          ? current.filter((s) => s !== name)
+          : current
+        : [...current, name],
     );
   };
 
@@ -70,8 +133,9 @@ export function CloudSearchView() {
 
     setLoading(true);
     setHasSearched(true);
+    setFromCache(false);
     try {
-      const activeSources = multiSource ? selectedSources : [singleSource];
+      const activeSources = multiSource ? live.selectedSources : [live.singleSource];
       const res = await searchMusic({
         query: q,
         sources: activeSources,
@@ -132,8 +196,8 @@ export function CloudSearchView() {
 
           {searchableSources.map((s) => {
             const isSelected = multiSource
-              ? selectedSources.includes(s.name)
-              : singleSource === s.name;
+              ? live.selectedSources.includes(s.name)
+              : live.singleSource === s.name;
             return (
               <button
                 key={s.name}
@@ -200,6 +264,24 @@ export function CloudSearchView() {
           </div>
         ) : (
           <ScrollArea className="h-full pr-2">
+            {/* Say what these rows are. A list that is already on screen
+                when the page opens looks exactly like one that was just
+                fetched, and the difference matters: 试听 and 入库 both act
+                on a row, and a result from last week may name a track
+                that has since been pulled. The button above is the way to
+                actually re-run it. */}
+            {fromCache && (
+              <div
+                className="max-w-6xl mx-auto mb-2.5 rounded-lg border border-border/80 bg-surface-2/60 px-3 py-2 text-[11px] text-muted-foreground flex items-center gap-2"
+                data-testid="cloud-search-restored"
+              >
+                <History className="w-3.5 h-3.5 shrink-0" />
+                <span className="min-w-0 flex-1">
+                  上次搜「{query}」的结果
+                  {results.length > 0 ? `（${results.length} 条）` : ''}，已保留。要看最新的点「搜索音源」。
+                </span>
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-w-6xl mx-auto">
               {results.map((song, i) => {
                 const fileName = audioDownloadBasename(song.artist, song.title || song.name, 'ogg');
