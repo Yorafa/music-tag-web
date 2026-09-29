@@ -98,9 +98,19 @@ interface WorklistState {
   selectAll: () => number;
   /** Drop the in-filter selection. Symmetric to selectAll. */
   clearSelected: () => void;
-  /** Empty the worklist AND selection. Used by a future "清空 Worklist"
-   *  affordance. Today nothing calls it, but the store owns it for
-   *  nothing-else-to-know reasons. */
+  /** Empty the worklist AND selection.
+   *
+   *  Nothing calls this any more. The toolbar used to offer it as 清空 —
+   *  the button shown when nothing was selected — and it emptied the
+   *  whole list with no confirmation, no count in the label, and no way
+   *  back but re-adding every directory. It now shares one button with
+   *  remove(ids) and follows the selection, so there is no longer a
+   *  control here that does this.
+   *
+   *  Kept because it is the only way to express "forget the whole
+   *  worklist", which is a real state a caller may need to get out of
+   *  (a re-scan, a settings change, a test). Anything reaching for it
+   *  should say so out loud rather than wire it to a button. */
   clear: () => void;
   remove: (ids: string[]) => void;
   /** Reconcile the queue with what's actually on disk: prune rows whose

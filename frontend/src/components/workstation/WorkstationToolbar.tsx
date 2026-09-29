@@ -90,7 +90,6 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   const selectAll = useWorklistStore((s) => s.selectAll);
   const clearSelected = useWorklistStore((s) => s.clearSelected);
   const remove = useWorklistStore((s) => s.remove);
-  const clear = useWorklistStore((s) => s.clear);
   const setStatus = useWorklistStore((s) => s.setStatus);
   const setMusicInfo = useWorklistStore((s) => s.setMusicInfo);
   const renameRow = useWorklistStore((s) => s.renameRow);
@@ -572,8 +571,8 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   //
   // Selection-only, never "all rows": deleting a whole library because the
   // filter happened to be empty is not a mistake this UI should let you make
-  // by accident. 清空 below still empties the LIST, and that one is reversible
-  // by re-adding the directory.
+  // by accident. 移除列表文件 below takes rows out of the LIST, and that one
+  // is reversible by re-adding the directory.
   const deleteTargets = hasSelection
     ? rows.filter((r) => selectedIds.includes(r.id))
     : [];
@@ -804,9 +803,10 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           <span>整理目录</span>
         </Button>
 
-        <Separator orientation="vertical" className="mx-0.5 h-4" />
-
-        {/* Duplicate check — read-only, over the selection. */}
+        {/* Duplicate check — read-only, over the selection. It sits with
+            the other three "answer something about the selection"
+            buttons rather than with the deletions: nothing here changes a
+            file, and the result is a set of badges on the rows. */}
         <Button
           variant="outline"
           size="sm"
@@ -815,9 +815,13 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           className="h-8 gap-1 text-xs"
           title="对选中的行做只读查重（文件名 / 哈希 / 声纹 / 元数据），不修改任何文件"
         >
-          <ScanSearch className={`w-3.5 h-3.5 text-muted-foreground ${isCheckingDup ? 'animate-pulse' : ''}`} />
-          <span>{isCheckingDup ? '查重中…' : '查重'}</span>
+          <ScanSearch
+            className={`w-3.5 h-3.5 text-muted-foreground ${isCheckingDup ? 'animate-pulse' : ''}`}
+          />
+          <span>{isCheckingDup ? '查重中…' : '歌曲查重'}</span>
         </Button>
+
+        <Separator orientation="vertical" className="mx-0.5 h-4" />
 
         {/* Delete the duplicates found. Only enabled once rows carry a
             content-level duplicate verdict — see deleteTargetsFor for why
@@ -837,9 +841,10 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
 
         {/* Delete the selected files from disk. Sits next to 删除重复
             because it is the same operation with a different reason, and
-            next to 移除 because the two look alike and do very different
-            things: 移除 drops a row from this list only, this one takes the
-            file with it. */}
+            next to 移除列表文件 because the two look alike and do very
+            different things: that one drops a row from this list, this one
+            takes the file with it. The label says which — 「移除」 next to
+            「删除」 was two words apart from a different consequence. */}
         <Button
           variant="outline"
           size="sm"
@@ -853,20 +858,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           }
         >
           <Trash2 className="w-3.5 h-3.5" />
-          <span>删除选中{hasSelection ? ` (${deleteTargets.length})` : ''}</span>
-        </Button>
-
-        {/* Where the files those two buttons removed went. Without this the
-            "可恢复" in their confirm dialogs is a promise the UI cannot keep. */}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setTrashOpen(true)}
-          className="h-8 gap-1 text-xs"
-          title="查看并恢复已删除的文件"
-        >
-          <ArchiveRestore className="w-3.5 h-3.5 text-muted-foreground" />
-          <span>回收站</span>
+          <span>将删除选中文件{hasSelection ? ` (${deleteTargets.length})` : ''}</span>
         </Button>
 
         {/* Prune Empty Folders. Sits with 回收站 rather than with the
@@ -887,6 +879,19 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         >
           <FolderX className="w-3.5 h-3.5 text-muted-foreground" />
           <span>{pruning ? '提交中…' : '清理残留'}</span>
+        </Button>
+
+        {/* Where the files those two buttons removed went. Without this the
+            "可恢复" in their confirm dialogs is a promise the UI cannot keep. */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setTrashOpen(true)}
+          className="h-8 gap-1 text-xs"
+          title="查看并恢复已删除的文件"
+        >
+          <ArchiveRestore className="w-3.5 h-3.5 text-muted-foreground" />
+          <span>回收站</span>
         </Button>
 
         {/* Scan local buttons */}
@@ -955,31 +960,33 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           )}
         </Button>
 
-        {/* Clear/Remove */}
-        {hasSelection ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => remove(selectedIds)}
-            className="h-8 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
-            title="从列表中移除选中项"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline ml-1">移除</span>
-          </Button>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={clear}
-            disabled={rows.length === 0}
-            className="h-8 text-xs text-muted-foreground hover:text-foreground"
-            title="清空曲目列表"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline ml-1">清空</span>
-          </Button>
-        )}
+        {/* Take the selection out of the LIST — the file stays on disk and
+            re-adding the directory brings it back.
+
+            This was two buttons in a ternary: 移除 (the selection) when
+            something was selected, 清空 (ALL rows) when nothing was. The
+            second one is the reason this is one button now. "Empty the
+            whole worklist" has no confirmation, no count in its label,
+            and lands on the user through a mis-click on a control that
+            looks identical to the one that removes four rows — and the
+            only way back is re-adding every directory. Everything else in
+            this toolbar that touches the selection follows the
+            selection; this was the exception and it cost the most. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => remove(selectedIds)}
+          disabled={!hasSelection}
+          className="h-8 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+          title={
+            hasSelection
+              ? `把选中的 ${selectedIds.length} 个条目从列表移除（文件仍在磁盘上）`
+              : '请先选择要从列表移除的音乐行'
+          }
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline ml-1">移除列表文件</span>
+        </Button>
         {/* Batch tag edit. Gated on 2+ rows on purpose: with one row
             selected the right-hand TrackInspector already IS the editor
             for that track, complete with per-field suggestions and a cover
