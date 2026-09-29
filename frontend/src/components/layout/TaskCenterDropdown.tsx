@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Activity,
   Trash2,
@@ -30,37 +30,39 @@ export function TaskCenterDropdown() {
   const [loading, setLoading] = useState(false);
   const [clearing, setClearing] = useState(false);
 
-  const fetchQueue = useCallback(async () => {
+  // 上一次请求还没回来就跳过，5s 的间隔慢于 Redis 往返，但慢网络下会叠。
+  const inFlight = useRef(false);
+
+  const load = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setLoading(true);
     try {
       const res = await getActiveQueue();
       if (res?.result) {
         setData(res.data);
       }
     } catch {
-      // Background poll failure is silent
+      // 拉取失败保留上一次的快照，不打断使用；下次打开会重试
+    } finally {
+      inFlight.current = false;
+      setLoading(false);
     }
   }, []);
 
-  // Poll active queue every 5s when mounted
+  // 请求只由「点开任务中心」触发（见 handleOpenChange），effect 里只负责
+  // 面板开着期间每 5s 跟一次，关闭即停。挂载时一次都不发。
   useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      try {
-        const res = await getActiveQueue();
-        if (mounted && res?.result) {
-          setData(res.data);
-        }
-      } catch {
-        // Background poll failure is silent
-      }
-    };
-    void load();
+    if (!open) return;
     const interval = setInterval(load, 5000);
-    return () => {
-      mounted = false;
-      clearInterval(interval);
-    };
-  }, []);
+    return () => clearInterval(interval);
+  }, [open, load]);
+
+  // 关着的时候角标上的数字是「上次查看时」的值，不是实时的
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (next) void load();
+  };
 
   const handleClear = async () => {
     setClearing(true);
@@ -68,7 +70,7 @@ export function TaskCenterDropdown() {
       const res = await clearAsyncTasks();
       if (res?.result) {
         useNoticeStore.getState().push('已清除所有待处理异步任务', 'info');
-        await fetchQueue();
+        await load();
       } else {
         useNoticeStore.getState().push('清除任务失败', 'warn');
       }
@@ -82,27 +84,36 @@ export function TaskCenterDropdown() {
 
   const pendingCount = data?.pending?.length ?? 0;
   const isBusy = pendingCount > 0;
+  const stale = !open && isBusy;
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger
         render={
           <Button
             variant="ghost"
             size="sm"
             className="h-8 px-2.5 gap-1.5 text-xs text-muted-foreground hover:text-foreground relative"
-            title="异步任务队列与系统状态"
+            title={
+              stale
+                ? `异步任务队列与系统状态（上次查看时 ${pendingCount} 个任务，打开刷新）`
+                : '异步任务队列与系统状态'
+            }
           >
             <Activity
               className={`w-3.5 h-3.5 ${
-                isBusy ? 'text-primary animate-pulse' : 'text-muted-foreground'
+                isBusy && open ? 'text-primary animate-pulse' : 'text-muted-foreground'
               }`}
             />
             <span className="hidden sm:inline">任务中心</span>
             {pendingCount > 0 && (
               <Badge
                 variant="default"
-                className="h-4 px-1 text-[10px] min-w-[16px] justify-center bg-primary text-primary-foreground font-mono"
+                className={`h-4 px-1 text-[10px] min-w-[16px] justify-center font-mono ${
+                  stale
+                    ? 'bg-muted text-muted-foreground border border-border'
+                    : 'bg-primary text-primary-foreground'
+                }`}
               >
                 {pendingCount}
               </Badge>
@@ -120,10 +131,7 @@ export function TaskCenterDropdown() {
             <Button
               variant="ghost"
               size="icon-sm"
-              onClick={() => {
-                setLoading(true);
-                fetchQueue().finally(() => setLoading(false));
-              }}
+              onClick={() => void load()}
               disabled={loading}
               title="刷新状态"
             >
