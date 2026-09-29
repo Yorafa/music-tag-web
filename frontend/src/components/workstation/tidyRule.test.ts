@@ -2,25 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_TIDY_LEVELS,
   addLevel,
-  appendField,
-  canPreview,
+  canTidy,
   describeLevel,
-  describeTally,
   fieldsFromLevel,
   levelProblem,
   moveLevel,
-  movablePathsFromPlan,
   removeLevel,
   segmentsProblem,
   setLevel,
-  statusDetail,
-  statusLabel,
   TIDY_PRESETS,
-  tryLevel,
-  tryStructure,
-  tallyPlan,
+  toggleField,
 } from './tidyRule';
-import type { TidyPlanRow } from '@/api/client';
 
 describe('level list surgery', () => {
   it('appends an empty level', () => {
@@ -61,11 +53,25 @@ describe('level list surgery', () => {
     expect(setLevel(['a', 'b'], 1, 'z')).toEqual(['a', 'z']);
   });
 
-  // Appending rather than replacing is the whole point: a level is a
-  // template that may be half fixed text, and clicking 专辑 on
-  // "${year} - " should not throw the separator away.
-  it('appends a field to a level instead of replacing it', () => {
-    expect(appendField(['${year} - '], 0, 'album')).toEqual(['${year} - ${album}']);
+  // The add case: a level is a template that may be half fixed text, so
+  // clicking 专辑 on "${year} - " must not throw the separator away.
+  it('appends a field rather than replacing the level', () => {
+    expect(toggleField(['${year} - '], 0, 'album')).toEqual(['${year} - ${album}']);
+  });
+
+  // The remove case, and the bug it fixes: the chip renders as PRESSED
+  // once the field is in the level, and appending on a second click gave
+  // ${artist}${artist} — then a third time, and a fourth.
+  it('removes a field that is already there, so a second click undoes the first', () => {
+    expect(toggleField(['${artist}'], 0, 'artist')).toEqual(['']);
+  });
+
+  it('takes out ONE occurrence, so a level that really named it twice keeps the other', () => {
+    expect(toggleField(['${artist} - ${artist}'], 0, 'artist')).toEqual([' - ${artist}']);
+  });
+
+  it('is a no-op for an out-of-range level', () => {
+    expect(toggleField(['${artist}'], 3, 'album')).toEqual(['${artist}']);
   });
 });
 
@@ -123,22 +129,25 @@ describe('segmentsProblem', () => {
   });
 });
 
-describe('canPreview', () => {
-  it('needs a root, a file list, and a usable rule', () => {
-    expect(canPreview(['${artist}'], '/app/media', 3)).toBe(true);
-    expect(canPreview(['${artist}'], '', 3)).toBe(false);
-    expect(canPreview(['${artist}'], '/app/media', 0)).toBe(false);
-    expect(canPreview(['${nope}'], '/app/media', 3)).toBe(false);
+describe('canTidy', () => {
+  it('needs a selection and a usable rule', () => {
+    expect(canTidy(['${artist}'], 3)).toBe(true);
+    expect(canTidy(['${artist}'], 0)).toBe(false);
+    expect(canTidy(['${nope}'], 3)).toBe(false);
   });
 });
 
-describe('local rendering', () => {
+describe('level description and chips', () => {
   it('reads the field order back out, for lighting up chips', () => {
     expect(fieldsFromLevel('${year} - ${album}')).toEqual(['year', 'album']);
   });
 
   it('drops a repeated field, so a chip is lit once', () => {
     expect(fieldsFromLevel('${artist} - ${artist}')).toEqual(['artist']);
+  });
+
+  it('ignores a chip row for a level with no placeholders', () => {
+    expect(fieldsFromLevel('合辑')).toEqual([]);
   });
 
   it('describes a pure-field level without hedging', () => {
@@ -153,30 +162,6 @@ describe('local rendering', () => {
 
   it('describes a literal level as such', () => {
     expect(describeLevel('合辑')).toContain('固定目录名');
-  });
-
-  it('renders a level against the example', () => {
-    expect(tryLevel('${year} - ${album}', { year: '2003', album: '叶惠美' }).name).toBe('2003 - 叶惠美');
-  });
-
-  // Honesty requirement: the local render must leave the same gap the
-  // server leaves, or the two disagree the moment one is wrong.
-  it('leaves the separator behind when a field is empty, and says which', () => {
-    const r = tryLevel('${year} - ${album}', { album: '叶惠美' });
-    expect(r.name).toBe('- 叶惠美');
-    expect(r.missing).toEqual(['year']);
-  });
-
-  it('renders the whole structure top to bottom', () => {
-    expect(tryStructure(['${artist}', '${year} - ${album}'])).toEqual(['周杰伦', '2003 - 叶惠美']);
-  });
-
-  // The 未知 fallback is the server's behaviour; reproducing it keeps the
-  // example from showing a level that silently vanishes.
-  it('shows 未知 for a level that renders to nothing', () => {
-    // Explicitly no year, rather than the default example — which has one,
-    // and would render "2003" and prove nothing about the fallback.
-    expect(tryStructure(['${year}', '${album}'], { album: '叶惠美' })).toEqual(['未知', '叶惠美']);
   });
 });
 
@@ -193,107 +178,5 @@ describe('presets', () => {
     const depths = TIDY_PRESETS.map((p) => p.segments.length);
     expect(Math.max(...depths)).toBeGreaterThan(2);
     expect(Math.min(...depths)).toBe(1);
-  });
-});
-
-describe('tallyPlan', () => {
-  const row = (p: Partial<TidyPlanRow>): TidyPlanRow => ({
-    old_path: '/a',
-    new_path: '/b',
-    status: 'move',
-    ...p,
-  });
-
-  it('counts a row with a missing tag as a move AND as a gap', () => {
-    const t = tallyPlan([row({}), row({ missing: ['year'] })]);
-    expect(t.move).toBe(2);
-    expect(t.withGaps).toBe(1);
-  });
-
-  it('keeps the refused buckets apart', () => {
-    const t = tallyPlan([
-      row({ status: 'taken' }),
-      row({ status: 'duplicate' }),
-      row({ status: 'blocked' }),
-      row({ status: 'same' }),
-    ]);
-    expect(t).toMatchObject({ taken: 1, duplicate: 1, blocked: 1, same: 1, move: 0 });
-  });
-});
-
-describe('describeTally', () => {
-  it('names the refused rows rather than folding them into a total', () => {
-    const s = describeTally({ total: 5, move: 2, same: 1, taken: 1, duplicate: 0, blocked: 1, withGaps: 0 });
-    expect(s).toContain('2 首将移动');
-    expect(s).toContain('目标已有文件');
-    expect(s).toContain('无法处理');
-  });
-
-  // "412 首已整理" and "412 首已整理，3 首冲突未动" are very different
-  // sentences about the same batch, and only the second tells the
-  // operator they have work left.
-  it('does not let the moved count stand in for the whole batch', () => {
-    const s = describeTally({ total: 5, move: 2, same: 0, taken: 3, duplicate: 0, blocked: 0, withGaps: 0 });
-    expect(s).not.toBe('5 首将移动');
-    expect(s).toContain('3 首不动');
-  });
-
-  it('mentions gaps separately from moves', () => {
-    const s = describeTally({ total: 3, move: 3, same: 0, taken: 0, duplicate: 0, blocked: 0, withGaps: 1 });
-    expect(s).toContain('缺少标签');
-  });
-
-  it('says so when there is nothing to do', () => {
-    expect(describeTally({ total: 0, move: 0, same: 0, taken: 0, duplicate: 0, blocked: 0, withGaps: 0 }))
-      .toContain('没有可整理的文件');
-  });
-});
-
-describe('row labels', () => {
-  it('has a label for every status', () => {
-    for (const s of ['move', 'same', 'taken', 'duplicate', 'blocked'] as const) {
-      expect(statusLabel(s)).toBeTruthy();
-    }
-  });
-
-  it('prefers the server reason, and falls back to the missing fields', () => {
-    expect(statusDetail({ old_path: '', new_path: '', status: 'taken', reason: '目标位置已有同名文件' }))
-      .toBe('目标位置已有同名文件');
-    expect(statusDetail({ old_path: '', new_path: '', status: 'move', missing: ['year'] }))
-      .toContain('年份');
-  });
-});
-
-describe('movablePathsFromPlan', () => {
-  const row = (p: Partial<TidyPlanRow>): TidyPlanRow => ({
-    old_path: '/a',
-    new_path: '/b',
-    status: 'move',
-    ...p,
-  });
-
-  // The refused rows were shown to the operator and accepted as "this one
-  // does not move". Re-sending them would have the worker fail them at
-  // os.Rename and report the same fact a second time, with no reference
-  // to the plan that already explained it.
-  it('excludes every row the plan refused', () => {
-    const got = movablePathsFromPlan([
-      row({ old_path: '/keep' }),
-      row({ old_path: '/drop', status: 'taken' }),
-      row({ old_path: '/drop2', status: 'duplicate' }),
-      row({ old_path: '/drop3', status: 'blocked' }),
-    ]);
-    expect(got).toEqual(['/keep']);
-  });
-
-  // `same` is where the file already should be, and the worker's re-plan
-  // turns it into a no-op. Dropping it here would silently shrink the
-  // batch below what the operator saw in the plan.
-  it('keeps the already-in-place rows', () => {
-    expect(movablePathsFromPlan([row({ old_path: '/stay', status: 'same' })])).toEqual(['/stay']);
-  });
-
-  it('is empty when the plan refused everything', () => {
-    expect(movablePathsFromPlan([row({ status: 'taken' })])).toEqual([]);
   });
 });

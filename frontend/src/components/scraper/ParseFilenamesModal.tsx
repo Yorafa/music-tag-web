@@ -1,26 +1,33 @@
-/* eslint-disable react-hooks/set-state-in-effect -- This whole modal
- * uses the canonical fetch-on-mount + reload-on-close pattern. The
- * rule's recommended fix (React Query / Suspense) introduces runtime
- * deps a single modal component can't justify; when we migrate to a
- * fetcher library the `useEffect` block (and its associated state
- * initialisation) collapses cleanly.
- */
-
 // 解析文件名 round-trip modal. Triggered from the worklist's
 // 「解析文件名」 button. The flow:
 //
 //   1. Pick a rule — chips or a preset; both GENERATE the pattern text,
 //      so the box and the chips can never disagree.
-//   2. POST /api/tag/preview_parse_filenames/ for every selected path →
-//      token + per-row ParsedPreviewRow[]. A one-line summary reports
-//      how many matched, how many were guessed at, how many will be
-//      skipped.
-//   3. Click 写入 → POST /api/tag/apply_parsed_filenames/ with the
-//      token. Backend enqueues the async worker, returns the task_id
-//      which we surface as a toast.
+//   2. Read the per-file plan, computed HERE from the selected rows'
+//      own filenames. Nothing leaves the browser until 写入.
+//   3. Click 写入 → POST /api/tag/apply_parsed_filenames/ with the paths
+//      and the rule. The backend parses them again — the same
+//      utils.PortParseFilename the local mirror follows — enqueues the
+//      async worker, and returns the task_id which we surface as a toast.
 //
-// The rule logic (generation, the default rule, the try-it box, the
-// RE2 limits) lives in parseAssist.ts and is tested there.
+// # Why the plan is local
+//
+// It used to be a request, and that cost a round trip on every rule the
+// dialog invites you to change, over a selection that can be two thousand
+// files. The answer being bought was ten rows of it. The write still goes
+// to the server, and the server still decides every file's fate — this
+// only moved the part that can be decided here.
+//
+// # There is no token, and no TTL
+//
+// The apply used to be bound to the preview's one-shot token, so an
+// expired preview (10 min) turned into a 401 and a re-preview loop for a
+// dialog the user might have left open over lunch. With the plan local,
+// the apply is self-contained: paths in, task out.
+//
+// The rule logic (generation, the default rule, the RE2 limits, and the
+// local mirror of the parser) lives in parseAssist.ts and is tested
+// there, including against the Go parser's own fixture.
 //
 // This dialog deliberately does NOT offer per-file editing. It used to:
 // there was a table with an editable cell per field. Removing it splits
@@ -34,12 +41,8 @@
 // one back up so the toolbar can re-open it with whatever the user
 // last typed (see WorkstationToolbar's `parsePattern` state) — a
 // downloader's naming convention does not change between batches.
-//
-// Token expiry (401 "preview_expired") is caught here: the token is
-// cleared so the effect re-previews, and a toast explains why. A large
-// batch left open past the 10min TTL hits this.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Loader2, Music2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -52,11 +55,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { useNoticeStore } from '@/store/useNoticeStore';
-import {
-  previewParseFilenames,
-  applyParsedFilenames,
-  type ParsedPreviewRow,
-} from '@/api/client';
+import { applyParsedFilenames } from '@/api/client';
 import {
   PARSE_TAG_FIELDS,
   PARSE_TAG_LABELS,
@@ -64,19 +63,21 @@ import {
   buildPattern,
   describeRule,
   fieldsFromPattern,
-  firstParsedExample,
+  localParsePlan,
   patternHelp,
-  tryPattern,
-  tallyPreview,
-  type ParseTagField,
+  tallyPlan,
+  type ParsePlanRow,
 } from './parseAssist';
 import { cn } from '@/lib/utils';
+import { previewTruncationNoteBound } from '@/lib/previewLimit';
+import type { WorklistRow } from '@/types';
 
 interface ParseFilenamesModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Selected row IDs (== fullPath under MUSIC_DIR). */
-  selectedPaths: string[];
+  /** The selected worklist rows. The plan renders from these, and the
+   *  write covers all of them — not just the ten the table shows. */
+  rows: WorklistRow[];
   /** Starting pattern. Kept by the caller so a re-open keeps it. */
   initialPattern?: string;
   /** Called whenever the pattern changes, so the caller can re-open with it. */
@@ -86,75 +87,13 @@ interface ParseFilenamesModalProps {
 export function ParseFilenamesModal({
   open,
   onOpenChange,
-  selectedPaths,
+  rows,
   initialPattern = '',
   onPatternChange,
 }: ParseFilenamesModalProps) {
-  const [token, setToken] = useState<string | null>(null);
-  const [results, setResults] = useState<ParsedPreviewRow[]>([]);
   const [pattern, setPattern] = useState(initialPattern);
-  // Bumped to force a fresh preview. It exists because clearing the token
-  // is not enough on its own: when the token is ALREADY null — a preview
-  // that failed, or a selection that arrived empty — `setToken(null)` is
-  // a no-op, React does not re-render, and the effect never re-runs. The
-  // "重新解析" button was therefore dead in exactly the case where the
-  // user most needs it: they fixed a broken pattern and clicked again.
-  const [previewNonce, setPreviewNonce] = useState(0);
-  const [loading, setLoading] = useState<'preview' | 'apply' | null>(null);
+  const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Preview mount: when the modal opens AND we don't yet have a token
-  // for this batch, POST the preview path. Re-running on every open
-  // would re-consume 10-min TTL slots on the server; we keep a
-  // sticky token until the modal closes or the user clicks Apply.
-  //
-  // The preview is keyed on the pattern too, so editing it and hitting
-  // "重新解析" invalidates the token rather than applying overrides that
-  // were typed against a table the user can no longer see.
-  useEffect(() => {
-    if (!open) {
-      // Drop state on close so a re-open forces a fresh preview. The
-      // pattern is re-seeded from the prop too: it used to be left at
-      // whatever was last typed locally, so if the caller ever changed it
-      // from outside (or the user abandoned a half-typed rule), the box
-      // and the caller's idea of the pattern silently diverged.
-      setToken(null);
-      setResults([]);
-      setError(null);
-      setLoading(null);
-      setPattern(initialPattern);
-      return;
-    }
-    if (token || selectedPaths.length === 0) return;
-    let cancelled = false;
-    (async () => {
-      setLoading('preview');
-      setError(null);
-      try {
-        const { token: t, results: rs } = await previewParseFilenames(
-          selectedPaths,
-          { pattern: pattern.trim() || undefined },
-        );
-        if (cancelled) return;
-        setToken(t);
-        setResults(rs);
-      } catch (e: unknown) {
-        if (cancelled) return;
-        const msg = e instanceof Error ? e.message : String(e);
-        setError(msg);
-        useNoticeStore.getState().push(`解析预览失败: ${msg}`, 'error');
-      } finally {
-        if (!cancelled) setLoading(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // `pattern` is intentionally absent: including it would re-preview
-    // on every keystroke, burning a TTL slot per character. The re-parse
-    // button is the explicit trigger, and it moves the nonce.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, token, selectedPaths, previewNonce]);
 
   const help = useMemo(() => patternHelp(pattern), [pattern]);
   const patternErr = help.problem;
@@ -162,23 +101,29 @@ export function ParseFilenamesModal({
   // the single source of truth: clicking a chip GENERATES the pattern
   // rather than editing it, so there is no way for the two to drift.
   const chosenFields = useMemo(() => fieldsFromPattern(pattern), [pattern]);
-  const [tryName, setTryName] = useState('');
-  const tryResult = useMemo(() => tryPattern(tryName, pattern), [tryName, pattern]);
 
-  // Picking a preset also seeds the try-it box with that preset's own
-  // example, so the shape proves itself instead of being asserted.
-  const applyPreset = (fields: ParseTagField[], example: string) => {
-    const p = buildPattern(fields);
-    setPattern(p);
-    onPatternChange?.(p);
-    setTryName(example);
-  };
+  // The plan, recomputed from the current rule. A useMemo and not a
+  // fetch, which is what removes the second button and the "your plan is
+  // out of date" state: a table derived from the rule in the box cannot
+  // describe a different rule.
+  const plan = useMemo(
+    () => (patternErr === null ? localParsePlan(rows, pattern) : []),
+    [rows, pattern, patternErr],
+  );
+
+  // The list is capped; the WRITE is not — it covers every selected row,
+  // and the server parses all of them again when it runs. Say which is
+  // which, or a ten-row table reads as the whole job.
+  const planNote = previewTruncationNoteBound(plan.length, rows.length);
+  const submitPaths = rows.map((r) => r.fullPath);
 
   const handleApply = async () => {
-    if (!token) return;
-    setLoading('apply');
+    if (submitPaths.length === 0) return;
+    setApplying(true);
     try {
-      const res = await applyParsedFilenames(token, []);
+      const res = await applyParsedFilenames(submitPaths, {
+        pattern: pattern.trim() || undefined,
+      });
       useNoticeStore.getState().push(
         `已提交解析写入任务 (${res.row_count} 行, task=${res.task_id.slice(0, 8)}…)`,
         'info',
@@ -186,29 +131,11 @@ export function ParseFilenamesModal({
       onOpenChange(false);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      // 401 "preview_expired" → re-preview path. We surface a toast and
-      // let the user close + reopen the modal to fetch a fresh token.
-      if (msg.includes('preview_expired') || msg.includes('401')) {
-        setToken(null);
-        useNoticeStore.getState().push('预览已过期,请重新打开对话框刷新预览', 'warn');
-      } else {
-        useNoticeStore.getState().push(`应用解析失败: ${msg}`, 'error');
-      }
+      setError(msg);
+      useNoticeStore.getState().push(`应用解析失败: ${msg}`, 'error');
     } finally {
-      setLoading(null);
+      setApplying(false);
     }
-  };
-
-  // Both halves matter. Clearing the token discards the table the old
-  // pattern produced; bumping the nonce is what actually guarantees the
-  // effect re-runs, which clearing alone does not when the token was
-  // already null.
-  const handleReparse = () => {
-    onPatternChange?.(pattern);
-    setToken(null);
-    setResults([]);
-    setError(null);
-    setPreviewNonce((n) => n + 1);
   };
 
   const handlePatternEdit = (v: string) => {
@@ -227,8 +154,8 @@ export function ParseFilenamesModal({
             </span>
           </DialogTitle>
           <DialogDescription>
-            从文件名解析提取元数据并写入进文件。写入前可以先试算、再看匹配情况；
-            只填不删，已有的标签不会被清掉。
+            从文件名解析提取元数据并写入进文件。下表按当前规则在本地实时算出，
+            看清了再写入；只填不删，已有的标签不会被清掉。
           </DialogDescription>
         </DialogHeader>
 
@@ -252,9 +179,7 @@ export function ParseFilenamesModal({
                       const next = on
                         ? chosenFields.filter((x) => x !== f)
                         : [...chosenFields, f];
-                      const p = next.length === 0 ? '' : buildPattern(next);
-                      setPattern(p);
-                      onPatternChange?.(p);
+                      handlePatternEdit(next.length === 0 ? '' : buildPattern(next));
                     }}
                     className={cn(
                       'rounded-md border px-2 py-0.5 text-xs transition-colors',
@@ -286,7 +211,7 @@ export function ParseFilenamesModal({
                   key={pre.id}
                   type="button"
                   title={pre.hint}
-                  onClick={() => applyPreset(pre.fields, pre.example)}
+                  onClick={() => handlePatternEdit(buildPattern(pre.fields))}
                   className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent"
                   data-testid={`parse-preset-${pre.id}`}
                 >
@@ -296,26 +221,14 @@ export function ParseFilenamesModal({
             </div>
           </div>
 
-          <div className="flex items-start gap-2">
-            <Input
-              className="h-8 text-sm font-mono"
-              value={pattern}
-              placeholder="留空 = 默认规则"
-              onChange={(e) => handlePatternEdit(e.target.value)}
-              aria-label="命名模板"
-              spellCheck={false}
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              className="shrink-0 h-8"
-              onClick={handleReparse}
-              disabled={loading !== null || selectedPaths.length === 0 || patternErr !== null}
-              data-testid="parse-filenames-reparse"
-            >
-              重新解析
-            </Button>
-          </div>
+          <Input
+            className="h-8 text-sm font-mono"
+            value={pattern}
+            placeholder="留空 = 默认规则"
+            onChange={(e) => handlePatternEdit(e.target.value)}
+            aria-label="命名模板"
+            spellCheck={false}
+          />
           {/* The rule is always spelled out, default included. An empty
               box used to mean "something is happening that I cannot see",
               which is the same feeling as a broken feature. */}
@@ -334,74 +247,46 @@ export function ParseFilenamesModal({
             </div>
           )}
 
-          {/* Try-it box: run the rule against one filename without
-              spending a preview round trip. Seeded from the real
-              selection so it starts as the user's own data. */}
-          <div className="space-y-1.5 rounded border border-border p-3">
-            <div className="text-xs font-medium text-muted-foreground">
-              试一下（不会写入任何文件）
-            </div>
-            <div className="flex items-center gap-2">
-              <Input
-                className="h-8 text-sm"
-                value={tryName}
-                placeholder="粘一个文件名，例如 周杰倫 - 晴天.flac"
-                onChange={(e) => setTryName(e.target.value)}
-                aria-label="试算文件名"
-                spellCheck={false}
-                data-testid="parse-try-name"
-              />
-              {tryName === '' && results.length > 0 && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="shrink-0 h-8 text-xs"
-                  onClick={() => setTryName(firstParsedExample(results))}
-                >
-                  用选中项
-                </Button>
-              )}
-            </div>
-            {tryName.trim() !== '' && (
-              <TryItResult result={tryResult} />
-            )}
-          </div>
+          {error && <div className="text-sm text-destructive">提交失败: {error}</div>}
 
-          {loading === 'preview' && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              正在请求预览…
-            </div>
-          )}
-
-          {error && (
-            <div className="text-sm text-destructive">预览失败: {error}</div>
-          )}
-
-          {!loading && results.length === 0 && !error && (
+          {rows.length === 0 && (
             <div className="text-sm text-muted-foreground">
               （无内容 — 请至少选择一行 Worklist）
             </div>
           )}
 
-          {results.length > 0 && <PreviewSummary results={results} />}
+          {plan.length > 0 && <PlanSummary rows={plan} />}
+          {plan.length > 0 && <PlanList rows={plan} />}
+          {planNote && (
+            <div className="text-[11px] text-muted-foreground" data-testid="parse-preview-note">
+              {planNote}
+            </div>
+          )}
         </div>
 
         <DialogFooter showCloseButton>
+          <span className="mr-auto text-[11px] text-muted-foreground self-center">
+            {rows.length === 0
+              ? '请至少选择一个文件'
+              : patternErr !== null
+                ? '规则有问题，改好后再写入'
+                : ''}
+          </span>
           <Button
             onClick={handleApply}
-            disabled={loading !== null || !token || results.length === 0}
+            disabled={applying || submitPaths.length === 0 || patternErr !== null}
             data-testid="parse-filenames-apply"
           >
-            {loading === 'apply' ? (
+            {applying ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 提交中…
               </>
             ) : (
-              <>
-                写入 {results.length} 个文件
-              </>
+              // The whole selection, always: the plan above is capped to
+              // ten rows, and labelling the button with its count would
+              // promise "写入 10 个文件" and then write two thousand.
+              <>写入 {submitPaths.length} 个文件</>
             )}
           </Button>
         </DialogFooter>
@@ -410,60 +295,17 @@ export function ParseFilenamesModal({
   );
 }
 
-/** The try-it box's verdict. Shows the status word the server would
- *  use, so "unparsable" here and in the table below mean the same thing —
- *  a local preview that invents friendlier words would be teaching the
- *  wrong vocabulary. */
-function TryItResult({
-  result,
-}: {
-  result: ReturnType<typeof tryPattern>;
-}) {
-  if (result.status === 'unparsable') {
-    return (
-      <div className="text-xs text-amber-600 dark:text-amber-400" data-testid="parse-try-result">
-        没能从这个文件名里取出标签。确认文件名里有分隔符（默认按 “- _ / \ | ·” 切分），
-        若是多段命名则改用上面的规则。
-      </div>
-    );
-  }
-  return (
-    <div className="text-xs" data-testid="parse-try-result">
-      <span className="text-muted-foreground">将得到：</span>{' '}
-      {result.results.map((r) => (
-        <span key={r.field} className="mr-2 inline-flex items-baseline gap-1">
-          <span className="text-muted-foreground">{PARSE_TAG_LABELS[r.field]}</span>
-          <code className="font-mono">{r.value}</code>
-        </span>
-      ))}
-      {result.status === 'ambiguous' && (
-        <span className="ml-1 text-amber-600 dark:text-amber-400">
-          （多段，标题为合并结果）
-        </span>
-      )}
-    </div>
-  );
-}
-
-/** What the preview found, in one line.
+/** What the plan found, in one line.
  *
- *  This used to be a full per-file table with an editable cell per
- *  field. Removing it is a deliberate trade: this dialog now answers
- *  "does my rule work?" and nothing more, and hand-editing a value
- *  belongs to 批量编辑标签 — which has the per-field 「不修改」 control
- *  and can also DELETE a tag, neither of which this dialog could do.
+ *  The counts come first because "7 个文件" alone would let someone click
+ *  写入 and discover afterwards that five of them matched nothing.
  *
- *  The counts stay because "7 个文件" alone would let someone click
- *  写入 and discover afterwards that five of them matched nothing. A
- *  single line answers that before the click, which is the part of the
- *  table that was actually load-bearing.
- *
- *  `ambiguous` is counted separately from `unparsable` on purpose: an
- *  ambiguous row DID parse (it just guessed at the split), so it will
- *  be written, and lumping it in with unparsable would overstate the
- *  number of files being skipped. */
-function PreviewSummary({ results }: { results: ParsedPreviewRow[] }) {
-  const { total, matched, guessed, skipped } = tallyPreview(results);
+ *  `ambiguous` is counted and labelled separately from `unparsable` on
+ *  purpose: an ambiguous row DID parse (it just guessed at the split),
+ *  so it will be written, and lumping it in with unparsable would
+ *  overstate the number of files being skipped. */
+function PlanSummary({ rows }: { rows: ParsePlanRow[] }) {
+  const { total, matched, guessed, skipped } = tallyPlan(rows);
 
   return (
     <div
@@ -490,6 +332,61 @@ function PreviewSummary({ results }: { results: ParsedPreviewRow[] }) {
           「猜测」表示文件名被切成了多段、按「首段=艺术家、其余=标题」处理——写入的是这个猜测的结果。
         </div>
       )}
+    </div>
+  );
+}
+
+/** The per-file plan: this filename becomes these tags. Read-only. */
+const PARSE_STATUS_TEXT: Record<ParsePlanRow['status'], string> = {
+  ok: '匹配',
+  ambiguous: '猜测',
+  unparsable: '不匹配',
+};
+
+const PARSE_STATUS_TONE: Record<ParsePlanRow['status'], string> = {
+  ok: 'text-emerald-600 dark:text-emerald-400',
+  ambiguous: 'text-amber-600 dark:text-amber-400',
+  unparsable: 'text-rose-600 dark:text-rose-400',
+};
+
+function PlanList({ rows }: { rows: ParsePlanRow[] }) {
+  return (
+    <div
+      className="max-h-[40vh] overflow-y-auto rounded border border-border"
+      data-testid="parse-filenames-plan"
+    >
+      {rows.map((r) => (
+        <div
+          key={r.id}
+          className="flex items-start gap-2 px-2.5 py-1.5 border-b border-border/50 last:border-b-0 text-[11px]"
+          data-testid={`parse-plan-row-${r.status}`}
+        >
+          <span
+            className="font-mono text-muted-foreground truncate max-w-[38%] shrink-0"
+            title={r.fileName}
+          >
+            {r.fileName}
+          </span>
+          <span className="text-muted-foreground shrink-0">→</span>
+          <span className="flex-1 flex flex-wrap gap-x-2 min-w-0">
+            {r.tags.length === 0 ? (
+              <span className={PARSE_STATUS_TONE[r.status]}>
+                {r.status === 'unparsable' ? '不写入任何标签' : '没有解析出字段'}
+              </span>
+            ) : (
+              r.tags.map(([f, v]) => (
+                <span key={f} className="inline-flex items-baseline gap-1">
+                  <span className="text-muted-foreground">{PARSE_TAG_LABELS[f]}</span>
+                  <code className="font-mono">{v}</code>
+                </span>
+              ))
+            )}
+          </span>
+          <span className={cn('shrink-0', PARSE_STATUS_TONE[r.status])}>
+            {PARSE_STATUS_TEXT[r.status]}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

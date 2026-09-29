@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { useAuthStore } from '@/store/useAuthStore';
-import { unwrapEnvelope, asArray } from '@/api/envelope';
+import { unwrapEnvelope } from '@/api/envelope';
 import type { RowDuplicate, SourceInfo } from '@/types';
 
 const api = axios.create({
@@ -93,91 +93,12 @@ export async function tidyFolder(params: Record<string, unknown>) {
   return data;
 }
 
-/** One file's planned destination under 整理目录. Mirrors
- *  `tasks.TidyPlanRow`.
- *
- *  `old_path` / `new_path` are ABSOLUTE, unlike every other path the
- *  frontend sends. The operator is checking these two against a
- *  filesystem, and a root-relative pair would make them compare against a
- *  different thing per row. `missing` lists template fields this file
- *  did not have — the file still moves, into a directory with a gap in
- *  its name, which is why it is a warning and not a block. */
-export interface TidyPlanRow {
-  old_path: string;
-  new_path: string;
-  status: TidyPlanStatus;
-  reason?: string;
-  missing?: string[];
-}
-
-/** Mirrors the five `tasks.TidyPlan*` constants. */
-export const TIDY_STATUSES = {
-  /** The file will move here. */
-  move: 'move',
-  /** Already at that path. Not a failure — half a library being
-   *  correctly filed is the normal state of a tidy that was run before. */
-  same: 'same',
-  /** Something non-directory is already there. This is the case that
-   *  loses data, and it is the one an operator cannot see by reading the
-   *  old and new paths. */
-  taken: 'taken',
-  /** Two files in this batch want one destination. */
-  duplicate: 'duplicate',
-  /** This file cannot be planned: unreadable, outside the library, or a
-   *  level that renders to nothing usable. */
-  blocked: 'blocked',
-} as const;
-
-export type TidyPlanStatus =
-  (typeof TIDY_STATUSES)[keyof typeof TIDY_STATUSES];
-
-/** The plan's counts, computed server-side by the same `TallyTidy` the
- *  worker would use. Sent rather than recomputed in the dialog so the
- *  number in the summary line and the number gating the apply button
- *  cannot come from two different tallies. */
-export interface TidyPlanSummary {
-  total: number;
-  move: number;
-  same: number;
-  taken: number;
-  duplicate: number;
-  blocked: number;
-  with_gaps: number;
-  movable: number;
-}
-
-export interface TidyPlanResponse {
-  rows: TidyPlanRow[];
-  summary: TidyPlanSummary;
-}
-
-/** POST /api/tidy_folder/preview/ — where 整理目录 WOULD put each file.
- *  Nothing is written.
- *
- *  This has to be a server call rather than something the dialog can work
- *  out locally, and the reason is the whole value of it: the destination
- *  depends on each file's real tags read off disk, and the verdict that
- *  actually matters — whether the destination is already occupied, and
- *  whether two files in the batch want the same one — is decided by the
- *  same sanitising and containment rules the move obeys. A client-side
- *  preview would be free to disagree with the move on exactly the cases
- *  where being wrong costs a file.
- *
- *  It reuses the worker's own `tidyDestPath`, so the plan is not a
- *  parallel implementation of "where does this go".
- */
-export async function previewTidyFolder(
-  paths: string[],
-  rootPath: string,
-  segments: string[],
-): Promise<TidyPlanResponse> {
-  const { data } = await api.post('tidy_folder/preview/', {
-    music_paths: paths,
-    root_path: rootPath,
-    segments,
-  });
-  return unwrapEnvelope<TidyPlanResponse>(data, 'tidy_folder/preview');
-}
+/* POST /api/tidy_folder/preview/ was removed here along with the
+   dialog's use of it: 整理目录 now derives its plan locally, so editing a
+   level or the root can no longer leave a stale table on screen. The
+   endpoint still exists server-side — tasks/tidy_preview.go is the
+   reference implementation the local plan (localPreview.ts) mirrors, and
+   its tests are what keep the two honest about where a file goes. */
 
 export async function uploadImage(file: File) {
   const formData = new FormData();
@@ -577,31 +498,19 @@ export interface RenameResponse {
   dry_run: boolean;
 }
 
-/** POST /api/tag/preview_rename_from_tags/ — plan the rename, write
- *  nothing. Returns each file's old and new name plus a status, so a
- *  500-file rename can be read before it is committed.
- *
- *  `template` is a per-file expansion, not a name: `paths` are relative
- *  to MUSIC_DIR (the server rejects `'..'` escapes via SafeJoin) and
- *  every one of them renders `template` against its own tags. */
-export async function previewRenameFromTags(
-  paths: string[],
-  template: string,
-): Promise<RenameResponse> {
-  const { data } = await api.post('tag/preview_rename_from_tags/', {
-    paths,
-    template,
-  });
-  return unwrapEnvelope<RenameResponse>(data, 'preview_rename_from_tags');
-}
+/* POST /api/tag/preview_rename_from_tags/ was removed here along with
+   the dialog's use of it: 从标签改名 now renders its plan locally, from the
+   rows' cached tags, and the apply is self-contained. The endpoint still
+   exists server-side for a caller that wants a dry run it can diff. */
 
-/** POST /api/tag/apply_rename_from_tags/ — same body as the preview.
+/** POST /api/tag/apply_rename_from_tags/ — rename from the files' tags.
  *
- *  The server re-plans every row rather than trusting a client-supplied
- *  plan, so a file renamed between preview and click cannot be renamed
- *  twice, and an edited template cannot apply a stale plan. The
- *  response is therefore the authoritative result, not a receipt for
- *  what was previewed. */
+ *  There is no preview step to bind to: the dialog renders the plan
+ *  itself, and this call carries the paths and the template together. The
+ *  server re-plans every row rather than trusting anything the client
+ *  sent, so a file renamed since the plan was drawn is not renamed
+ *  twice, and the response is the authoritative result rather than a
+ *  receipt for what the client believed. */
 export async function applyRenameFromTags(
   paths: string[],
   template: string,
@@ -659,69 +568,23 @@ export interface ParseOptions {
   pattern?: string;
 }
 
-/** Mirrors `internal/cache.ParsedResult`. `path` is the ABSOLUTE
- *  server-side path returned by preview (used as the key for overrides
- *  in apply). The frontend never constructs paths itself. */
-export interface ParsedPreviewRow extends Partial<Record<ParseTagField, string>> {
-  path: string;
-  status: 'ok' | 'ambiguous' | 'unparsable';
-}
-
-/** One override entry keyed by path (returned by preview). An empty
- *  field falls back to the parsed value; a non-empty override REPLACES
- *  (not merges) it. There is deliberately no way to CLEAR a tag from
- *  here — an override that says nothing is not a request to delete
- *  something, and the batch editor owns that. */
-export type ParseApplyOverride = { path: string } & Partial<
-  Record<ParseTagField, string>
->;
-
-/** POST /api/tag/preview_parse_filenames/ — runs the filename parser
- *  server-side and returns a one-shot preview token. Frontend stores
- *  the token + results in modal state and submits the apply call with
- *  any per-row overrides the user typed in the modal table.
- *  Token TTL is 10 min server-side; expired / unknown tokens surface
- *  as 401 "preview_expired" — the modal catches this and re-prompts
- *  via a fresh preview call. */
-export async function previewParseFilenames(
-  paths: string[],
-  options?: ParseOptions,
-): Promise<{ token: string; results: ParsedPreviewRow[] }> {
-  const { data } = await api.post('tag/preview_parse_filenames/', {
-    paths,
-    options: options ?? {},
-  });
-  // Must unwrap: the handler answers through SuccessData, so the token
-  // and rows live under `data.data`, not at the top level. Returning the
-  // envelope here — as this did — left `results` undefined on EVERY
-  // response, and the caller iterated it during render.
-  const payload = unwrapEnvelope<{ token?: unknown; results?: unknown }>(
-    data,
-    'preview_parse_filenames',
-  );
-  // A missing token is a protocol violation, not an empty preview. Throw
-  // rather than defaulting to '' — the modal's effect guards on `token`
-  // being truthy, so an empty string would re-fire the preview forever.
-  if (typeof payload?.token !== 'string' || payload.token === '') {
-    throw new Error('preview_parse_filenames: 响应缺少 token');
-  }
-  return {
-    token: payload.token,
-    results: asArray<ParsedPreviewRow>(payload.results),
-  };
-}
-
-/** POST /api/tag/apply_parsed_filenames/ — consumes the token, applies
- *  per-row overrides, enqueues `TypeApplyParsedFilenames` worker, and
- *  returns the asynq task_id. The worker writes every field the row
- *  carries — no rename, no cover, no sidecar — and a field the row does
- *  not carry is left alone, so this can fill in what a file is missing
- *  but never delete a tag. Override any field of an "unparsable" row;
- *  the backend flips status to "ok" (the typed-in value is
- *  authoritative even when the name could not be read). */
+/** POST /api/tag/apply_parsed_filenames/ — parses `paths` with `options`
+ *  server-side, enqueues `TypeApplyParsedFilenames`, and returns the
+ *  asynq task_id.
+ *
+ *  The request is self-contained: the paths and the rule go in together,
+ *  so there is no preview token to hold, expire, or re-fetch. It used to
+ *  take a token minted by preview_parse_filenames, which made the write
+ *  impossible without a fresh round trip and gave a dialog left open over
+ *  lunch a 401 it could only answer by re-previewing — a plan the
+ *  operator could already see, computed again, for nothing.
+ *
+ *  The worker writes every field the row carries — no rename, no cover,
+ *  no sidecar — and a field the row does not carry is left alone, so
+ *  this can fill in what a file is missing but never delete a tag. */
 export async function applyParsedFilenames(
-  token: string,
-  overrides: ParseApplyOverride[] = [],
+  paths: string[],
+  options: ParseOptions = {},
 ): Promise<{
   task_id: string;
   type: string;
@@ -731,12 +594,10 @@ export async function applyParsedFilenames(
   apply_target: string;
 }> {
   const { data } = await api.post('tag/apply_parsed_filenames/', {
-    token,
-    overrides,
+    paths,
+    options,
+    overrides: [],
   });
-  // Same unwrap as preview — this one was never reached, because the
-  // preview call above crashed first, but `res.task_id.slice(0, 8)` in
-  // the modal would have thrown on the next undefined.
   return unwrapEnvelope(data, 'apply_parsed_filenames');
 }
 

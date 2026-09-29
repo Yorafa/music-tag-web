@@ -1,11 +1,12 @@
 // The client half of 从标签改名 (rename from tags) — the inverse of
 // 解析文件名, and deliberately the same shape so the second dialog needs
-// no explanation: pick a template, try it, read the plan, apply.
+// no explanation: pick a template, read the plan, apply.
 //
 // What lives here is everything that can be decided without the server:
-// which fields a template may name, what a template is worth, what it
-// will do to one example, and how to count the plan. The server owns the
-// filesystem, the collision rules and the actual rename.
+// which fields a template may name, what a template is worth, and how to
+// count the server's own answer. The plan itself is rendered from the
+// rows' cached tags (see localPreview.ts); the server owns the filesystem,
+// the collision rules and the actual rename.
 //
 // # Why the field list is duplicated
 //
@@ -163,40 +164,6 @@ export function describeTemplate(template: string): string {
   return `自定义模板，取：${order}`;
 }
 
-/** Render a template against one example, locally.
- *
- *  This is a preview of a PREVIEW — the server computes the real names
- *  from the real tags. It exists so the operator can see the shape of
- *  the rule without waiting for a round trip, and it is honest about
- *  the limit: an empty field leaves its separators, because that is
- *  what the server does too, and hiding it here would make the two
- *  disagree the moment one of them was wrong. */
-export function tryTemplate(
-  template: string,
-  values: Partial<Record<RenameField, string>>,
-): { name: string; missing: RenameField[] } {
-  const missing: RenameField[] = [];
-  const name = template.replace(/\$\{([^}]*)\}/g, (_m, raw: string) => {
-    const key = raw.trim() as RenameField;
-    if (!RENAME_FIELDS.includes(key)) return '';
-    const v = (values[key] ?? '').trim();
-    if (v === '') missing.push(key);
-    return v;
-  });
-  return { name: name.trim(), missing };
-}
-
-/** The example the try-it box starts from, so the operator is looking
- *  at something shaped like their own library. */
-export const TRY_EXAMPLE: Partial<Record<RenameField, string>> = {
-  title: '晴天',
-  artist: '周杰伦',
-  album: '叶惠美',
-  year: '2003',
-  tracknumber: '3',
-  discnumber: '1',
-};
-
 /** Counts for the summary line.
  *
  *  `ok` is the only bucket that means a file moves. `no_change` is
@@ -248,39 +215,21 @@ export function tallyRename(rows: RenamePlanRow[]): RenameTally {
   return t;
 }
 
-/** True when at least one row will actually move, which is what the
- *  apply button is for. A plan of nothing but no_change rows is a
- *  correct answer and there is nothing to do about it. */
-export function hasWorkToDo(t: RenameTally): boolean {
-  return t.ok > 0;
-}
-
-/** A one-line explanation of a row that will not be renamed, for the
- *  plan list. Empty string for a row that will be. */
-export function rowReason(r: RenamePlanRow): string {
-  if (r.status === 'ok') return '';
-  return r.detail || r.status;
-}
-
-/** Whether a preview request is worth sending.
+/** Whether the plan has anything to render and the apply has anything to
+ *  send.
  *
- *  Exists because an empty template and a default rule are the same
- *  thing in 解析文件名 and not the same thing here: there, empty means
- *  "split on separators", which is a real rule the server accepts; here,
- *  empty means "no rule", and `template` carries `binding:"required"` so
- *  the server answers 400 with a raw Go validation dump. The dialog used
- *  to open by firing exactly that request — a request that could only
- *  fail, toasted at the user before they had typed anything.
- *
- *  The effect and the 重新预览 button both ask this, so "the button is
- *  enabled" and "a request would be sent" cannot drift apart into a
- *  button that does nothing. */
-export function canRequestPreview(
+ *  Exists because an empty template and a real rule are not the same thing
+ *  in 解析文件名 and not the same thing here: there, empty means "split on
+ *  separators", which is a real rule the server accepts; here, empty means
+ *  "no rule", and `template` carries `binding:"required"` so the server
+ *  answers 400 with a raw Go validation dump. The dialog must not offer
+ *  the button in that state. */
+export function canPlan(
   template: string,
   problem: string | null,
-  pathCount: number,
+  rowCount: number,
 ): boolean {
-  if (pathCount === 0) return false;
+  if (rowCount === 0) return false;
   if (template.trim() === '') return false;
   return problem === null;
 }

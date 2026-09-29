@@ -393,11 +393,10 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   // "invalid tidy payload" on every submission. The UI reported success
   // because enqueueing *did* succeed; the task died afterwards, five
   // retries, silently. See handler.TidyFolder.
-  const tidyTargetPaths = useMemo(
-    () =>
-      (hasSelection ? rows.filter((r) => selectedIds.includes(r.fullPath)) : rows).map(
-        (r) => r.fullPath,
-      ),
+  // The ROWS, not the paths: the dialog renders its plan from each row's
+  // cached tags, and derives the paths it submits from the same rows.
+  const tidyTargetRows = useMemo(
+    () => (hasSelection ? rows.filter((r) => selectedIds.includes(r.fullPath)) : rows),
     [rows, selectedIds, hasSelection],
   );
 
@@ -991,13 +990,13 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
       <RenameFromTagsDialog
         open={renameFromTagsOpen}
         onOpenChange={setRenameFromTagsOpen}
-        selectedPaths={selectedIds.length > 0 ? selectedIds : rows.map((r) => r.fullPath)}
+        rows={selectedIds.length > 0 ? rows.filter((r) => selectedIds.includes(r.fullPath)) : rows}
       />
 
       <ParseFilenamesModal
         open={parseOpen}
         onOpenChange={setParseOpen}
-        selectedPaths={selectedIds.length > 0 ? selectedIds : rows.map((r) => r.fullPath)}
+        rows={selectedIds.length > 0 ? rows.filter((r) => selectedIds.includes(r.fullPath)) : rows}
         initialPattern={parsePattern}
         onPatternChange={setParsePattern}
       />
@@ -1257,7 +1256,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
       <TidyFolderDialog
         open={tidyOpen}
         onOpenChange={setTidyOpen}
-        selectedPaths={tidyTargetPaths}
+        rows={tidyTargetRows}
       />
     </div>
   );

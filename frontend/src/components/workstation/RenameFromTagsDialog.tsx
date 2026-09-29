@@ -1,32 +1,25 @@
-/* eslint-disable react-hooks/set-state-in-effect -- Same reason as
- * ParseFilenamesModal: fetch-on-mount plus reload-on-close, and the
- * rule's suggested fix (React Query / Suspense) adds runtime deps a
- * single dialog cannot justify.
- */
-
 // 从标签改名 — the inverse of 解析文件名, and the same shape on purpose:
-// pick a rule, try it, read the plan, apply. The second dialog to use
-// this shape needs no explanation.
+// pick a rule, read the plan, apply.
 //
-// The one thing it has that the parse dialog does not is a dry run that
-// returns real per-file names. A parse is reversible in the sense that a
-// bad row writes nothing; a rename moves files, and 500 moved files are
-// not something to apply unread. So:
+// # The plan is derived here, not asked for
 //
-//   1. POST /api/tag/preview_rename_from_tags/ → rows of {old, new, status}.
-//      Nothing is written. The plan is the product here; the apply button
-//      is the boring part.
-//   2. The operator reads it. Gaps (a field that was empty) and blocked
-//      rows are called out, because "A -  - T.mp3" is a name the operator
-//      chose to allow and also might not have meant.
-//   3. Click 应用 → the server RE-PLANS every row rather than trusting
-//      this one, and returns the authoritative result. The table is then
-//      updated from that result, not from the preview.
+// The table is a useMemo over the current template and the rows. The
+// server's preview used to be asked for on a timer and a 重新预览 click,
+// which meant a table that could describe a template the operator had
+// already edited, and an apply button gated on re-reading it. Rendering
+// the plan from the rows' cached tags removes the whole class of problem:
+// the table always describes the template in the box, and it updates the
+// instant the template changes.
 //
-// A template edit invalidates the plan: the apply button disables until
-// a fresh preview lands, so nobody applies a plan they did not read.
+// # What the local plan deliberately does NOT say
+//
+// Whether the target name is already taken on disk needs a stat, and the
+// client has no data about the disk. So that is not checked, and it is not
+// implied to be fine. Two of the visible rows landing on the same name IS
+// checked, because that comparison is free and it is the collision people
+// hit most. The rest is the operator's to look at — the dialog says so.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Loader2, FileEdit, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -39,130 +32,60 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { useNoticeStore } from '@/store/useNoticeStore';
-import {
-  previewRenameFromTags,
-  applyRenameFromTags,
-  type RenamePlanRow,
-} from '@/api/client';
+import { applyRenameFromTags } from '@/api/client';
 import { useWorklistStore } from '@/store/useWorklistStore';
 import {
   RENAME_FIELDS,
   RENAME_FIELD_LABELS,
   RENAME_PRESETS,
-  TRY_EXAMPLE,
   buildTemplate,
-  canRequestPreview,
+  canPlan,
   describeTemplate,
   fieldsFromTemplate,
-  hasWorkToDo,
-  rowReason,
   tallyRename,
   templateProblem,
-  tryTemplate,
 } from './renameFromTags';
+import { localRenamePlan, type PlanRow } from './localPreview';
 import { cn } from '@/lib/utils';
+import { previewTruncationNote } from '@/lib/previewLimit';
+import type { WorklistRow } from '@/types';
 
 interface RenameFromTagsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Selected row full paths, relative to MUSIC_DIR. */
-  selectedPaths: string[];
+  /** The selected worklist rows. The plan renders from these, and the
+   *  apply covers all of them — not just the ten the table shows. */
+  rows: WorklistRow[];
 }
 
-export function RenameFromTagsDialog({
-  open,
-  onOpenChange,
-  selectedPaths,
-}: RenameFromTagsDialogProps) {
+export function RenameFromTagsDialog({ open, onOpenChange, rows }: RenameFromTagsDialogProps) {
   const [template, setTemplate] = useState('');
-  /** The template the current `plan` was computed for. A mismatch means
-   *  the operator has typed since the preview, and applying would do
-   *  something they have not read. */
-  const [plannedTemplate, setPlannedTemplate] = useState('');
-  const [plan, setPlan] = useState<RenamePlanRow[]>([]);
-  const [loading, setLoading] = useState<'preview' | 'apply' | null>(null);
+  const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Bumped to force a fresh preview. Clearing state alone is not enough:
-  // a second `setPlan([])` on an already-empty plan is a no-op, React
-  // does not re-render, and the effect never re-runs — so "重新预览"
-  // would be dead exactly when a previous preview had failed.
-  const [previewNonce, setPreviewNonce] = useState(0);
 
   const renameWorklistRow = useWorklistStore((s) => s.renameRow);
 
   const chosen = useMemo(() => fieldsFromTemplate(template), [template]);
   const problem = useMemo(() => templateProblem(template), [template]);
-  const tried = useMemo(
-    () => tryTemplate(template, TRY_EXAMPLE),
-    [template],
+  const plan = useMemo(
+    () => (template.trim() !== '' && problem === null ? localRenamePlan(rows, template) : []),
+    [rows, template, problem],
   );
-  const tally = useMemo(() => tallyRename(plan), [plan]);
-  const planIsStale = plannedTemplate !== template;
 
-  useEffect(() => {
-    if (!open) {
-      setPlan([]);
-      setError(null);
-      setLoading(null);
-      setTemplate('');
-      setPlannedTemplate('');
-      return;
-    }
-    if (!canRequestPreview(template, problem, selectedPaths.length)) return;
-    let cancelled = false;
-    (async () => {
-      setLoading('preview');
-      setError(null);
-      try {
-        const res = await previewRenameFromTags(selectedPaths, template);
-        if (cancelled) return;
-        setPlan(res.rows ?? []);
-        setPlannedTemplate(template);
-      } catch (e: unknown) {
-        if (cancelled) return;
-        const msg = e instanceof Error ? e.message : String(e);
-        setError(msg);
-        setPlan([]);
-        useNoticeStore.getState().push(`改名预览失败: ${msg}`, 'error');
-      } finally {
-        if (!cancelled) setLoading(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // `template` is deliberately absent: re-previewing on every
-    // keystroke would stat the filesystem per character. 重新预览 is the
-    // explicit trigger, and it moves the nonce.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, selectedPaths, previewNonce]);
-
-  const setTemplateAndPlan = (t: string) => {
-    setTemplate(t);
-    // Typing invalidates the plan the operator was reading. The apply
-    // button goes dead until they re-preview, which is the point.
-    setPlannedTemplate('');
-    setPlan([]);
-  };
-
-  /** Choosing a rule is a discrete, deliberate act — unlike typing — so
-   *  it previews on the spot. Otherwise the operator picks the obvious
-   *  preset and then has to find a second button to see what it did. */
-  const chooseRule = (t: string) => {
-    setTemplateAndPlan(t);
-    if (t.trim() !== '') setPreviewNonce((n) => n + 1);
-  };
+  // The plan is capped; the apply is not. Say which is which, or a ten-row
+  // table reads as the whole job.
+  const previewNote = previewTruncationNote(plan.length, rows.length);
+  const wouldRename = plan.filter((p) => !p.unchanged).length;
+  const submitPaths = rows.map((r) => r.fullPath);
 
   const handleApply = async () => {
     if (template.trim() === '') return;
-    setLoading('apply');
+    setApplying(true);
     try {
-      const res = await applyRenameFromTags(selectedPaths, template);
+      const res = await applyRenameFromTags(submitPaths, template);
+      // The response is the truth, not a receipt: the server re-planned
+      // against the disk, so it may have refused rows this preview cleared.
       const t = tallyRename(res.rows ?? []);
-      // The response is the truth, not a receipt: the server re-planned,
-      // so it may have blocked rows this preview had cleared.
-      setPlan(res.rows ?? []);
-      setPlannedTemplate(template);
       useNoticeStore.getState().push(
         `已改名 ${t.ok} 个，未变 ${t.noChange} 个，跳过 ${t.taken + t.blocked + t.failed} 个`,
         t.failed > 0 || t.blocked > 0 ? 'warn' : 'info',
@@ -172,8 +95,7 @@ export function RenameFromTagsDialog({
       // store for nothing.
       for (const r of res.rows ?? []) {
         if (r.status !== 'ok') continue;
-        const newPath = joinDir(r.path, r.new_name);
-        renameWorklistRow(r.path, newPath, r.new_name);
+        renameWorklistRow(r.path, joinDir(r.path, r.new_name), r.new_name);
       }
       onOpenChange(false);
     } catch (e: unknown) {
@@ -181,9 +103,11 @@ export function RenameFromTagsDialog({
       setError(msg);
       useNoticeStore.getState().push(`改名失败: ${msg}`, 'error');
     } finally {
-      setLoading(null);
+      setApplying(false);
     }
   };
+
+  const canApply = canPlan(template, problem, rows.length) && !applying;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -196,8 +120,8 @@ export function RenameFromTagsDialog({
             </span>
           </DialogTitle>
           <DialogDescription>
-            按文件里已有的标签重新生成文件名。写入前会先列出每个文件的旧名与新名，
-            确认后再执行；已有标签不受影响。
+            按文件里已有的标签重新生成文件名。下表在本地按当前模板实时算出来，
+            已有标签不受影响。
           </DialogDescription>
         </DialogHeader>
 
@@ -214,10 +138,8 @@ export function RenameFromTagsDialog({
                     key={f}
                     type="button"
                     onClick={() =>
-                      chooseRule(
-                        buildTemplate(
-                          on ? chosen.filter((x) => x !== f) : [...chosen, f],
-                        ),
+                      setTemplate(
+                        buildTemplate(on ? chosen.filter((x) => x !== f) : [...chosen, f]),
                       )
                     }
                     className={cn(
@@ -250,7 +172,7 @@ export function RenameFromTagsDialog({
                   key={p.id}
                   type="button"
                   title={p.hint}
-                  onClick={() => chooseRule(buildTemplate(p.fields))}
+                  onClick={() => setTemplate(buildTemplate(p.fields))}
                   className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent"
                   data-testid={`rename-preset-${p.id}`}
                 >
@@ -260,27 +182,15 @@ export function RenameFromTagsDialog({
             </div>
           </div>
 
-          <div className="flex items-start gap-2">
-            <Input
-              className="h-8 text-sm font-mono"
-              value={template}
-              placeholder="${artist} - ${title}"
-              onChange={(e) => setTemplateAndPlan(e.target.value)}
-              aria-label="文件名模板"
-              spellCheck={false}
-              data-testid="rename-template-input"
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              className="shrink-0 h-8"
-              onClick={() => setPreviewNonce((n) => n + 1)}
-              disabled={loading !== null || !canRequestPreview(template, problem, selectedPaths.length)}
-              data-testid="rename-repreview"
-            >
-              重新预览
-            </Button>
-          </div>
+          <Input
+            className="h-8 text-sm font-mono"
+            value={template}
+            placeholder="${artist} - ${title}"
+            onChange={(e) => setTemplate(e.target.value)}
+            aria-label="文件名模板"
+            spellCheck={false}
+            data-testid="rename-template-input"
+          />
           <div className="text-xs text-muted-foreground" data-testid="rename-rule-text">
             {describeTemplate(template)}
           </div>
@@ -289,61 +199,45 @@ export function RenameFromTagsDialog({
               {problem}
             </div>
           )}
-          {template.trim() !== '' && (
-            <div className="text-xs text-muted-foreground" data-testid="rename-try">
-              举例：<code className="font-mono">{tried.name || '（空）'}</code>
-              {tried.missing.length > 0 && (
-                <span className="ml-1 text-amber-600 dark:text-amber-400">
-                  （示例里缺 {tried.missing.map((f) => RENAME_FIELD_LABELS[f]).join('、')}，
-                  空位会留在名字里）
-                </span>
-              )}
-            </div>
-          )}
-
-          {loading === 'preview' && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              正在计算改名方案…
-            </div>
-          )}
           {error && <div className="text-sm text-destructive">{error}</div>}
 
-          {!loading && plan.length > 0 && (
-            <PlanView rows={plan} tally={tally} />
+          {plan.length > 0 && <PlanView rows={plan} />}
+          {previewNote && (
+            <div className="text-[11px] text-muted-foreground" data-testid="rename-preview-note">
+              {previewNote}
+            </div>
           )}
+          <div className="text-[11px] text-muted-foreground">
+            本地预览只判断模板长什么样，以及这 {plan.length} 个文件彼此之间会不会撞名；
+            目标名字是否已被占用需要看磁盘，这里不查，冲突请自行核对。
+          </div>
         </div>
 
         <DialogFooter showCloseButton>
           <span className="mr-auto text-[11px] text-muted-foreground self-center">
-            {planIsStale && plan.length > 0
-              ? '模板已改，点「重新预览」查看新的方案'
-              : selectedPaths.length === 0
-                ? '请至少选择一个文件'
-                : template.trim() === ''
-                  ? '先选一条规则（点上面的预设，或点字段自己拼）'
-                  : problem !== null
-                    ? '模板有问题，改好后再预览'
+            {rows.length === 0
+              ? '请至少选择一个文件'
+              : template.trim() === ''
+                ? '先选一条规则（点上面的预设，或点字段自己拼）'
+                : problem !== null
+                  ? '模板有问题，改好后再提交'
+                  : plan.length > 0
+                    ? `将改名选中的 ${rows.length} 个文件；上表 ${plan.length} 个里有 ${wouldRename} 个会变`
                     : ''}
           </span>
-          <Button
-            onClick={handleApply}
-            disabled={
-              loading !== null ||
-              template.trim() === '' ||
-              problem !== null ||
-              planIsStale ||
-              !hasWorkToDo(tally)
-            }
-            data-testid="rename-apply"
-          >
-            {loading === 'apply' ? (
+          <Button onClick={handleApply} disabled={!canApply} data-testid="rename-apply">
+            {applying ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 改名中…
               </>
             ) : (
-              <>改名 {tally.ok} 个文件</>
+              // The apply covers the WHOLE selection; the plan it is shown
+              // above is capped to ten rows. Labelling the button with the
+              // plan's tally would promise "改名 10 个文件" and then rename
+              // two thousand, so the number here is always the number that
+              // will actually be submitted.
+              <>改名 {submitPaths.length} 个文件</>
             )}
           </Button>
         </DialogFooter>
@@ -352,41 +246,21 @@ export function RenameFromTagsDialog({
   );
 }
 
-/** The dry-run result: every file's old name and new name, plus a
- *  summary. Rows that will not move say why inline, because "why did
- *  this one not rename" is the question the plan exists to answer. */
-function PlanView({
-  rows,
-  tally,
-}: {
-  rows: RenamePlanRow[];
-  tally: ReturnType<typeof tallyRename>;
-}) {
+/** The plan: every file's old name and new name, both always shown, because
+ *  "why did this one not change" is the question the plan exists to answer
+ *  and a blank destination is a worse answer than a reason. */
+function PlanView({ rows }: { rows: PlanRow[] }) {
+  const withGaps = rows.filter((r) => r.missing.length > 0).length;
   return (
     <>
       <div
         className="rounded border border-border px-3 py-2 text-xs space-y-1"
         data-testid="rename-summary"
       >
-        <div>
-          共 {tally.total} 个：将改名{' '}
-          <span className="text-emerald-600 dark:text-emerald-400">{tally.ok}</span>
-          {tally.noChange > 0 && (
-            <span className="text-muted-foreground"> · 已是该名字 {tally.noChange}</span>
-          )}
-          {tally.taken > 0 && (
-            <span className="text-rose-600 dark:text-rose-400"> · 重名跳过 {tally.taken}</span>
-          )}
-          {tally.blocked > 0 && (
-            <span className="text-rose-600 dark:text-rose-400"> · 无法改名 {tally.blocked}</span>
-          )}
-          {tally.failed > 0 && (
-            <span className="text-rose-600 dark:text-rose-400"> · 失败 {tally.failed}</span>
-          )}
-        </div>
-        {tally.withGaps > 0 && (
+        <div>共 {rows.length} 个：其中 {rows.filter((r) => !r.unchanged).length} 个会改名</div>
+        {withGaps > 0 && (
           <div className="text-amber-600 dark:text-amber-400">
-            有 {tally.withGaps} 个文件缺少模板里的某个标签，空位会留在新名字里。
+            有 {withGaps} 个文件缺少模板里的某个标签，空位会留在新名字里。
           </div>
         )}
       </div>
@@ -397,31 +271,33 @@ function PlanView({
       >
         {rows.map((r) => (
           <div
-            key={r.path}
+            key={r.id}
             className="flex items-baseline gap-2 px-3 py-1.5 text-xs border-b border-border last:border-b-0"
           >
             <span className="font-mono text-muted-foreground truncate shrink-0 max-w-[38%]">
-              {r.old_name}
+              {r.fileName}
             </span>
             <span className="text-muted-foreground shrink-0">→</span>
             <span
               className={cn(
                 'font-mono truncate',
-                r.status === 'ok' ? '' : 'text-muted-foreground line-through',
+                r.clash ? 'text-rose-600 dark:text-rose-400' : '',
+                r.unchanged ? 'text-muted-foreground' : '',
               )}
             >
-              {r.status === 'ok' || r.status === 'no_change'
-                ? r.new_name || r.old_name
-                : r.old_name}
+              {r.result || '—'}
             </span>
-            {r.status !== 'ok' && r.status !== 'no_change' && (
+            {r.clash && (
               <span className="ml-auto flex items-center gap-1 text-rose-600 dark:text-rose-400 shrink-0">
                 <AlertTriangle className="w-3 h-3" />
-                {rowReason(r)}
+                撞名
               </span>
             )}
-            {r.status === 'no_change' && (
-              <span className="ml-auto text-muted-foreground shrink-0">无需改动</span>
+            {r.unchanged && <span className="ml-auto text-muted-foreground shrink-0">无需改动</span>}
+            {!r.clash && !r.unchanged && r.missing.length > 0 && (
+              <span className="ml-auto text-amber-600 dark:text-amber-400 shrink-0">
+                缺 {r.missing.map((m) => RENAME_FIELD_LABELS[m] ?? m).join('、')}
+              </span>
             )}
           </div>
         ))}
@@ -430,8 +306,7 @@ function PlanView({
   );
 }
 
-/** The new absolute-ish path for a renamed row. `path` is relative to
- *  MUSIC_DIR, and so is the result, which is what the stores hold. */
+/** The new path for a renamed row, from the server's own absolute `path`. */
 function joinDir(dir: string, name: string): string {
   return dir === '' ? name : `${dir}/${name}`;
 }

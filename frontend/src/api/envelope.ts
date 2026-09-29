@@ -11,11 +11,11 @@
 // the axios layer: both resolve.
 //
 // Most of the client returns the raw envelope and each caller checks
-// `res?.result` / `res?.data`. The two filename-parse functions did
-// NOT — their declared return types claimed an unwrapped shape while the
-// body returned the envelope verbatim, so `res.results` and `res.token`
-// were `undefined` on *every* response, success included. Nothing about
-// the call site looked wrong, which is why it survived review: the type
+// `res?.result` / `res?.data`. The filename-parse call did NOT — its
+// declared return type claimed an unwrapped shape while the body returned
+// the envelope verbatim, so `res.results` and `res.token` were
+// `undefined` on *every* response, success included. Nothing about the
+// call site looked wrong, which is why it survived review: the type
 // said `results: ParsedPreviewRow[]` and the code did `return data`.
 //
 // The result was a guaranteed crash rather than a wrong value. The modal

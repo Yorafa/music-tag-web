@@ -3,16 +3,12 @@ import {
   DEFAULT_RULE_TEXT,
   RENAME_FIELDS,
   RENAME_PRESETS,
-  TRY_EXAMPLE,
   buildTemplate,
-  canRequestPreview,
+  canPlan,
   describeTemplate,
   fieldsFromTemplate,
-  hasWorkToDo,
-  rowReason,
   tallyRename,
   templateProblem,
-  tryTemplate,
   type RenameField,
 } from './renameFromTags';
 import type { RenamePlanRow } from '@/api/client';
@@ -158,38 +154,6 @@ describe('describeTemplate', () => {
   });
 });
 
-describe('tryTemplate', () => {
-  it('renders against the example values', () => {
-    const { name, missing } = tryTemplate(
-      '${artist} - ${title}',
-      TRY_EXAMPLE,
-    );
-    expect(name).toBe('周杰伦 - 晴天');
-    expect(missing).toEqual([]);
-  });
-
-  it('leaves the separators around an empty field, exactly like the server', () => {
-    // Not a client nicety: if this collapsed the gap, the box would show
-    // "A - T" while the server writes "A -  - T", and the operator would
-    // be reading a name that does not exist.
-    const { name, missing } = tryTemplate('${artist} - ${genre} - ${title}', {
-      artist: 'A',
-      title: 'T',
-    });
-    expect(name).toBe('A -  - T');
-    expect(missing).toEqual(['genre']);
-  });
-
-  it('reports every missing field, not just the first', () => {
-    const { missing } = tryTemplate('${artist} - ${album} - ${year}', {});
-    expect(missing).toEqual(['artist', 'album', 'year']);
-  });
-
-  it('trims the rendered name', () => {
-    expect(tryTemplate('  ${title}  ', { title: 'T' }).name).toBe('T');
-  });
-});
-
 describe('tallyRename', () => {
   it('counts each status separately', () => {
     expect(
@@ -247,34 +211,6 @@ describe('tallyRename', () => {
   });
 });
 
-describe('hasWorkToDo', () => {
-  it('is true only when something will actually move', () => {
-    expect(hasWorkToDo(tallyRename([row({ status: 'ok' })]))).toBe(true);
-  });
-
-  it('is false for a plan of nothing but already-correct names', () => {
-    expect(hasWorkToDo(tallyRename([row({ status: 'no_change' })]))).toBe(false);
-  });
-
-  it('is false when everything was blocked', () => {
-    expect(hasWorkToDo(tallyRename([row({ status: 'blocked' })]))).toBe(false);
-  });
-});
-
-describe('rowReason', () => {
-  it('is empty for a row that will be renamed', () => {
-    expect(rowReason(row({ status: 'ok' }))).toBe('');
-  });
-
-  it('prefers the server detail over the bare status word', () => {
-    expect(rowReason(row({ status: 'taken', detail: '目标已存在' }))).toBe('目标已存在');
-  });
-
-  it('falls back to the status when there is no detail', () => {
-    expect(rowReason(row({ status: 'failed' }))).toBe('failed');
-  });
-});
-
 describe('RENAME_PRESETS', () => {
   it('every preset names at least two fields', () => {
     for (const p of RENAME_PRESETS) {
@@ -297,37 +233,37 @@ describe('RENAME_PRESETS', () => {
   });
 });
 
-describe('canRequestPreview', () => {
-  // The bug: the dialog opened by POSTing `template: ""`, which the
-  // server rejects with a raw Go validation dump (`renameRequest.Template
-  // Error:Field validation for 'Template' failed on the 'required' tag`).
+describe('canPlan', () => {
   // An empty template is NOT a default rule here the way it is in
-  // 解析文件名 — it means "no rule", and nothing is worth previewing.
+  // 解析文件名 — there empty means "split on separators", a real rule the
+  // server accepts; here it means "no rule", and `template` carries
+  // `binding:"required"`, so the server answers 400 with a raw Go
+  // validation dump. The dialog must not offer the button in that state.
 
   it('refuses an empty template', () => {
-    expect(canRequestPreview('', null, 5)).toBe(false);
+    expect(canPlan('', null, 5)).toBe(false);
   });
 
   it('refuses a whitespace-only template', () => {
-    expect(canRequestPreview('   ', null, 5)).toBe(false);
+    expect(canPlan('   ', null, 5)).toBe(false);
   });
 
   it('refuses when nothing is selected', () => {
-    expect(canRequestPreview('${artist} - ${title}', null, 0)).toBe(false);
+    expect(canPlan('${artist} - ${title}', null, 0)).toBe(false);
   });
 
   it('refuses a template the checker already rejected', () => {
-    expect(canRequestPreview('${nope}', '未知字段 nope', 5)).toBe(false);
+    expect(canPlan('${nope}', '未知字段 nope', 5)).toBe(false);
   });
 
   it('allows a real template over a real selection', () => {
-    expect(canRequestPreview('${artist} - ${title}', null, 5)).toBe(true);
+    expect(canPlan('${artist} - ${title}', null, 5)).toBe(true);
   });
 
   it('agrees with templateProblem on every preset', () => {
     for (const p of RENAME_PRESETS) {
       const t = buildTemplate(p.fields);
-      expect(canRequestPreview(t, templateProblem(t), 3), p.id).toBe(true);
+      expect(canPlan(t, templateProblem(t), 3), p.id).toBe(true);
     }
   });
 });

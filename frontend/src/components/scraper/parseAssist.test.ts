@@ -9,14 +9,16 @@ import {
   describeRule,
   fieldsFromPattern,
   findUnsupportedPerlForTest,
-  firstParsedExample,
+  localParsePlan,
   patternHelp,
   patternProblem,
   presetById,
-  tallyPreview,
+  tallyPlan,
   tryPattern,
+  type ParsePlanRow,
   type ParseTagField,
 } from './parseAssist';
+import { PREVIEW_LIMIT } from '@/lib/previewLimit';
 
 // The generator's whole reason to exist is that it produces patterns the
 // SERVER can run. If buildPattern emitted something V8 accepts and Go's
@@ -100,9 +102,10 @@ function combosOf<T>(pool: T[], n: number): T[][] {
 
 describe('generated patterns agree with the Go parser on the shared fixture', () => {
   // Each preset claims an example filename and a field order. Run the
-  // preset's OWN generated pattern against the fixture and require the
+  // preset's OWN generated pattern against the example and require the
   // advertised result — this is the check that makes the chips
-  // trustworthy rather than decorative.
+  // trustworthy rather than decorative, and it now also guards the LOCAL
+  // plan, which is built from the same call.
   for (const preset of PATTERN_PRESETS) {
     it(`preset「${preset.label}」parses its own example as advertised`, () => {
       const pattern = buildPattern(preset.fields);
@@ -123,7 +126,10 @@ describe('generated patterns agree with the Go parser on the shared fixture', ()
     // A fixture entry that carries a pattern, so this exercises the same
     // shape the generator emits rather than a hand-written one.
     const c = FIXTURE.find(
-      (x) => x.pattern && (x.pattern.includes('(?P<') || x.pattern.includes('(?P<')) && x.expected.status === 'ok',
+      (x) =>
+        x.pattern &&
+        x.pattern.includes('(?P<') &&
+        x.expected.status === 'ok',
     );
     expect(c, 'fixture has at least one named-group ok case').toBeDefined();
     const got = tryPattern(c!.input, c!.pattern!);
@@ -193,6 +199,122 @@ describe('describeRule', () => {
     expect(describeRule('artist=(?P<artist>.+?) title=(?P<title>.+)')).toContain(
       '艺术家',
     );
+  });
+});
+
+describe('patternHelp / RE2 limits', () => {
+  it('accepts the default (empty) pattern', () => {
+    expect(patternHelp('').problem).toBeNull();
+  });
+
+  it('accepts a generated pattern', () => {
+    expect(patternHelp(buildPattern(['artist', 'title'])).problem).toBeNull();
+  });
+
+  it('rejects lookahead, which Go RE2 refuses but V8 accepts', () => {
+    // Verified against Go's regexp.Compile: "invalid or unsupported
+    // Perl syntax: (?=". Without this check the box says the pattern is
+    // fine and the server 400s on the next click.
+    const h = patternHelp('^(?P<title>.+?)(?= - )');
+    expect(h.problem).toContain('前瞻');
+    expect(h.problem).toContain('RE2');
+  });
+
+  it('rejects negative lookahead and lookbehind too', () => {
+    expect(patternHelp('^(?!x)(?P<title>.+)$').problem).toContain('前瞻');
+    expect(patternHelp('(?<=a)(?P<title>.+)$').problem).toContain('反向引用');
+  });
+
+  it('rejects a backreference', () => {
+    expect(patternHelp('^(?P<title>.+)\\1$').problem).toContain('反向引用');
+  });
+
+  it('does not flag a literal "(?=" inside a character class', () => {
+    expect(findUnsupportedPerlForTest('[(?=]')).toBeNull();
+  });
+
+  it('does not flag an escaped backslash followed by a digit', () => {
+    // `\\1` is a literal backslash then a one, not a backreference. The
+    // scan has to notice the escaping; a whole-string /\\[1-9]/ test
+    // cannot and reported this as unsupported.
+    expect(findUnsupportedPerlForTest('\\\\1')).toBeNull();
+  });
+
+  it('still flags a real backreference after other escapes', () => {
+    expect(findUnsupportedPerlForTest('^(?P<title>.+)\\1$')).toContain('反向引用');
+  });
+
+  it('reports the unknown field name with the list of real ones', () => {
+    const p = patternHelp('^(?P<bob>.+)$').problem;
+    expect(p).toContain('bob');
+    expect(p).toContain('albumartist');
+  });
+});
+
+describe('presets', () => {
+  it('every preset generates a pattern the client check accepts', () => {
+    for (const p of PATTERN_PRESETS) {
+      expect(patternHelp(buildPattern(p.fields)).problem, p.id).toBeNull();
+    }
+  });
+
+  it('every preset example is actually split into its advertised field count', () => {
+    for (const p of PATTERN_PRESETS) {
+      const segs = p.example.replace(/\.[^.]+$/, '').split(' - ');
+      expect(segs.length, `${p.id}: ${p.example}`).toBe(p.fields.length);
+    }
+  });
+
+  it('presetById finds a preset and returns undefined otherwise', () => {
+    expect(presetById('artist-title')?.label).toBe('艺术家 - 标题');
+    expect(presetById('nope')).toBeUndefined();
+  });
+
+  it('has no duplicate ids', () => {
+    const ids = PATTERN_PRESETS.map((p) => p.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe('patternProblem', () => {
+  it('accepts an empty pattern, which means "use the default split"', () => {
+    expect(patternProblem('')).toBeNull();
+    expect(patternProblem('   ')).toBeNull();
+  });
+
+  it("accepts Go's (?P<name>...) spelling, which new RegExp alone rejects", () => {
+    // Regression: compiling the raw string throws "Invalid group" in
+    // V8, so an un-translated check flags every valid pattern as broken
+    // and the pattern can never be submitted.
+    // eslint-disable-next-line no-invalid-regexp
+    expect(() => new RegExp('^(?P<artist>.+?) - (?P<title>.+)$')).toThrow();
+    expect(patternProblem('^(?P<artist>.+?) - (?P<title>.+)$')).toBeNull();
+  });
+
+  it('names an unknown group and lists the real ones', () => {
+    const p = patternProblem('^(?P<bob>.+)$');
+    expect(p).toContain('bob');
+    expect(p).toContain('albumartist');
+  });
+
+  it('accepts every field the server allows', () => {
+    const p = PARSE_TAG_FIELDS.map((f) => `(?P<${f}>.+?)`).join('-');
+    expect(patternHelp(`^${p}$`).problem).toBeNull();
+  });
+
+  it('rejects a pattern with no field name', () => {
+    // `(?P<>` is not valid in Go either, so this is a compile error, not
+    // a naming complaint — asserted so the two failure kinds stay
+    // distinguishable.
+    expect(patternProblem('^(?P<>.+)$')).toBe('正则表达式无法编译');
+  });
+
+  it('rejects an uncompilable pattern', () => {
+    expect(patternProblem('^(?P<title>.+')).toBe('正则表达式无法编译');
+  });
+
+  it('a mixed pattern with one bad group is rejected wholesale', () => {
+    expect(patternProblem('^(?P<title>.+?) - (?P<nope>.+)$')).toContain('nope');
   });
 });
 
@@ -277,7 +399,7 @@ describe('tryPattern', () => {
   it('survives a trailing newline, which breaks every anchored pattern', () => {
     // JS's `$` does not match before a final \n the way Perl's does, so
     // an untrimmed stem pasted from a file listing fails to match at
-    // all — the try-it box would report "匹配不上" for a rule that works.
+    // all — the local plan would report "匹配不上" for a rule that works.
     const p = buildPattern(['artist', 'title']);
     expect(tryPattern('Artist - Title\n', p).status).toBe('ok');
     expect(tryPattern('Artist - Title\n', '').status).toBe('ok');
@@ -319,147 +441,80 @@ describe('tryPattern', () => {
   });
 });
 
-describe('patternHelp / RE2 limits', () => {
-  it('accepts the default (empty) pattern', () => {
-    expect(patternHelp('').problem).toBeNull();
+
+describe('localParsePlan', () => {
+  const row = (fullPath: string) => ({ id: fullPath, fullPath });
+  const T = PREVIEW_LIMIT;
+
+  it('parses each row from its own basename, not its full path', () => {
+    // The directories are full of separators the default split would
+    // also break on, so a plan built from the full path would produce
+    // "Jay" as the artist.
+    const plan = localParsePlan([row('Live/Jay Chou/2003 - 晴天.mp3')], '');
+    expect(plan).toHaveLength(1);
+    expect(plan[0].fileName).toBe('2003 - 晴天.mp3');
+    expect(plan[0].status).toBe('ok');
+    expect(plan[0].tags).toEqual([
+      ['title', '晴天'],
+      ['artist', '2003'],
+    ]);
   });
 
-  it('accepts a generated pattern', () => {
-    expect(patternHelp(buildPattern(['artist', 'title'])).problem).toBeNull();
+  it('keeps the field order the dialog lists, not the capture order', () => {
+    const plan = localParsePlan(
+      [row('A - B - 01 - C.mp3')],
+      buildPattern(['artist', 'album', 'tracknumber', 'title']),
+    );
+    const got = plan[0].tags.map(([f]) => f);
+    expect(got).toEqual(PARSE_TAG_FIELDS.filter((f) => got.includes(f)));
+    expect(new Set(got)).toEqual(new Set(['artist', 'album', 'tracknumber', 'title']));
   });
 
-  it('rejects lookahead, which Go RE2 refuses but V8 accepts', () => {
-    // Verified against Go's regexp.Compile: "invalid or unsupported
-    // Perl syntax: (?=". Without this check the box says the pattern is
-    // fine and the server 400s on the next click.
-    const h = patternHelp('^(?P<title>.+?)(?= - )');
-    expect(h.problem).toContain('前瞻');
-    expect(h.problem).toContain('RE2');
+  it('lists only the fields the rule captured', () => {
+    const plan = localParsePlan(
+      [row('A - C.mp3')],
+      buildPattern(['artist', 'album', 'title']),
+    );
+    // Unparsable, actually — and that is the point: an uncaptured album
+    // must not appear as a blank, which would read as "this gets
+    // emptied", the one thing this dialog cannot do.
+    expect(plan[0].status).toBe('unparsable');
+    expect(plan[0].tags).toEqual([]);
   });
 
-  it('rejects negative lookahead and lookbehind too', () => {
-    expect(patternHelp('^(?!x)(?P<title>.+)$').problem).toContain('前瞻');
-    expect(patternHelp('(?<=a)(?P<title>.+)$').problem).toContain('反向引用');
+  it('shows the HEAD of the selection, capped at the preview limit', () => {
+    const many = Array.from({ length: T + 5 }, (_, i) => row(`d/A - T${i}.mp3`));
+    const plan = localParsePlan(many, '');
+    expect(plan).toHaveLength(T);
+    expect(plan[0].fileName).toBe('A - T0.mp3');
   });
 
-  it('rejects a backreference', () => {
-    expect(patternHelp('^(?P<title>.+)\\1$').problem).toContain('反向引用');
-  });
-
-  it('does not flag a literal "(?=" inside a character class', () => {
-    expect(findUnsupportedPerlForTest('[(?=]')).toBeNull();
-  });
-
-  it('does not flag an escaped backslash followed by a digit', () => {
-    // `\\1` is a literal backslash then a one, not a backreference. The
-    // scan has to notice the escaping; a whole-string /\\[1-9]/ test
-    // cannot and reported this as unsupported.
-    expect(findUnsupportedPerlForTest('\\\\1')).toBeNull();
-  });
-
-  it('still flags a real backreference after other escapes', () => {
-    expect(findUnsupportedPerlForTest('^(?P<title>.+)\\1$')).toContain('反向引用');
-  });
-
-  it('reports the unknown field name with the list of real ones', () => {
-    const p = patternHelp('^(?P<bob>.+)$').problem;
-    expect(p).toContain('bob');
-    expect(p).toContain('albumartist');
-  });
-});
-
-describe('presets', () => {
-  it('every preset generates a pattern the client check accepts', () => {
-    for (const p of PATTERN_PRESETS) {
-      expect(patternHelp(buildPattern(p.fields)).problem, p.id).toBeNull();
-    }
-  });
-
-  it('every preset example is actually split into its advertised field count', () => {
-    for (const p of PATTERN_PRESETS) {
-      const segs = p.example.replace(/\.[^.]+$/, '').split(' - ');
-      expect(segs.length, `${p.id}: ${p.example}`).toBe(p.fields.length);
-    }
-  });
-
-  it('presetById finds a preset and returns undefined otherwise', () => {
-    expect(presetById('artist-title')?.label).toBe('艺术家 - 标题');
-    expect(presetById('nope')).toBeUndefined();
-  });
-
-  it('has no duplicate ids', () => {
-    const ids = PATTERN_PRESETS.map((p) => p.id);
-    expect(new Set(ids).size).toBe(ids.length);
+  it('an empty selection is an empty plan, not a crash', () => {
+    expect(localParsePlan([], '')).toEqual([]);
   });
 });
 
-describe('firstParsedExample', () => {
-  it('pulls a basename out of the first previewed path', () => {
-    expect(
-      firstParsedExample([{ path: '/music/A/B - C.flac', status: 'ok' }]),
-    ).toBe('B - C.flac');
+describe('tallyPlan', () => {
+  const r = (status: ParsePlanRow['status']): ParsePlanRow => ({
+    id: status + Math.random(),
+    fileName: 'x.mp3',
+    status,
+    tags: [],
   });
-
-  it('is empty when nothing was previewed', () => {
-    expect(firstParsedExample([])).toBe('');
-  });
-});
-
-describe('patternProblem', () => {
-  it('accepts an empty pattern, which means "use the default split"', () => {
-    expect(patternProblem('')).toBeNull();
-    expect(patternProblem('   ')).toBeNull();
-  });
-
-  it("accepts Go's (?P<name>...) spelling, which new RegExp alone rejects", () => {
-    // Regression: compiling the raw string throws "Invalid group" in
-    // V8, so an un-translated check flags every valid pattern as broken
-    // and the pattern can never be submitted.
-    // eslint-disable-next-line no-invalid-regexp
-    expect(() => new RegExp('^(?P<artist>.+?) - (?P<title>.+)$')).toThrow();
-    expect(patternProblem('^(?P<artist>.+?) - (?P<title>.+)$')).toBeNull();
-  });
-
-  it('names an unknown group and lists the real ones', () => {
-    const p = patternProblem('^(?P<bob>.+)$');
-    expect(p).toContain('bob');
-    expect(p).toContain('albumartist');
-  });
-
-  it('accepts every field the server allows', () => {
-    const p = PARSE_TAG_FIELDS.map((f) => `(?P<${f}>.+?)`).join('-');
-    expect(patternHelp(`^${p}$`).problem).toBeNull();
-  });
-
-  it('rejects a pattern with no field name', () => {
-    // `(?P<>` is not valid in Go either, so this is a compile error, not
-    // a naming complaint — asserted so the two failure kinds stay
-    // distinguishable.
-    expect(patternProblem('^(?P<>.+)$')).toBe('正则表达式无法编译');
-  });
-
-  it('rejects an uncompilable pattern', () => {
-    expect(patternProblem('^(?P<title>.+')).toBe('正则表达式无法编译');
-  });
-
-  it('a mixed pattern with one bad group is rejected wholesale', () => {
-    expect(patternProblem('^(?P<title>.+?) - (?P<nope>.+)$')).toContain('nope');
-  });
-});
-
-describe('tallyPreview', () => {
-  const r = (status: 'ok' | 'ambiguous' | 'unparsable') => ({ path: '/m/x', status });
 
   it('counts each status separately', () => {
-    expect(
-      tallyPreview([r('ok'), r('ok'), r('ambiguous'), r('unparsable')]),
-    ).toEqual({ total: 4, matched: 2, guessed: 1, skipped: 1 });
+    expect(tallyPlan([r('ok'), r('ok'), r('ambiguous'), r('unparsable')])).toEqual({
+      total: 4,
+      matched: 2,
+      guessed: 1,
+      skipped: 1,
+    });
   });
 
   it('counts an ambiguous row as guessed, NOT skipped — it will be written', () => {
     // The regression this guards: reporting "1 个文件" when two are
     // about to be written is a lie told at the moment the user decides.
-    const t = tallyPreview([r('ambiguous'), r('ok')]);
+    const t = tallyPlan([r('ambiguous'), r('ok')]);
     expect(t.skipped).toBe(0);
     expect(t.guessed).toBe(1);
   });
@@ -471,8 +526,10 @@ describe('tallyPreview', () => {
       [r('unparsable'), r('unparsable')],
       [r('ok'), r('ambiguous'), r('unparsable'), r('ok')],
     ]) {
-      const t = tallyPreview(rows);
-      expect(t.matched + t.guessed + t.skipped, JSON.stringify(rows)).toBe(t.total);
+      const t = tallyPlan(rows);
+      expect(t.matched + t.guessed + t.skipped, JSON.stringify(rows.map((x) => x.status))).toBe(
+        t.total,
+      );
     }
   });
 });

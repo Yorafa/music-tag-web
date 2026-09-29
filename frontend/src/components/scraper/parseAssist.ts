@@ -17,8 +17,8 @@ import {
   PARSE_TAG_FIELDS,
   PARSE_TAG_LABELS,
   type ParseTagField,
-  type ParsedPreviewRow,
 } from '@/api/client';
+import { PREVIEW_LIMIT } from '@/lib/previewLimit';
 
 export { PARSE_TAG_FIELDS, PARSE_TAG_LABELS };
 export type { ParseTagField };
@@ -166,14 +166,14 @@ export interface TryResult {
 /** Run the pattern against a sample filename, locally, so the user can
  *  see the effect before spending a preview round trip.
  *
- *  This mirrors the Go parser's steps in order — NFC, strip the
- *  extension, apply the pattern — because a try-it box that disagrees
- *  with the server is worse than none. The two known limits, stated
+ *  This mirrors the Go parser's steps in order — strip the extension,
+ *  apply the pattern — because a local table that disagrees with the
+ *  server is worse than none. The two known limits, stated
  *  rather than hidden:
  *
  *   - An empty pattern runs the DEFAULT split, not the pattern, so the
  *     result here is what the server will do too.
- *   - The sample goes through the same code path, so agreement is
+ *   - Real basenames go through the same code path, so agreement is
  *     structural; parseAssist.test.ts pins it to the Go fixture so a
  *     divergence shows up as a test failure rather than a surprise.
  *
@@ -427,44 +427,91 @@ export function findUnsupportedPerlForTest(p: string): string | null {
 }
 
 /** The example filename a preset should be tried against, used as the
- *  try-it box's initial content. */
+ *  preset's own self-check. */
 export function presetById(id: string): PatternPreset | undefined {
   return PATTERN_PRESETS.find((p) => p.id === id);
 }
 
-/** Rows the preview already parsed, in the reading order of the table,
- *  so the try-it box and the real table can be compared side by side. */
-export function firstParsedExample(results: ParsedPreviewRow[]): string {
-  for (const r of results) {
-    const i = r.path.lastIndexOf('/');
-    const base = i >= 0 ? r.path.slice(i + 1) : r.path;
-    if (base !== '') return base;
-  }
-  return '';
+// ─── The local plan ────────────────────────────────────────────────────────
+//
+// 解析文件名 is the third dialog to stop asking the server what its own
+// rule does to the operator's files. Two reasons, and the second is the
+// one that matters at scale:
+//
+//   - The preview is a request on a rule the dialog invites you to change.
+//     Ten rows of answer is worth a keystroke; two thousand rows of it is
+//     a spinner.
+//   - The write is the part that needs the server, and it needs it once.
+//
+// So the table below is derived from each row's own filename, by the same
+// steps the Go parser runs in the same order (tryPattern mirrors
+// PortParseFilename). What it does NOT do is report anything about the
+// files' existing tags: a parse only fills in what the name carries, so
+// the per-file answer is the same everywhere and there is nothing to
+// check against the disk.
+
+/** One file's parse outcome, as the local plan sees it. */
+export interface ParsePlanRow {
+  /** Row id (== fullPath), so React keys agree with the store. */
+  id: string;
+  fileName: string;
+  status: 'ok' | 'ambiguous' | 'unparsable';
+  /** The tags this filename yields, in the dialog's field order. Empty
+   *  for an unparsable row, which writes nothing. */
+  tags: Array<[ParseTagField, string]>;
 }
 
-/** How a preview came out, as the counts the summary line shows.
+/** The files whose parse outcome the table shows: the first
+ *  PREVIEW_LIMIT of the selection.
  *
- *  Extracted from the component so the arithmetic is testable — the
- *  distinction that matters is `guessed` vs `skipped`. An ambiguous row
- *  DID parse; the parser split the name on a separator and guessed how
- *  many segments there were, and the worker WILL write it. Folding it
- *  into "unparsable" would tell the user fewer files were being written
- *  than actually are. */
-export interface PreviewTally {
+ *  Head, not sample: the operator is reading their own library in the
+ *  order they selected it. The write still covers every row — the note
+ *  under the table says so, and the server parses all of them again at
+ *  apply time regardless. */
+export function localParsePlan(
+  rows: ReadonlyArray<{ id: string; fullPath: string }>,
+  pattern: string,
+): ParsePlanRow[] {
+  return rows.slice(0, PREVIEW_LIMIT).map((r) => {
+    const fileName = r.fullPath.slice(r.fullPath.lastIndexOf('/') + 1);
+    const { results, status } = tryPattern(fileName, pattern);
+    return {
+      id: r.id,
+      fileName,
+      status,
+      // In field order, and only what was captured: a field the pattern
+      // did not ask for is left alone by the write, and rendering a
+      // blank for it would read as "this will be emptied", which is the
+      // one thing this dialog cannot do.
+      tags: PARSE_TAG_FIELDS.flatMap((f) => {
+        const hit = results.find((x) => x.field === f);
+        return hit === undefined ? [] : [[f, hit.value] as [ParseTagField, string]];
+      }),
+    };
+  });
+}
+
+/** How the plan came out, as the counts the summary line shows.
+ *
+ *  The distinction that matters is `guessed` vs `skipped`. An ambiguous
+ *  row DID parse; the parser split the name on a separator and guessed
+ *  how many segments there were, and the worker WILL write it. Folding
+ *  it into "unparsable" would tell the user fewer files were being
+ *  written than actually are. */
+export interface ParseTally {
   total: number;
   matched: number;
   guessed: number;
   skipped: number;
 }
 
-export function tallyPreview(results: ParsedPreviewRow[]): PreviewTally {
-  const matched = results.filter((r) => r.status === 'ok').length;
-  const guessed = results.filter((r) => r.status === 'ambiguous').length;
+export function tallyPlan(rows: ParsePlanRow[]): ParseTally {
+  const matched = rows.filter((r) => r.status === 'ok').length;
+  const guessed = rows.filter((r) => r.status === 'ambiguous').length;
   return {
-    total: results.length,
+    total: rows.length,
     matched,
     guessed,
-    skipped: results.length - matched - guessed,
+    skipped: rows.length - matched - guessed,
   };
 }

@@ -16,6 +16,21 @@
 //
 // Read-only, so the gateway answers it inline rather than round-tripping
 // through the worker queue the way the mutation does.
+//
+// # Who calls this now
+//
+// The app does not. 整理目录 renders its plan in the browser, from the
+// rows' cached tags (frontend/src/components/workstation/localPreview.ts),
+// because the preview was a request on a rule the dialog invites you to
+// change and the answer was only ever ten rows of it.
+//
+// That makes the code below the REFERENCE the local plan mirrors, and its
+// tests the thing that keeps the two honest. The mirror cannot check
+// whether a destination is occupied — that needs a stat of the target
+// path — so it is the one verdict it does not report, and the one the
+// operator is left to check. The rules below (sanitising, containment,
+// what counts as a collision) are the ones a change here has to keep
+// agreeing with.
 
 package tasks
 
