@@ -173,6 +173,24 @@ func FileList(c *gin.Context) {
 type MusicID3Request struct {
 	FilePath string `json:"file_path"`
 	FileName string `json:"file_name" binding:"required"`
+	// IncludeArtwork controls whether the embedded cover comes back inline
+	// as a base64 data URI. Defaults to true when omitted.
+	//
+	// Why this exists: the batch hydrate path calls this once per file, and
+	// a reported-real library returns 3–15 MB per response because the
+	// embedded art is a full-resolution scan. Paying that for 500 files to
+	// paint 32-pixel thumbnails moved over a gigabyte, and the frontend
+	// discarded every byte of it in stripHeavyFromRows before persisting.
+	//
+	// The batch path sends false and fetches covers separately via
+	// /api/album_cover/ for the rows actually on screen. The tag editor
+	// leaves it true, because there the cover IS the point — it renders
+	// large, and one file at a time.
+	//
+	// A *bool so "absent" is distinguishable from "explicitly false":
+	// existing clients that never send the field keep the old behaviour
+	// without a version bump.
+	IncludeArtwork *bool `json:"include_artwork"`
 }
 
 // MusicID3 handles POST /api/music_id3/ — reads embedded tags server-side.
@@ -219,6 +237,16 @@ func MusicID3(c *gin.Context) {
 	if err != nil {
 		Failure(c, err.Error())
 		return
+	}
+
+	// The reader has already paid for the artwork by this point — it is
+	// extracted during the tag parse, not lazily on access — so omitting it
+	// here saves the base64 encoding and the transfer, not the disk read.
+	// That is still the dominant cost at 3–15 MB per response, but worth
+	// being precise about: this flag does not make the read cheaper, it
+	// makes the RESPONSE cheaper.
+	if req.IncludeArtwork != nil && !*req.IncludeArtwork {
+		delete(tags, "artwork")
 	}
 
 	SuccessData(c, tags)

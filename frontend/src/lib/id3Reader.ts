@@ -31,12 +31,28 @@ export function splitFullPath(fullPath: string): { filePath: string; fileName: s
 
 /** Read embedded tags via POST /api/music_id3/.
  *  Throws on transport failure or result:false so caller's try/catch
- *  can toast; returns {} on empty success (lyric-only / missing tags). */
+ *  can toast; returns {} on empty success (lyric-only / missing tags).
+ *
+ *  `opts.includeArtwork` defaults to false HERE, unlike the raw
+ *  getMusicId3 client, because this is the batch-hydration path. An
+ *  embedded cover is a full-resolution scan: measured against real
+ *  libraries, a single music_id3 response runs 3–15 MB. The worklist
+ *  draws 32-pixel thumbnails, so asking for the artwork on 500 rows moved
+ *  gigabytes to render thumbnails that stripHeavyFromRows then discarded
+ *  before persisting. Covers for the table come from getAlbumCoverUrl,
+ *  one visible row at a time.
+ *
+ *  A caller that genuinely needs the bytes — the tag editor, which renders
+ *  the cover large — passes { includeArtwork: true } and gets the old
+ *  whole-record response. */
 export async function readTagsFromPath(
   fullPath: string,
+  opts: { includeArtwork?: boolean } = {},
 ): Promise<Partial<MusicTagInfo>> {
   const { filePath, fileName } = splitFullPath(fullPath);
-  const res = await getMusicId3(filePath, fileName);
+  const res = await getMusicId3(filePath, fileName, {
+    includeArtwork: opts.includeArtwork ?? false,
+  });
   if (!res || res.result === false) {
     throw new Error(res?.message || 'music_id3 failed');
   }

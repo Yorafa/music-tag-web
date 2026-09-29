@@ -39,6 +39,21 @@ describe('splitFullPath', () => {
 });
 
 describe('readTagsFromPath - music_id3 API', () => {
+  it('asks for the whole record when the caller opts in', async () => {
+    // The tag editor renders the cover large and wants the bytes; the
+    // default is off, so it has to say so.
+    mockedGetMusicId3.mockResolvedValueOnce({
+      result: true,
+      code: '200',
+      message: 'success',
+      data: { title: 'T', artwork: 'data:image/jpeg;base64,abc' },
+    });
+    await readTagsFromPath('a/b.mp3', { includeArtwork: true });
+    expect(mockedGetMusicId3).toHaveBeenCalledWith('a', 'b.mp3', {
+      includeArtwork: true,
+    });
+  });
+
   it('calls getMusicId3 with split path and maps tags', async () => {
     mockedGetMusicId3.mockResolvedValueOnce({
       result: true,
@@ -57,9 +72,14 @@ describe('readTagsFromPath - music_id3 API', () => {
 
     const result = await readTagsFromPath('17/XXXTENTACION - Jocelyn Flores.ogg');
 
+    // includeArtwork:false is the DEFAULT here and is asserted explicitly,
+    // because it is the whole reason this path is fast: the batch hydrate
+    // runs over the entire queue, and an inline cover is 3–15 MB per
+    // response. See readTagsFromPath's doc comment.
     expect(mockedGetMusicId3).toHaveBeenCalledWith(
       '17',
       'XXXTENTACION - Jocelyn Flores.ogg',
+      { includeArtwork: false },
     );
     expect(result.title).toBe('Jocelyn Flores');
     expect(result.artist).toBe('XXXTENTACION');

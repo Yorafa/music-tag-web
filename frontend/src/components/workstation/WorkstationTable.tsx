@@ -21,6 +21,7 @@ import { useWorklistStore, rowMatchesFilter } from '@/store/useWorklistStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { duplicateBadgeSpec } from '@/components/workstation/duplicateBadge';
 import { flattenTableItems } from '@/components/workstation/tableItems';
+import { RowCover } from '@/components/workstation/RowCover';
 import { resolveCoverSrc, COVER_PLACEHOLDER_GRADIENTS } from '@/utils/cover';
 import { buildMediaUrl } from '@/lib/mediaUrl';
 import { cn } from '@/lib/utils';
@@ -150,7 +151,6 @@ const Row = memo(function Row({
   onToggle,
   onRemove,
 }: RowProps) {
-  const coverSrc = resolveCoverSrc(row.musicInfo);
   const gradIdx = gradientIdx(row.fullPath);
 
   return (
@@ -192,16 +192,14 @@ const Row = memo(function Row({
       {/* Title & Cover Thumbnail */}
       <div className="col-span-4 lg:col-span-4 flex items-center gap-2.5 min-w-0">
         <div className="relative w-8 h-8 rounded shrink-0 overflow-hidden bg-muted group/cover ring-1 ring-border/40">
-          {coverSrc ? (
-            <img src={coverSrc} alt="" className="w-full h-full object-cover" />
-          ) : (
-            <div
-              className="w-full h-full flex items-center justify-center text-white text-[10px] font-bold"
-              style={{ background: COVER_PLACEHOLDER_GRADIENTS[gradIdx] }}
-            >
-              {(row.musicInfo?.title || row.fileName).charAt(0)}
-            </div>
-          )}
+          {/* Cover bytes come from /api/album_cover/ per visible row, not
+              from the batch hydrate. See RowCover for why. */}
+          <RowCover
+            fullPath={row.fullPath}
+            fileName={row.fileName}
+            fallbackTitle={row.musicInfo?.title}
+            gradient={COVER_PLACEHOLDER_GRADIENTS[gradIdx]}
+          />
           <div className="absolute inset-0 bg-black/40 opacity-100 sm:opacity-0 sm:group-hover/cover:opacity-100 flex items-center justify-center transition-opacity">
             <PlayButton
               track={{
@@ -209,7 +207,13 @@ const Row = memo(function Row({
                 url: buildMediaUrl(row.fullPath),
                 title: row.musicInfo?.title || row.fileName,
                 artist: row.musicInfo?.artist || '',
-                cover: coverSrc,
+                // The player may want the cover for its own UI, and it plays
+                // the whole track rather than a thumbnail. Reuse the
+                // hydrated inline artwork when the editor put it there, else
+                // leave it undefined — the player's own fallback is
+                // correct, and fetching a 3–15 MB scan for it would undo
+                // the entire point of the light batch read.
+                cover: resolveCoverSrc(row.musicInfo),
                 lyrics: row.musicInfo?.lyrics || undefined,
                 source: {
                   kind: 'local',

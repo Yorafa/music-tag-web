@@ -1,28 +1,31 @@
-// The regression tests for 「添加目录 → 点确认 → 界面没反应」.
+// The regression tests for 「添加目录」 at scale.
 //
-// The symptom was reported as "large directories do nothing when confirmed".
-// It was never a failed request — the work completed, but the main thread
-// was welded shut while it did, and the user saw a dead button. Two
-// independent causes, both measured here:
+// What this file used to cover, and where those tests went:
 //
-//   1. O(N²) persistence. The post-enqueue tag hydrator called the store's
-//      per-row writer once per file, and that writer re-serializes and
-//      re-writes the ENTIRE queue to localStorage on every call. At 4000
-//      songs that measured 4001 whole-table writes totalling 2.6 GB, with
-//      the main thread blocked ~8.4 s.
+//   - "expansion is serial, N requests for N directories" and the ordering
+//     guarantees that came with the client-side walk. Those are now
+//     IMPOSSIBLE to regress in the client: expansion is one
+//     /api/file_list_recursive/ call that walks the tree server-side. The
+//     invariant that replaced them lives in Go, in
+//     internal/gateway/handler/file_recursive_test.go — including the
+//     arbitrary-depth case and the traversal guard.
 //
-//   2. Serial expansion. expandDirsToAudioFiles did one blocking HTTP round
-//      trip per directory, depth-first. A 200-album selection is 201
-//      sequential calls (~10 s at 50 ms RTT) with no progress indicator.
-//
-// Both are silent by construction: no exception, no failed request, no
-// console output. The only way to catch a regression is to count the
-// operations, which is what these tests do.
+// What remains here is what is still the frontend's responsibility:
+//   1. The post-enqueue persistence must stay linear in queue size. The
+//      per-row writer re-serializes the WHOLE table on every call, so
+//      fanning N files through it is O(N²) — measured at 4000 songs as
+//      4001 whole-table writes totalling 2.6 GB, blocking the main thread
+//      ~8.4 s. That is what 「点了确认没反应」 actually was.
+//   2. A refused persist must be reported, not swallowed.
+//   3. Hydration must actually deliver every row's tags — chunking the
+//      writes must not cost correctness.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@/api/client', () => ({
   getFileList: vi.fn(),
+  fileListRecursive: vi.fn(),
+  getAlbumCoverUrl: vi.fn(() => '/api/album_cover/'),
 }));
 vi.mock('@/lib/id3Reader', () => ({
   readTagsFromPath: vi.fn(async () => ({
@@ -33,49 +36,22 @@ vi.mock('@/lib/id3Reader', () => ({
   })),
 }));
 
-import { getFileList } from '@/api/client';
+import { fileListRecursive } from '@/api/client';
 import { useWorklistStore } from '@/store/useWorklistStore';
-import { expandDirsToAudioFiles } from '@/utils/expandDirs';
 
-const getFileListMock = vi.mocked(getFileList);
+const fileListRecursiveMock = vi.mocked(fileListRecursive);
 
-type Node = {
-  id: number;
-  name: string;
-  icon: string;
-  state: string;
-  children?: Node[];
-};
-
-/** Serve `albums` subdirectories, each holding `perAlbum` audio files. */
-function serveTree(albums: number, perAlbum: number, rttMs = 0): { calls: string[] } {
-  const calls: string[] = [];
-  getFileListMock.mockImplementation(async (p: string) => {
-    calls.push(p);
-    if (rttMs) await new Promise((r) => setTimeout(r, rttMs));
-    const parts = p.split('/').filter(Boolean);
-    const children: Node[] =
-      parts.length <= 1
-        ? Array.from({ length: albums }, (_, i) => ({
-            id: i,
-            name: `Album ${i}`,
-            icon: 'icon-folder',
-            state: 'null',
-          }))
-        : Array.from({ length: perAlbum }, (_, i) => ({
-            id: i,
-            name: `track${String(i).padStart(2, '0')}.flac`,
-            icon: 'icon-script-files',
-            state: 'null',
-          }));
-    return {
-      result: true,
-      code: '200',
-      message: 'ok',
-      data: [{ id: 0, name: '', icon: 'icon-folder', state: 'null', children }],
-    };
+function serveFiles(count: number, source = 'Music') {
+  fileListRecursiveMock.mockResolvedValue({
+    files: Array.from({ length: count }, (_, i) => ({
+      path: `${source}/Album ${i % 40}/track${i}.flac`,
+      name: `track${i}.flac`,
+      size: 1_000_000,
+      source,
+    })),
+    truncated: false,
+    dirsVisited: 40,
   });
-  return { calls };
 }
 
 /** Count localStorage writes and their total size, so an O(N²) regression
@@ -101,22 +77,20 @@ function watchStorage() {
 beforeEach(() => {
   localStorage.clear();
   useWorklistStore.setState({ rows: [], selectedIds: [] });
-  getFileListMock.mockReset();
+  fileListRecursiveMock.mockReset();
 });
 
 // ─── 1. the quadratic persist ──────────────────────────────────────────
 describe('enqueueDirs: persistence cost stays linear', () => {
   it('does not re-persist the whole queue once per hydrated file', async () => {
-    const albums = 100;
-    const perAlbum = 20;
-    const songs = albums * perAlbum;
-    serveTree(albums, perAlbum);
+    const songs = 2000;
+    serveFiles(songs);
 
     const spy = watchStorage();
     try {
       await useWorklistStore.getState().enqueueDirs(['Music']);
       // Drain the fire-and-forget hydrator.
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 100));
 
       expect(useWorklistStore.getState().rows).toHaveLength(songs);
 
@@ -140,300 +114,19 @@ describe('enqueueDirs: persistence cost stays linear', () => {
   it('still applies every hydrated tag to its row', async () => {
     // The amortization must not cost correctness: a chunked writer that
     // dropped the tail would leave rows showing bare filenames forever.
-    serveTree(5, 4);
+    serveFiles(20);
     await useWorklistStore.getState().enqueueDirs(['Music']);
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 100));
     const rows = useWorklistStore.getState().rows;
     expect(rows).toHaveLength(20);
     expect(rows.every((r) => r.musicInfo?.title === 'T')).toBe(true);
   });
 });
 
-// ─── 2. the serial expansion ───────────────────────────────────────────
-describe('expandDirsToAudioFiles: bounded concurrency, deterministic order', () => {
-  it('keeps more than one listing in flight', async () => {
-    let inFlight = 0;
-    let peak = 0;
-    const { calls } = serveTree(0, 0);
-    void calls;
-    getFileListMock.mockImplementation(async (p: string) => {
-      const parts = p.split('/').filter(Boolean);
-      if (parts.length <= 1) {
-        return {
-          result: true,
-          code: '200',
-          message: 'ok',
-          data: [
-            {
-              id: 0,
-              name: '',
-              icon: 'icon-folder',
-              state: 'null',
-              children: Array.from({ length: 40 }, (_, i) => ({
-                id: i,
-                name: `Album ${String(i).padStart(2, '0')}`,
-                icon: 'icon-folder',
-                state: 'null',
-              })),
-            },
-          ],
-        };
-      }
-      inFlight++;
-      peak = Math.max(peak, inFlight);
-      // Yield so overlapping awaits are actually observable.
-      await new Promise((r) => setTimeout(r, 2));
-      inFlight--;
-      return {
-        result: true,
-        code: '200',
-        message: 'ok',
-        data: [
-          {
-            id: 0,
-            name: '',
-            icon: 'icon-folder',
-            state: 'null',
-            children: [
-              {
-                id: 0,
-                name: 'track.flac',
-                icon: 'icon-script-files',
-                state: 'null',
-              },
-            ],
-          },
-        ],
-      };
-    });
-
-    await expandDirsToAudioFiles(['Music']);
-    expect(peak).toBeGreaterThan(1);
-  });
-
-  it('never exceeds the concurrency bound', async () => {
-    let inFlight = 0;
-    let peak = 0;
-    getFileListMock.mockImplementation(async (p: string) => {
-      const parts = p.split('/').filter(Boolean);
-      if (parts.length <= 1) {
-        return {
-          result: true,
-          code: '200',
-          message: 'ok',
-          data: [
-            {
-              id: 0,
-              name: '',
-              icon: 'icon-folder',
-              state: 'null',
-              children: Array.from({ length: 60 }, (_, i) => ({
-                id: i,
-                name: `Album ${i}`,
-                icon: 'icon-folder',
-                state: 'null',
-              })),
-            },
-          ],
-        };
-      }
-      inFlight++;
-      peak = Math.max(peak, inFlight);
-      await new Promise((r) => setTimeout(r, 2));
-      inFlight--;
-      return { result: true, code: '200', message: 'ok', data: [] };
-    });
-
-    await expandDirsToAudioFiles(['Music']);
-    // The bound exists so adding a directory cannot turn into an I/O storm
-    // on the user's music volume. Unbounded fan-out would pass the test
-    // above trivially.
-    expect(peak).toBeLessThanOrEqual(6);
-  });
-
-  it('emits results in directory order, not completion order', async () => {
-    // Concurrency must not make the worklist's row order depend on which
-    // HTTP call happened to finish first — the same selection has to
-    // produce the same rows every time.
-    getFileListMock.mockImplementation(async (p: string) => {
-      const parts = p.split('/').filter(Boolean);
-      if (parts.length <= 1) {
-        return {
-          result: true,
-          code: '200',
-          message: 'ok',
-          data: [
-            {
-              id: 0,
-              name: '',
-              icon: 'icon-folder',
-              state: 'null',
-              children: ['a', 'b', 'c', 'd'].map((n, i) => ({
-                id: i,
-                name: n,
-                icon: 'icon-folder',
-                state: 'null',
-              })),
-            },
-          ],
-        };
-      }
-      // Reverse the delay by name so completion order is the REVERSE of
-      // directory order. Only index-ordered results survive this.
-      const delay = { a: 20, b: 14, c: 8, d: 2 }[parts[1]] ?? 0;
-      await new Promise((r) => setTimeout(r, delay));
-      return {
-        result: true,
-        code: '200',
-        message: 'ok',
-        data: [
-          {
-            id: 0,
-            name: '',
-            icon: 'icon-folder',
-            state: 'null',
-            children: [
-              {
-                id: 0,
-                name: `${parts[1]}.flac`,
-                icon: 'icon-script-files',
-                state: 'null',
-              },
-            ],
-          },
-        ],
-      };
-    });
-
-    const out = await expandDirsToAudioFiles(['Music']);
-    expect(out.map((e) => e.fullPath)).toEqual([
-      'Music/a/a.flac',
-      'Music/b/b.flac',
-      'Music/c/c.flac',
-      'Music/d/d.flac',
-    ]);
-  });
-
-  it('visits subdirectories one level at a time', async () => {
-    // Level order is the documented contract: a level's files are emitted
-    // before its grandchildren's. Depth-first used to interleave them.
-    getFileListMock.mockImplementation(async (p: string) => {
-      const parts = p.split('/').filter(Boolean);
-      if (parts.length === 1) {
-        return {
-          result: true,
-          code: '200',
-          message: 'ok',
-          data: [
-            {
-              id: 0,
-              name: '',
-              icon: 'icon-folder',
-              state: 'null',
-              children: [
-                {
-                  id: 0,
-                  name: 'deep.flac',
-                  icon: 'icon-script-files',
-                  state: 'null',
-                },
-                {
-                  id: 1,
-                  name: 'sub',
-                  icon: 'icon-folder',
-                  state: 'null',
-                },
-              ],
-            },
-          ],
-        };
-      }
-      return {
-        result: true,
-        code: '200',
-        message: 'ok',
-        data: [
-          {
-            id: 0,
-            name: '',
-            icon: 'icon-folder',
-            state: 'null',
-            children: [
-              {
-                id: 0,
-                name: 'deeper.flac',
-                icon: 'icon-script-files',
-                state: 'null',
-              },
-            ],
-          },
-        ],
-      };
-    });
-
-    const out = await expandDirsToAudioFiles(['Music']);
-    expect(out.map((e) => e.fullPath)).toEqual([
-      'Music/deep.flac',
-      'Music/sub/deeper.flac',
-    ]);
-  });
-
-  it('skips an unreadable directory without losing its siblings', async () => {
-    getFileListMock.mockImplementation(async (p: string) => {
-      const parts = p.split('/').filter(Boolean);
-      if (parts.length === 1) {
-        return {
-          result: true,
-          code: '200',
-          message: 'ok',
-          data: [
-            {
-              id: 0,
-              name: '',
-              icon: 'icon-folder',
-              state: 'null',
-              children: [
-                { id: 0, name: 'ok', icon: 'icon-folder', state: 'null' },
-                { id: 1, name: 'bad', icon: 'icon-folder', state: 'null' },
-              ],
-            },
-          ],
-        };
-      }
-      if (parts[1] === 'bad') throw new Error('500');
-      return {
-        result: true,
-        code: '200',
-        message: 'ok',
-        data: [
-          {
-            id: 0,
-            name: '',
-            icon: 'icon-folder',
-            state: 'null',
-            children: [
-              {
-                id: 0,
-                name: `${parts[1]}.flac`,
-                icon: 'icon-script-files',
-                state: 'null',
-              },
-            ],
-          },
-        ],
-      };
-    });
-
-    const out = await expandDirsToAudioFiles(['Music']);
-    // 'bad' throws and contributes nothing; its sibling 'ok' still lands.
-    expect(out.map((e) => e.fullPath)).toEqual(['Music/ok/ok.flac']);
-  });
-});
-
-// ─── 3. the silent quota failure ───────────────────────────────────────
+// ─── 2. the silent quota failure ───────────────────────────────────────
 describe('enqueueDirs: a refused persist is reported, not swallowed', () => {
   it('returns persisted=false with a quota reason when the write is refused', async () => {
-    serveTree(2, 2);
+    serveFiles(4);
     const real = window.localStorage.setItem.bind(window.localStorage);
     window.localStorage.setItem = (() => {
       const err = new Error('quota');
@@ -456,7 +149,7 @@ describe('enqueueDirs: a refused persist is reported, not swallowed', () => {
   });
 
   it('distinguishes "storage unavailable" from "too big"', async () => {
-    serveTree(2, 2);
+    serveFiles(4);
     const real = window.localStorage.setItem.bind(window.localStorage);
     window.localStorage.setItem = (() => {
       throw new Error('SecurityError: storage is disabled');
@@ -474,7 +167,7 @@ describe('enqueueDirs: a refused persist is reported, not swallowed', () => {
   });
 
   it('reports success when the write lands', async () => {
-    serveTree(2, 2);
+    serveFiles(4);
     const result = await useWorklistStore.getState().enqueueDirs(['Music']);
     expect(result.persisted).toBe(true);
     expect(result.persistError).toBeNull();
@@ -489,5 +182,38 @@ describe('enqueueDirs: a refused persist is reported, not swallowed', () => {
       persisted: true,
       persistError: null,
     });
+    // And no HTTP call — an empty selection is answered locally.
+    expect(fileListRecursiveMock).not.toHaveBeenCalled();
+  });
+});
+
+// ─── 3. expansion is one request, whatever the tree looks like ─────────
+describe('enqueueDirs: expansion asks the server once', () => {
+  it('issues exactly one call regardless of how many tracks come back', async () => {
+    // The property the client-side walk could not have: 500 tracks behind
+    // 2500 directories used to be 2500 round trips, and no concurrency
+    // setting fixes that, because BFS serialises on depth. The server
+    // walks the subtree in one pass, so the client asks once.
+    serveFiles(500);
+    await useWorklistStore.getState().enqueueDirs(['Music']);
+    expect(fileListRecursiveMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the whole selection through in that one call', async () => {
+    serveFiles(3);
+    await useWorklistStore.getState().enqueueDirs(['A', 'B']);
+    expect(fileListRecursiveMock).toHaveBeenCalledTimes(1);
+    expect(fileListRecursiveMock.mock.calls[0][0]).toEqual(['A', 'B']);
+  });
+
+  it('turns each returned path into a queued row', async () => {
+    serveFiles(3);
+    const result = await useWorklistStore.getState().enqueueDirs(['Music']);
+    const rows = useWorklistStore.getState().rows;
+    expect(result.files).toBe(3);
+    expect(rows.map((r) => r.id)).toEqual(
+      rows.map((r) => `Music/Album ${rows.indexOf(r) % 40}/track${rows.indexOf(r)}.flac`),
+    );
+    expect(rows.every((r) => r.status === 'pending')).toBe(true);
   });
 });

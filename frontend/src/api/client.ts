@@ -47,12 +47,98 @@ export async function getFileList(filePath: string, sortedFields: string[] = [])
   return data;
 }
 
+/** One audio file found by POST /api/file_list_recursive/. */
+export interface RecursiveFileItem {
+  /** MUSIC_DIR-relative, including the filename — feeds straight back into
+   *  music_id3 / album_cover / delete_files without further reshaping. */
+  path: string;
+  name: string;
+  size: number;
+  /** Which entry of the request's `paths` this came from. The worklist
+   *  dedupes per source directory and cannot verify a grouping the server
+   *  invented, so it is carried rather than derived. */
+  source: string;
+}
+
+/** POST /api/file_list_recursive/ — expand whole subtrees in ONE request.
+ *
+ *  Replaces expanding a selection client-side, which issued one
+ *  /api/file_list/ per directory and had to wait for each LEVEL of the tree
+ *  to come back before starting the next. That made the request count scale
+ *  with the directory count rather than the track count (a 500-track library
+ *  laid out as 歌手/专辑/碟片/ is ~2500 directories) and made latency scale
+ *  with depth.
+ *
+ *  The walk is server-side precisely because library layout is DATA: this
+ *  code cannot know how the operator's music is organised, and must not have
+ *  to.
+ *
+ *  An empty `paths` means the library root. A bare audio FILE in `paths` is
+ *  accepted and returned as itself, so the caller can pass a picker's mixed
+ *  selection straight through.
+ *
+ *  `truncated` is the one response field that must not be ignored: it means
+ *  the server hit a ceiling (client `limit`, or its own MaxRecursiveFiles /
+ *  MaxRecursiveDirs) and the list is incomplete. */
+export async function fileListRecursive(
+  paths: string[],
+  limit?: number,
+): Promise<{ files: RecursiveFileItem[]; truncated: boolean; dirsVisited: number }> {
+  const { data } = await api.post('file_list_recursive/', {
+    paths,
+    ...(limit && limit > 0 ? { limit } : {}),
+  });
+  const payload = unwrapEnvelope<{
+    files?: RecursiveFileItem[];
+    truncated?: boolean;
+    dirs_visited?: number;
+  }>(data, 'file_list_recursive');
+  return {
+    files: payload.files ?? [],
+    truncated: payload.truncated === true,
+    dirsVisited: payload.dirs_visited ?? 0,
+  };
+}
+
 /** POST /api/music_id3/ — server-side embedded-tag read (dhowden/tag).
  *  filePath is the parent dir relative to MUSIC_DIR ('' = root);
- *  fileName is the audio basenamed under that dir. */
-export async function getMusicId3(filePath: string, fileName: string) {
-  const { data } = await api.post('music_id3/', { file_path: filePath, file_name: fileName });
+ *  fileName is the audio basenamed under that dir.
+ *
+ *  `includeArtwork` defaults to true on the server, which is right for the
+ *  tag editor (it renders the cover large). The worklist's batch hydrate
+ *  passes false: an embedded cover is a full-resolution scan, measured at
+ *  3–15 MB per response, and the table draws 32-pixel thumbnails — so
+ *  fetching it for every row transferred gigabytes to render thumbnails the
+ *  client then discarded before persisting. Covers for the worklist come
+ *  from `getAlbumCoverUrl` instead, one row at a time. */
+export async function getMusicId3(
+  filePath: string,
+  fileName: string,
+  opts: { includeArtwork?: boolean } = {},
+) {
+  const { data } = await api.post('music_id3/', {
+    file_path: filePath,
+    file_name: fileName,
+    ...(opts.includeArtwork === false ? { include_artwork: false } : {}),
+  });
   return data;
+}
+
+/** URL for a row's embedded cover. Safe to assign to `<img src>` directly —
+ *  it goes through the same axios-less path as `/media`, relying on the
+ *  cookie/Authorization the browser already attaches for same-origin
+ *  requests, and the handler answers 404 for a file with no cover so the
+ *  caller can fall back to its gradient.
+ *
+ *  Unlike the rest of this module this returns a STRING rather than
+ *  fetching: it is consumed by an <img>, which cannot await. The JWT lives
+ *  in localStorage (useAuthStore) and is attached by the axios interceptor,
+ *  which an <img> does not go through — so this endpoint relies on the
+ *  AUTHORIZATION cookie fallback the gateway already accepts
+ *  (middleware/auth.go::JWTAuth). */
+export function getAlbumCoverUrl(filePath: string, fileName: string): string {
+  const q = new URLSearchParams({ file_path: filePath, file_name: fileName });
+  return `/api/album_cover/?${q.toString()}`;
 }
 
 export async function updateId3(musicId3Info: Array<Record<string, unknown>>) {

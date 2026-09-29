@@ -1,16 +1,27 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useWorklistStore } from '@/store/useWorklistStore';
 
+// Two different endpoints, deliberately.
+//
+//   getFileList        — single-level listing. Still used by `reconcile`,
+//                        which checks one specific parent directory per
+//                        queued row and has no business walking a subtree.
+//   fileListRecursive  — whole-subtree expansion, what `enqueueDirs` now
+//                        calls. Expanding used to be a client-side walk over
+//                        getFileList; it is one server call now.
 vi.mock('@/api/client', () => ({
   getFileList: vi.fn(async () => ({ result: true, code: '200', data: [], message: 'success' })),
+  fileListRecursive: vi.fn(async () => ({ files: [], truncated: false, dirsVisited: 0 })),
+  getAlbumCoverUrl: vi.fn(() => '/api/album_cover/'),
 }));
 
 vi.mock('@/lib/id3Reader', () => ({
   readTagsFromPath: vi.fn(async () => ({})),
 }));
 
-import { getFileList } from '@/api/client';
+import { getFileList, fileListRecursive } from '@/api/client';
 const getFileListMock = getFileList as unknown as ReturnType<typeof vi.fn>;
+const fileListRecursiveMock = fileListRecursive as unknown as ReturnType<typeof vi.fn>;
 
 type StubFileNode = {
   id: number;
@@ -33,9 +44,27 @@ function listResp(children: StubFileNode[]) {
   };
 }
 
+/** The recursive endpoint's reply for one requested directory containing
+ *  the named files. Shorthand for the mock above so the enqueue tests read
+ *  as "this directory has these tracks" rather than as envelope plumbing. */
+function recursiveResp(source: string, names: string[]) {
+  fileListRecursiveMock.mockResolvedValueOnce({
+    files: names.map((n) => ({
+      path: `${source}/${n}`,
+      name: n,
+      size: 1,
+      source,
+    })),
+    truncated: false,
+    dirsVisited: 1,
+  });
+}
+
 beforeEach(() => {
   getFileListMock.mockReset();
   getFileListMock.mockResolvedValue({ result: true, code: '200', data: [], message: 'success' });
+  fileListRecursiveMock.mockReset();
+  fileListRecursiveMock.mockResolvedValue({ files: [], truncated: false, dirsVisited: 0 });
   vi.spyOn(console, 'debug').mockImplementation(() => {});
   localStorage.clear();
   // Reset EVERY persisted-or-session field so successive tests don't
@@ -54,7 +83,7 @@ beforeEach(() => {
 
 describe('useWorklistStore persistence', () => {
   it('enqueueDirs persists rows to localStorage', async () => {
-    getFileListMock.mockResolvedValueOnce(listResp([fileNode('p.mp3', 1)]));
+    recursiveResp('scrape-me', ['p.mp3']);
     await useWorklistStore.getState().enqueueDirs(['scrape-me']);
 
     const stored = JSON.parse(localStorage.getItem('worklist.v1') || 'null');
@@ -65,7 +94,7 @@ describe('useWorklistStore persistence', () => {
   });
 
   it('setStatus persists scraped status', async () => {
-    getFileListMock.mockResolvedValueOnce(listResp([fileNode('p.mp3', 1)]));
+    recursiveResp('scrape-me', ['p.mp3']);
     await useWorklistStore.getState().enqueueDirs(['scrape-me']);
 
     useWorklistStore.getState().setStatus('scrape-me/p.mp3', 'scraped');
@@ -75,7 +104,7 @@ describe('useWorklistStore persistence', () => {
   });
 
   it('setMusicInfo persists lightweight tags and strips data-URI artwork', async () => {
-    getFileListMock.mockResolvedValueOnce(listResp([fileNode('p.mp3', 1)]));
+    recursiveResp('scrape-me', ['p.mp3']);
     await useWorklistStore.getState().enqueueDirs(['scrape-me']);
 
     useWorklistStore.getState().setMusicInfo('scrape-me/p.mp3', {
@@ -114,7 +143,13 @@ describe('useWorklistStore persistence', () => {
     expect(fresh.getState().rows[0].musicInfo?.title).toBe('T');
   });
 
-  it('boot re-fetches when lightweight tags lack a cover', async () => {
+  it('boot does NOT re-read a row that already has text tags', async () => {
+    // The counterpart to the refetch rule: a persisted row carrying a title
+    // is populated and must survive a reload untouched. This used to be the
+    // opposite — the boot hydrate re-read any row without a COVER, which was
+    // correct while tags came back with artwork inline and harmless after
+    // the batch read stopped asking for it. Left as-is, every row would have
+    // been stale on every page load, re-reading the whole library each time.
     localStorage.setItem(
       'worklist.v1',
       JSON.stringify({
@@ -132,27 +167,28 @@ describe('useWorklistStore persistence', () => {
 
     const { readTagsFromPath } = await import('@/lib/id3Reader');
     const readMock = readTagsFromPath as unknown as ReturnType<typeof vi.fn>;
-    readMock.mockResolvedValueOnce({
-      title: 'Stripped',
-      artist: 'OnlyText',
-      artwork: 'data:image/jpeg;base64,coverbytes',
-    });
+    readMock.mockResolvedValue({});
+
+    // Drain any fire-and-forget hydrate still in flight from an earlier
+    // test's enqueueDirs BEFORE resetting the call log, or those late
+    // arrivals get counted against this test and it fails on work it did
+    // not do. Two macrotask ticks is what the hydrator needs to settle at
+    // the default concurrency.
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    readMock.mockClear();
 
     vi.resetModules();
     const { useWorklistStore: fresh } = await import('@/store/useWorklistStore');
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(readMock).toHaveBeenCalled();
-    expect(fresh.getState().rows[0].musicInfo?.artwork).toBe(
-      'data:image/jpeg;base64,coverbytes',
-    );
+    expect(readMock).not.toHaveBeenCalled();
+    expect(fresh.getState().rows[0].musicInfo?.title).toBe('Stripped');
   });
 
   it('remove drops rows and re-persists', async () => {
-    getFileListMock.mockResolvedValueOnce(
-      listResp([fileNode('a.mp3', 1), fileNode('b.mp3', 2)]),
-    );
+    recursiveResp('d', ['a.mp3', 'b.mp3']);
     await useWorklistStore.getState().enqueueDirs(['d']);
     useWorklistStore.getState().remove(['d/a.mp3']);
 
@@ -172,9 +208,7 @@ describe('useWorklistStore persistence', () => {
 describe('useWorklistStore reconcile', () => {
   it('prunes rows whose file is gone but keeps ones still listed', async () => {
     // Seed two rows in dir 'd': a.mp3 and b.mp3.
-    getFileListMock.mockResolvedValueOnce(
-      listResp([fileNode('a.mp3', 1), fileNode('b.mp3', 2)]),
-    );
+    recursiveResp('d', ['a.mp3', 'b.mp3']);
     await useWorklistStore.getState().enqueueDirs(['d']);
 
     // On reconcile, dir 'd' now only lists b.mp3 — a.mp3 vanished.
@@ -190,9 +224,7 @@ describe('useWorklistStore reconcile', () => {
   });
 
   it('prunes every row under a dir the user emptied (success + children:[])', async () => {
-    getFileListMock.mockResolvedValueOnce(
-      listResp([fileNode('a.mp3', 1), fileNode('b.mp3', 2)]),
-    );
+    recursiveResp('d', ['a.mp3', 'b.mp3']);
     await useWorklistStore.getState().enqueueDirs(['d']);
 
     // The emptied-dir signal the backend distinguishes from missing:
@@ -206,9 +238,7 @@ describe('useWorklistStore reconcile', () => {
   });
 
   it('leaves rows untouched when the dir listing throws (transient guard)', async () => {
-    getFileListMock.mockResolvedValueOnce(
-      listResp([fileNode('a.mp3', 1), fileNode('b.mp3', 2)]),
-    );
+    recursiveResp('d', ['a.mp3', 'b.mp3']);
     await useWorklistStore.getState().enqueueDirs(['d']);
 
     // A 500/offline must NEVER wipe the queue.
@@ -221,7 +251,7 @@ describe('useWorklistStore reconcile', () => {
   });
 
   it('does not prune against a malformed non-throwing response', async () => {
-    getFileListMock.mockResolvedValueOnce(listResp([fileNode('a.mp3', 1)]));
+    recursiveResp('d', ['a.mp3']);
     await useWorklistStore.getState().enqueueDirs(['d']);
 
     // result:false — we can't trust the listing, so no pruning.
@@ -234,9 +264,7 @@ describe('useWorklistStore reconcile', () => {
   });
 
   it('drops pruned rows from selectedIds too', async () => {
-    getFileListMock.mockResolvedValueOnce(
-      listResp([fileNode('a.mp3', 1), fileNode('b.mp3', 2)]),
-    );
+    recursiveResp('d', ['a.mp3', 'b.mp3']);
     await useWorklistStore.getState().enqueueDirs(['d']);
     useWorklistStore.setState({ selectedIds: ['d/a.mp3', 'd/b.mp3'] });
 
@@ -249,11 +277,9 @@ describe('useWorklistStore reconcile', () => {
   it('groups rows by parent dir so each dir is listed exactly once', async () => {
     // Two rows in 'd1', one in 'd2' — reconcile should call getFileList
     // twice, not three times.
-    getFileListMock.mockResolvedValueOnce(
-      listResp([fileNode('a.mp3', 1), fileNode('b.mp3', 2)]),
-    );
+    recursiveResp('d1', ['a.mp3', 'b.mp3']);
     await useWorklistStore.getState().enqueueDirs(['d1']);
-    getFileListMock.mockResolvedValueOnce(listResp([fileNode('c.mp3', 3)]));
+    recursiveResp('d2', ['c.mp3']);
     await useWorklistStore.getState().enqueueDirs(['d2']);
 
     getFileListMock.mockClear();

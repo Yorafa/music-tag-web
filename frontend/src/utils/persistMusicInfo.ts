@@ -1,15 +1,19 @@
 // Strip heavy fields before writing musicInfo into localStorage.
 //
-// music_id3 responses often embed cover art as multi-MB data-URIs on
+// music_id3 responses can embed cover art as multi-MB data-URIs on
 // `artwork` / `album_img`. Persisting those verbatim exhausts the
-// ~5MB localStorage quota after a handful of tracks and silently
-// drops the entire library/worklist write (persist helpers swallow
-// QuotaExceededError). Keep title/artist/album etc.; covers re-fetch
-// via /api/music_id3/ on open or boot hydrate when needsMusicInfoRefetch
-// reports a missing usable cover.
+// ~5MB localStorage quota after a handful of tracks. Keep
+// title/artist/album etc.
+//
+// Covers are not merely "too big to store" any more — the batch hydrate
+// path does not request them at all (see id3Reader), because a full-
+// resolution scan runs 3–15 MB per response and the worklist draws
+// 32-pixel thumbnails. The table fetches a cover per visible row from
+// /api/album_cover/ and lets the browser cache it. So this is now a
+// backstop for the tag editor's whole-record responses rather than the
+// main defence.
 
 import type { MusicTagInfo } from '@/types';
-import { resolveCoverSrc } from '@/utils/cover';
 
 const HEAVY_KEYS = new Set(['artwork', 'album_img']);
 
@@ -52,16 +56,36 @@ export function stripHeavyFromRows<T extends { musicInfo?: Partial<MusicTagInfo>
 
 /** True when boot hydrate / openEditor should re-call music_id3.
  *
- *  - empty / missing cache → fetch
- *  - lightweight persisted cache (title/artist kept, data-URI cover
- *    stripped) → fetch so list thumbs recover after reload
+ *  Decided on the TEXT tags alone: a row whose cache has a title or artist
+ *  is populated and must not be re-read.
  *
- *  Files that truly have no embedded cover will re-fetch once per page
- *  load; concurrency is bounded in hydrateTagsBatched. */
+ *  This used to also require a cover ("no cover → refetch, so list thumbs
+ *  recover after reload"). That is now WRONG and was a real performance bug
+ *  waiting to happen: the batch hydrate path asks the server for tags
+ *  WITHOUT artwork (an embedded cover is 3–15 MB per response — see
+ *  id3Reader), so NO row ever comes back with one. Keying the refetch on
+ *  the cover therefore marked every row stale, and every page load would
+ *  re-read the entire library.
+ *
+ *  Nothing is lost by dropping the cover condition. Cover bytes are no
+ *  longer part of this cache at all — they are not persisted (stripHeavy
+ *  drops them) and the table fetches them per visible row from
+ *  /api/album_cover/, which the browser caches with its own Cache-Control
+ *  and ETag. So a re-read here would re-fetch data that was never stored
+ *  and would not fix a thumbnail. */
 export function needsMusicInfoRefetch(
   info: Partial<MusicTagInfo> | undefined | null,
 ): boolean {
   if (!info) return true;
-  if (!Object.values(info).some((v) => v != null)) return true;
-  return !resolveCoverSrc(info);
+  // Cover fields are excluded from the "is this row populated" test. A
+  // record whose ONLY populated field is a cover says nothing about the
+  // track — no title, no artist — so the row still needs a real read.
+  // Counting it as populated would leave such a row permanently blank in
+  // the table.
+  for (const [key, value] of Object.entries(info)) {
+    if (value == null) continue;
+    if (HEAVY_KEYS.has(key)) continue;
+    return false;
+  }
+  return true;
 }

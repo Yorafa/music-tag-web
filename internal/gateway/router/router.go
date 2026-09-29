@@ -59,6 +59,15 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// Task endpoints — action-based routing like DRF @action
 		// Python: /api/<action>/
 		authed.POST("/file_list/", handler.FileList)
+		// Whole-subtree expansion in ONE request. /file_list/ stays the
+		// single-level lister the browsers use; this is the batch-add path,
+		// where walking the tree client-side cost one request per directory
+		// and one serial round trip per level of depth.
+		authed.POST("/file_list_recursive/", handler.FileListRecursive)
+		// Cover bytes on their own, for the worklist's lazy row thumbnails.
+		// Separate from music_id3 so a 3–15 MB embedded scan is fetched only
+		// for rows on screen, and cacheable by the browser.
+		authed.GET("/album_cover/", handler.AlbumCover)
 		// Server-side tag read for hydrate / openEditor (batch-add path).
 		// Frontend posts {file_path, file_name}; handler SafeJoins under MUSIC_DIR.
 		authed.POST("/music_id3/", handler.MusicID3)
