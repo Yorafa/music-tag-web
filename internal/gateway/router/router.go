@@ -40,7 +40,7 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 	// same prefix so reverse proxies can apply a single rate-limit policy.
 
 	// --- /api routes ---
-	// P1.5 issue F (M4): body limit on /api (8 MiB by default) keeps
+	// P1.5 issue F (M4): body limit on /api (28 MiB by default) keeps
 	// a single oversized upload from OOM-ing the gateway. The webhook
 	// and JWT routes use the same limit so a future endpoint cannot
 	// accidentally bypass it.

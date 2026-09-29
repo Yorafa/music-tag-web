@@ -36,7 +36,7 @@ import (
 // MaxPreviewRows caps a single preview to avoid DoS by a hostile
 // caller posting millions of paths in one request. 5000 maps to the
 // largest sane library bulk-edit (a label's full back catalogue) and
-// stays under the 8 MiB body limit enforced by the /api middleware.
+// stays under the 28 MiB body limit enforced by the /api middleware.
 const MaxPreviewRows = 5000
 
 // PreviewParseFilenames handles POST /api/tag/preview_parse_filenames/.

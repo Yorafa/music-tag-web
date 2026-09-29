@@ -67,7 +67,7 @@ const (
 )
 
 // MaxRenameRows mirrors MaxPreviewRows: one bulk rename of a label's back
-// catalogue is the largest sane request, and it stays under the 8 MiB
+// catalogue is the largest sane request, and it stays under the 28 MiB
 // body limit the /api middleware enforces.
 const MaxRenameRows = 5000
 

@@ -62,8 +62,8 @@ func TestBodyLimit_RejectsOversizedPayload(t *testing.T) {
 }
 
 func TestBodyLimit_DefaultCapUsedWhenZero(t *testing.T) {
-	if DefaultBodyLimitBytes != 8<<20 {
-		t.Fatalf("DefaultBodyLimitBytes = %d, want %d (8 MiB)", DefaultBodyLimitBytes, 8<<20)
+	if DefaultBodyLimitBytes != 28<<20 {
+		t.Fatalf("DefaultBodyLimitBytes = %d, want %d (28 MiB)", DefaultBodyLimitBytes, 28<<20)
 	}
 	r := newBodyRouter(0) // 0 → default cap
 	body := strings.Repeat("a", 1024)
