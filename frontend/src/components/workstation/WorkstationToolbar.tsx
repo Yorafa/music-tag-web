@@ -787,23 +787,10 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
             setTidyOpen(true);
           }}
           className="h-8 gap-1 text-xs"
-          title="逐层指定目录名，按标签重新组织物理目录；可先预览方案再执行"
+          title="逐层指定目录名，按标签重新组织物理目录；对话框里会先列出每个文件去哪，再决定是否执行"
         >
           <FolderTree className="w-3.5 h-3.5 text-muted-foreground" />
           <span>整理目录</span>
-        </Button>
-
-        {/* Prune Empty Folders */}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handlePruneEmpty}
-          disabled={pruning}
-          className="h-8 gap-1 text-xs"
-          title="删除库内空目录（只剩专辑元数据、音频已不在的目录会连同元数据一起进回收站），并清理文件已不在但索引行还在的记录"
-        >
-          <FolderX className="w-3.5 h-3.5 text-muted-foreground" />
-          <span>{pruning ? '提交中…' : '清理残留'}</span>
         </Button>
 
         <Separator orientation="vertical" className="mx-0.5 h-4" />
@@ -861,14 +848,34 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         {/* Where the files those two buttons removed went. Without this the
             "可恢复" in their confirm dialogs is a promise the UI cannot keep. */}
         <Button
-          variant="ghost"
+          variant="outline"
           size="sm"
           onClick={() => setTrashOpen(true)}
-          className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground"
+          className="h-8 gap-1 text-xs"
           title="查看并恢复已删除的文件"
         >
-          <ArchiveRestore className="w-3.5 h-3.5" />
+          <ArchiveRestore className="w-3.5 h-3.5 text-muted-foreground" />
           <span>回收站</span>
+        </Button>
+
+        {/* Prune Empty Folders. Sits with 回收站 rather than with the
+            other library-shaping buttons because it is the other end of
+            that one: it empties directories and moves the metadata it
+            finds there into the trash, so "where did that go" and "go get
+            it back" belong in the same place. It used to sit with
+            整理目录, which is the operation it is most often mistaken
+            for — 整理目录 moves files to where they belong, this deletes
+            what is left over. */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handlePruneEmpty}
+          disabled={pruning}
+          className="h-8 gap-1 text-xs"
+          title="删除库内空目录（只剩专辑元数据、音频已不在的目录会连同元数据一起进回收站），并清理文件已不在但索引行还在的记录"
+        >
+          <FolderX className="w-3.5 h-3.5 text-muted-foreground" />
+          <span>{pruning ? '提交中…' : '清理残留'}</span>
         </Button>
 
         {/* Scan local buttons */}
@@ -879,14 +886,16 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
         {/* First in the cluster, because it acts on the row list the rest
             of these controls then operate on. */}
         <Button
-          variant="ghost"
+          variant="outline"
           size="sm"
           onClick={handleReconcile}
           disabled={reconciling || rows.length === 0}
-          className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground"
-          title="刷新收录：逐个目录比对磁盘，清掉文件已不存在的条目"
+          className="h-8 gap-1 text-xs"
+          title="刷新收录：逐个目录比对磁盘，清掉文件已不在原目录的条目"
         >
-          <ListChecks className={`w-3.5 h-3.5 ${reconciling ? 'animate-pulse' : ''}`} />
+          <ListChecks
+            className={`w-3.5 h-3.5 text-muted-foreground ${reconciling ? 'animate-pulse' : ''}`}
+          />
           <span className="hidden sm:inline">{reconciling ? '刷新中…' : '刷新收录'}</span>
         </Button>
 
