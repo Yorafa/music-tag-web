@@ -107,7 +107,7 @@ docker compose logs gateway | grep -A 6 FIRST-BOOT
 | [`docs/plugable-plugins.md`](docs/plugable-plugins.md) | 插件架构设计草图（Stage A 已落地 / B–D 未排期） |
 | [`docs/plans/Unfinished-Features.md`](docs/plans/Unfinished-Features.md) | 未实现功能的取舍记录 |
 | [`frontend/README.md`](frontend/README.md) | 前端 dev 启动 / Vitest / React Compiler 配置 |
-| [`AGENTS.md`](AGENTS.md) | 仓库内协作工具相关说明（issue tracker / triage labels / domain docs） |
+| [`AGENTS.md`](AGENTS.md) | 协作工具入口（本地，不入 git；它索引的四份约定在 [`docs/agents/`](docs/agents/)，那几份是入库的） |
 | [`REVIEW.md`](REVIEW.md) | 审计报告（本地，不入 git） |
 
 ---

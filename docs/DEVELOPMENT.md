@@ -81,7 +81,7 @@ npm run test:watch
 
 ## 3. 一键 pre-flight gate
 
-全绿标准（与 `.agents/skills/music-tag-web-dev/SKILL.md` 里的 checklist 一致）：
+全绿标准（下面每条都必须无输出或退出码 0；`.agents/skills/` 里的项目 skill 抄的就是这份清单，但它是本地安装的，不在 git 里，所以这里必须能独立成立）：
 
 ```bash
 # Go

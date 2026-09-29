@@ -57,6 +57,26 @@ static/dist/
 # server answering 404 for every path, which reads as "the demo broke".
 /.pages-serve/
 
+# Agent skills. Installed per-clone with `npx skills add <owner>/<repo>`
+# (or copied from a teammate's checkout) and used from the working tree;
+# they are tool configuration, not project source, and every clone would
+# otherwise carry a copy that goes stale on its own schedule.
+.agents/
+
+# The agent entry point. Same reasoning as .agents/ — it configures the tools
+# that work in this checkout, and it is a pointer file: the conventions it
+# indexes (docs/agents/*.md) are tracked on their own and stay readable
+# without it. README's doc table marks it 本地，不入 git, the same way it
+# marks REVIEW.md.
+AGENTS.md
+
+# The `npx skills` lockfile: per-skill source + content hash for whatever is
+# installed under .agents/skills/. It exists to make `skills add` idempotent
+# for a checkout, and with .agents/ untracked there is nothing left for it to
+# lock — the tool regenerates it on the next install. Nothing in the repo
+# reads it.
+skills-lock.json
+
 # Local media/data for dev testing — never commit
 /music/
 /data/
