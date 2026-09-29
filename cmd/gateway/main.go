@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -76,11 +75,6 @@ func main() {
 	pathCache := cache.NewPathCache()
 	handler.SetCache(pathCache)
 	handler.SetBus(bus)
-
-	// Reap filename-parse previews the user opened but never applied
-	// (REVIEW.md P2-7). Load consumes on read, so only abandoned previews
-	// remain; without a janitor they would sit for the full 10-minute TTL.
-	cache.StartJanitor(context.Background(), 5*time.Minute)
 
 	// Subscriber lifetime is bounded by rootCtx; on SIGTERM the OS
 	// handler cancels, drains in-flight events, and exits cleanly.

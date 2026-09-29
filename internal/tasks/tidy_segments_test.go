@@ -242,136 +242,54 @@ func TestTidyDestPath_RefusesAnUnknownField(t *testing.T) {
 	}
 }
 
-// --- The preview ---
+// --- The move itself ---
 
-// The core promise: the plan the operator reads is computed by the same
-// function the move uses. If these two ever disagree, the preview is worse
-// than no preview — it is a confident lie.
-func TestPreviewTidy_PlansWhatTidyOneActuallyDoes(t *testing.T) {
+// The destination the dialog shows and the destination the move uses come
+// from the same function, so a rule cannot render two different trees. The
+// client's own plan mirrors this derivation; what is checked here is that
+// the file really lands where tidyDestPath said it would.
+func TestTidyOne_LandsWhereTheRuleSays(t *testing.T) {
 	root := t.TempDir()
-	src := taggedTrack(t, root, "song.mp3", tag.TagUpdate{
+	src := taggedTrack(t, filepath.Join(root, "Loose"), "song.mp3", tag.TagUpdate{
 		Title:  strptr("Song"),
 		Album:  strptr("MyAlbum"),
 		Artist: []string{"MyArtist"},
 	})
-	segments := []string{"${artist}", "${year} - ${album}"}
+	segments := []string{"${artist}", "${album}"}
+
+	want, missing, err := tidyDestPath(root, segments,
+		&tag.TagInfo{Album: "MyAlbum", Artist: "MyArtist"}, "song.mp3")
+	if err != nil {
+		t.Fatalf("tidyDestPath: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Errorf("unexpected missing fields: %v", missing)
+	}
 
 	h := &TidyFolderHandler{MusicRoot: root}
-	rows, err := h.PreviewTidy(context.Background(), []string{src}, root, segments)
-	if err != nil {
-		t.Fatalf("PreviewTidy: %v", err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("got %d rows, want 1", len(rows))
-	}
-	if rows[0].Status != TidyPlanMove {
-		t.Fatalf("status = %q (%s), want %q", rows[0].Status, rows[0].Reason, TidyPlanMove)
-	}
-	planned := rows[0].NewPath
-	// The fixture has no year, so the plan must name the gap rather than
-	// quietly inventing one.
-	if len(rows[0].Missing) != 1 || rows[0].Missing[0] != "year" {
-		t.Errorf("missing = %v, want [year]", rows[0].Missing)
-	}
-
-	// Now actually run it. The assertion is that the file is AT the
-	// planned path — not against a path spelled out a second time here,
-	// which would only test that the test agrees with itself.
 	if err := h.tidyOne(context.Background(), src, TidyFolderPayload{
 		RootPath: root, Segments: segments,
 	}); err != nil {
 		t.Fatalf("tidyOne: %v", err)
 	}
-	mustStat(t, planned)
+	mustStat(t, want)
 	if _, err := os.Stat(src); !os.IsNotExist(err) {
-		t.Errorf("the file is still at its old path %s; the plan and the move disagree", src)
+		t.Errorf("the file is still at its old path %s", src)
 	}
 }
 
-// The collision the operator cannot see by reading paths: the same FILENAME
-// sitting in two different source directories, both carrying tags that
-// resolve to one destination. Only the second is a duplicate.
-//
-// The same-filename part is the point. Two tracks in one album are NOT a
-// collision — tidy keeps the basename, so a.mp3 and b.mp3 go to different
-// files in the same directory and both are fine. Flagging those would put
-// a false "目标冲突" on every album with more than one track.
-func TestPreviewTidy_MarksTheSecondFileForOneDestination(t *testing.T) {
+// The collision that loses data. os.Rename replaces silently on Linux, so
+// without this check two files whose tags resolve to one path would
+// destroy one of them with no error anywhere — and the dialog cannot see
+// it either, because its plan is computed in the browser and never stats
+// the destination.
+func TestTidyOne_RefusesToOverwriteAFileAlreadyThere(t *testing.T) {
 	root := t.TempDir()
-	tags := tag.TagUpdate{Album: strptr("X"), Artist: []string{"A"}, Title: strptr("T")}
-	a := taggedTrack(t, filepath.Join(root, "One"), "song.mp3", tags)
-	b := taggedTrack(t, filepath.Join(root, "Two"), "song.mp3", tags)
-
-	h := &TidyFolderHandler{MusicRoot: root}
-	rows, err := h.PreviewTidy(context.Background(), []string{a, b}, root, []string{"${artist}", "${album}"})
-	if err != nil {
-		t.Fatalf("PreviewTidy: %v", err)
-	}
-	if rows[0].NewPath != rows[1].NewPath {
-		t.Fatalf("fixture is wrong: the two rows want different paths (%q, %q)", rows[0].NewPath, rows[1].NewPath)
-	}
-	tally := TallyTidy(rows)
-	if tally.Duplicate != 1 {
-		t.Errorf("duplicate = %d, want 1", tally.Duplicate)
-	}
-	if tally.Move != 1 {
-		t.Errorf("move = %d, want 1", tally.Move)
-	}
-	if got := MovablePaths(rows); len(got) != 1 {
-		t.Errorf("MovablePaths = %v, want only the winner", got)
-	}
-}
-
-// ...and the converse: two tracks in one album are the normal case, and
-// flagging them would put a false conflict on every multi-track release.
-func TestPreviewTidy_TwoTracksInOneAlbumAreNotACollision(t *testing.T) {
-	root := t.TempDir()
-	tags := tag.TagUpdate{Album: strptr("X"), Artist: []string{"A"}}
-	a := taggedTrack(t, root, "a.mp3", tags)
-	b := taggedTrack(t, root, "b.mp3", tags)
-
-	h := &TidyFolderHandler{MusicRoot: root}
-	rows, err := h.PreviewTidy(context.Background(), []string{a, b}, root, []string{"${artist}", "${album}"})
-	if err != nil {
-		t.Fatalf("PreviewTidy: %v", err)
-	}
-	tally := TallyTidy(rows)
-	if tally.Duplicate != 0 || tally.Move != 2 {
-		t.Errorf("tally = %+v, want 2 moves and no conflicts", tally)
-	}
-}
-
-// A file already in place is `same`, not `move` and not an error. It is
-// reported in its own bucket so "412 will be reorganised" and "412 are
-// already correct" never get added into one number.
-func TestPreviewTidy_AFreshTreeIsAlreadyInPlace(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "A", "B")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	dst := filepath.Join(root, "A", "B", "a.mp3")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	src := taggedTrack(t, dir, "a.mp3", tag.TagUpdate{Album: strptr("B"), Artist: []string{"A"}})
-
-	h := &TidyFolderHandler{MusicRoot: root}
-	rows, err := h.PreviewTidy(context.Background(), []string{src}, root, []string{"${artist}", "${album}"})
-	if err != nil {
-		t.Fatalf("PreviewTidy: %v", err)
-	}
-	if rows[0].Status != TidyPlanSame {
-		t.Errorf("status = %q (%s), want %q", rows[0].Status, rows[0].Reason, TidyPlanSame)
-	}
-}
-
-// The collision that loses data. Reported rather than discovered at
-// os.Rename, because by then the operator is reading a failure log for
-// something the plan could have told them before they clicked.
-func TestPreviewTidy_MarksATakenDestination(t *testing.T) {
-	root := t.TempDir()
-	// The destination is already occupied by an unrelated file.
-	if err := os.MkdirAll(filepath.Join(root, "A", "B"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "A", "B", "a.mp3"), []byte("someone else"), 0o644); err != nil {
+	if err := os.WriteFile(dst, []byte("someone else"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	src := taggedTrack(t, filepath.Join(root, "Loose"), "a.mp3", tag.TagUpdate{
@@ -379,19 +297,22 @@ func TestPreviewTidy_MarksATakenDestination(t *testing.T) {
 	})
 
 	h := &TidyFolderHandler{MusicRoot: root}
-	rows, err := h.PreviewTidy(context.Background(), []string{src}, root, []string{"${artist}", "${album}"})
-	if err != nil {
-		t.Fatalf("PreviewTidy: %v", err)
+	err := h.tidyOne(context.Background(), src, TidyFolderPayload{
+		RootPath: root, Segments: []string{"${artist}", "${album}"},
+	})
+	if err == nil {
+		t.Fatal("tidyOne overwrote an occupied destination")
 	}
-	if rows[0].Status != TidyPlanTaken {
-		t.Errorf("status = %q, want %q — os.Rename would have failed on this", rows[0].Status, TidyPlanTaken)
+	if body, readErr := os.ReadFile(dst); readErr != nil || string(body) != "someone else" {
+		t.Errorf("the occupying file was damaged: %q (%v)", body, readErr)
 	}
+	mustStat(t, src)
 }
 
 // A directory already at the destination is the NORMAL case — the tidy is
-// building the tree — and must not be reported as a collision. This is the
-// case that separates `taken` from "any os.Lstat succeeded".
-func TestPreviewTidy_AnExistingDirectoryIsNotACollision(t *testing.T) {
+// building the tree — and must not be read as a conflict. This is the case
+// that separates "occupied by a file" from "any os.Lstat succeeded".
+func TestTidyOne_AnExistingDirectoryIsNotAConflict(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "A", "B"), 0o755); err != nil {
 		t.Fatal(err)
@@ -401,85 +322,36 @@ func TestPreviewTidy_AnExistingDirectoryIsNotACollision(t *testing.T) {
 	})
 
 	h := &TidyFolderHandler{MusicRoot: root}
-	rows, err := h.PreviewTidy(context.Background(), []string{src}, root, []string{"${artist}", "${album}"})
-	if err != nil {
-		t.Fatalf("PreviewTidy: %v", err)
+	if err := h.tidyOne(context.Background(), src, TidyFolderPayload{
+		RootPath: root, Segments: []string{"${artist}", "${album}"},
+	}); err != nil {
+		t.Fatalf("tidyOne: %v", err)
 	}
-	if rows[0].Status != TidyPlanMove {
-		t.Errorf("status = %q (%s), want %q", rows[0].Status, rows[0].Reason, TidyPlanMove)
-	}
+	mustStat(t, filepath.Join(root, "A", "B", "a.mp3"))
 }
 
-// A file outside the library is blocked per-file, not per-batch. One bad
-// row in a 500-track list should cost that row.
-func TestPreviewTidy_BlocksAnOutOfLibraryPathWithoutLosingTheRest(t *testing.T) {
+// Two tracks in one album are NOT a conflict: tidy keeps the basename, so
+// a.mp3 and b.mp3 go to different files in one directory and both are
+// fine. Refusing the second would break every multi-track album.
+func TestTidyOne_TwoTracksInOneAlbumBothMove(t *testing.T) {
 	root := t.TempDir()
-	outside := t.TempDir()
-	good := taggedTrack(t, root, "a.mp3", tag.TagUpdate{Album: strptr("B"), Artist: []string{"A"}})
-	bad := filepath.Join(outside, "stranger.mp3")
-	if err := os.WriteFile(bad, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	h := &TidyFolderHandler{MusicRoot: root}
-	rows, err := h.PreviewTidy(context.Background(), []string{good, bad}, root, []string{"${artist}"})
-	if err != nil {
-		t.Fatalf("PreviewTidy: %v", err)
-	}
-	tally := TallyTidy(rows)
-	if tally.Blocked != 1 || tally.Move != 1 {
-		t.Errorf("tally = %+v, want 1 blocked and 1 move", tally)
-	}
-}
-
-// A root outside the library is refused by the preview too, not just by
-// the worker. The dialog is where the user finds out.
-func TestPreviewTidy_RefusesAnOutOfLibraryRoot(t *testing.T) {
-	root := t.TempDir()
-	src := taggedTrack(t, root, "a.mp3", tag.TagUpdate{Album: strptr("B")})
-
-	h := &TidyFolderHandler{MusicRoot: root}
-	if _, err := h.PreviewTidy(context.Background(), []string{src}, t.TempDir(), []string{"${album}"}); err == nil {
-		t.Fatal("a preview accepted a root outside the library")
-	}
-}
-
-// MovablePaths is what the gateway enqueues, so it has to be exactly the
-// set the plan approved — including `same`, which the tidy will run and
-// find to be a no-op (that is how the worker learns to skip the move).
-func TestMovablePaths_ExcludesEverythingThePlanRefused(t *testing.T) {
-	rows := []TidyPlanRow{
-		{OldPath: "/a", Status: TidyPlanMove},
-		{OldPath: "/b", Status: TidyPlanSame},
-		{OldPath: "/c", Status: TidyPlanTaken},
-		{OldPath: "/d", Status: TidyPlanDuplicate},
-		{OldPath: "/e", Status: TidyPlanBlocked},
-	}
-	got := MovablePaths(rows)
-	if len(got) != 2 || got[0] != "/a" || got[1] != "/b" {
-		t.Errorf("MovablePaths = %v, want [/a /b]", got)
-	}
-}
-
-// TallyTally is what both the notice and the apply gate read, so a row
-// with a missing tag has to be counted as a move AND as a gap. Folding
-// gaps into a separate "skipped" bucket would understate what moved.
-func TestTallyTidy_CountsGapsSeparatelyFromMoves(t *testing.T) {
-	tally := TallyTidy([]TidyPlanRow{
-		{Status: TidyPlanMove},
-		{Status: TidyPlanMove, Missing: []string{"year"}},
-		{Status: TidyPlanSame},
-		{Status: TidyPlanTaken},
+	dir := filepath.Join(root, "Loose")
+	a := taggedTrack(t, dir, "a.mp3", tag.TagUpdate{
+		Album: strptr("B"), Artist: []string{"A"},
 	})
-	if tally.Move != 2 {
-		t.Errorf("Move = %d, want 2", tally.Move)
+	b := taggedTrack(t, dir, "b.mp3", tag.TagUpdate{
+		Album: strptr("B"), Artist: []string{"A"},
+	})
+
+	h := &TidyFolderHandler{MusicRoot: root}
+	p := TidyFolderPayload{RootPath: root, Segments: []string{"${artist}", "${album}"}}
+	for _, src := range []string{a, b} {
+		if err := h.tidyOne(context.Background(), src, p); err != nil {
+			t.Fatalf("tidyOne(%s): %v", src, err)
+		}
 	}
-	if tally.WithGaps != 1 {
-		t.Errorf("WithGaps = %d, want 1", tally.WithGaps)
-	}
-	if tally.Total != 4 {
-		t.Errorf("Total = %d, want 4", tally.Total)
-	}
+	mustStat(t, filepath.Join(root, "A", "B", "a.mp3"))
+	mustStat(t, filepath.Join(root, "A", "B", "b.mp3"))
 }
 
 // The request-level validation the gateway runs before enqueueing. It is

@@ -53,8 +53,8 @@ describe('unwrapEnvelope', () => {
   });
 
   it('names the endpoint when the server gave no message', () => {
-    expect(() => unwrapEnvelope({ result: false }, 'preview_parse_filenames')).toThrow(
-      /preview_parse_filenames/,
+    expect(() => unwrapEnvelope({ result: false }, 'apply_parsed_filenames')).toThrow(
+      /apply_parsed_filenames/,
     );
   });
 

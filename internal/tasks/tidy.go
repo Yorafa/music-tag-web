@@ -217,6 +217,27 @@ func (h *TidyFolderHandler) ProcessTask(ctx context.Context, t Task) error {
 // message ("root is empty") names the actual fault. The gateway handler
 // keeps an empty-root check of its own, because it is answering an
 // operator rather than a log.
+// TidySegmentsProblem describes a level list the worker would refuse, in
+// the words the dialog shows. Exported so the dialog's own validation and
+// the worker's agree by construction rather than by review.
+//
+// It is deliberately weaker than the per-file rules: a level that renders
+// empty for one file is a plan-row fact, not a request-level one.
+func TidySegmentsProblem(segments []string) string {
+	if len(segments) == 0 {
+		return "至少需要一层目录"
+	}
+	for i, seg := range segments {
+		if strings.TrimSpace(seg) == "" {
+			return fmt.Sprintf("第 %d 层是空的", i+1)
+		}
+		if _, err := utils.ExpandFilenameTemplate(seg, map[string]string{}); err != nil {
+			return fmt.Sprintf("第 %d 层：%v", i+1, err)
+		}
+	}
+	return ""
+}
+
 func TidyRoot(musicRoot, rootPath string) (string, error) {
 	if strings.TrimSpace(rootPath) == "" {
 		if strings.TrimSpace(musicRoot) == "" {
@@ -282,6 +303,21 @@ func (h *TidyFolderHandler) tidyOne(ctx context.Context, musicPath string, p Tid
 	dst, _, err := tidyDestPath(p.RootPath, p.Segments, info, filepath.Base(musicPath))
 	if err != nil {
 		return err
+	}
+	// Refuse to overwrite something that is already there. os.Rename
+	// replaces silently on Linux, so without this a tidy whose rule
+	// collapses two files onto one name destroys one of them with no
+	// error anywhere — and the dialog's plan is computed in the browser
+	// now, where it cannot stat the destination at all.
+	//
+	// A DIRECTORY there is not a conflict: that is the tree this whole
+	// operation exists to build. Only a non-directory is.
+	if fi, statErr := os.Lstat(dst); statErr == nil && !fi.IsDir() {
+		return fmt.Errorf("目标位置已有同名文件，未移动：%s", dst)
+	} else if statErr != nil && !os.IsNotExist(statErr) {
+		// A permission problem or a stalled mount is "I could not tell",
+		// not "it is free" — refuse rather than gamble.
+		return fmt.Errorf("无法检查目标位置 %s：%w", dst, statErr)
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err

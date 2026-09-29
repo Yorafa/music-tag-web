@@ -65,9 +65,8 @@ func newRenameFixture(t *testing.T, files map[string]map[string]string) string {
 	return root
 }
 
-// renameJSON posts to one of the rename endpoints and returns the parsed
-// envelope plus the raw body, so a test can assert on either the
-// transport or the payload.
+// renameJSON posts the apply endpoint and returns the parsed envelope,
+// so a test can assert on the payload.
 func renameJSON(t *testing.T, path string, body any) (map[string]any, int) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -79,11 +78,7 @@ func renameJSON(t *testing.T, path string, body any) (map[string]any, int) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(raw)))
 	c.Request.Header.Set("Content-Type", "application/json")
-	if strings.Contains(path, "preview_rename") {
-		PreviewRenameFromTags(c)
-	} else {
-		ApplyRenameFromTags(c)
-	}
+	ApplyRenameFromTags(c)
 	var env map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 		t.Fatalf("decode %s: %v (body %s)", path, err, w.Body.String())
@@ -126,16 +121,15 @@ func listNames(t *testing.T, root string) []string {
 	return out
 }
 
-// TestPreviewRename_WritesNothing is the load-bearing guarantee: the
-// preview is a dry run. If it renamed files, the whole feature would be
-// unusable — you would be applying a 500-file rename to read the plan.
-func TestPreviewRename_WritesNothing(t *testing.T) {
+// The apply is the planner, so its response is the plan AND what it did
+// with it. A dialog that renders its own plan locally is relying on this
+// shape to tell the operator what actually happened.
+func TestApplyRename_ReportsWhatItPlannedAndDid(t *testing.T) {
 	root := newRenameFixture(t, map[string]map[string]string{
 		"17/a.mp3": {"Title": "Sunny Day", "Artist": "Someone"},
 	})
-	before := listNames(t, root)
 
-	env, _ := renameJSON(t, "/preview_rename_from_tags/", map[string]any{
+	env, _ := renameJSON(t, "/apply_rename_from_tags/", map[string]any{
 		"paths":    []string{"17/a.mp3"},
 		"template": "${artist} - ${title}",
 	})
@@ -149,11 +143,8 @@ func TestPreviewRename_WritesNothing(t *testing.T) {
 	if rows[0]["status"] != RenameOK {
 		t.Errorf("status = %v", rows[0]["status"])
 	}
-	if data, _ := env["data"].(map[string]any); data["dry_run"] != true {
-		t.Errorf("dry_run = %v, want true", data["dry_run"])
-	}
-	if got := listNames(t, root); len(got) != len(before) || got[0] != before[0] {
-		t.Errorf("preview touched the filesystem: %v -> %v", before, got)
+	if got := listNames(t, root); len(got) != 1 || got[0] != filepath.Join("17", "Someone - Sunny Day.mp3") {
+		t.Errorf("the rename did not land: %v", got)
 	}
 }
 
@@ -303,9 +294,9 @@ func TestApplyRename_ExistingTargetIsTaken(t *testing.T) {
 	}
 }
 
-func TestPreviewRename_EscapingPathIsRefused(t *testing.T) {
+func TestApplyRename_EscapingPathIsRefused(t *testing.T) {
 	newRenameFixture(t, map[string]map[string]string{"17/a.mp3": {"Title": "T"}})
-	env, _ := renameJSON(t, "/preview_rename_from_tags/", map[string]any{
+	env, _ := renameJSON(t, "/apply_rename_from_tags/", map[string]any{
 		"paths":    []string{"../../etc/passwd"},
 		"template": "${title}",
 	})
@@ -315,13 +306,15 @@ func TestPreviewRename_EscapingPathIsRefused(t *testing.T) {
 	}
 }
 
-func TestPreviewRename_RejectsUselessTemplates(t *testing.T) {
+// A template with nothing to expand would rename every file in the batch
+// to one literal name. Refused at the request, before a single os.Rename.
+func TestApplyRename_RejectsUselessTemplates(t *testing.T) {
 	newRenameFixture(t, map[string]map[string]string{"17/a.mp3": {"Title": "T"}})
 	for _, tc := range []struct{ name, tmpl string }{
 		{"empty", ""},
 		{"no placeholders", "whatever"},
 	} {
-		env, _ := renameJSON(t, "/preview_rename_from_tags/", map[string]any{
+		env, _ := renameJSON(t, "/apply_rename_from_tags/", map[string]any{
 			"paths": []string{"17/a.mp3"}, "template": tc.tmpl,
 		})
 		if env["result"] != false {

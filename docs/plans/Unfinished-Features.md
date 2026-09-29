@@ -28,6 +28,13 @@
 > Implementation reality check table 中 4th 列 (列名 pre-ship 「Plan 中需新增 / 改造」,定义本身已复盘无用) post-ship 收编于此:pre-ship 反驳 表型不重贴,只列落地的文件 + 关键改动。
 
 **C.2 — Filename Parse backend round-trip**
+
+> 事后（`refactor(preview)`）：三个对话框的方案都改成本地算，所以
+> `preview_parse_filenames` 路由、token 缓存 `internal/cache/parsed_preview.go`
+> 和 janitor 都已经删掉。写入走 `apply_parsed_filenames`，请求里直接带
+> paths + 规则。保留下来的只有 `internal/cache/parsed_result.go` —— 那是
+> asynq payload 要携带的行结构。下面这份计划保留原样，作为当时的记录。
+
 - `internal/utils/filenames.go` (new) — Go port of `parseFilename` regex + NFC normalize
 - `internal/utils/filenames_testdata.json` (new) — 200+ NFC fixture
 - `internal/utils/filenames_test.go` (new) — contract + 双向 SHA-256 fixture sync

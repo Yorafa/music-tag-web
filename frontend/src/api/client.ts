@@ -492,25 +492,22 @@ export const RENAME_STATUSES = {
   failed: 'failed',
 } as const;
 
+/** The apply's answer: the plan it computed AND what it did with it. */
 export interface RenameResponse {
   rows: RenamePlanRow[];
   tally: Record<string, number>;
-  dry_run: boolean;
 }
-
-/* POST /api/tag/preview_rename_from_tags/ was removed here along with
-   the dialog's use of it: 从标签改名 now renders its plan locally, from the
-   rows' cached tags, and the apply is self-contained. The endpoint still
-   exists server-side for a caller that wants a dry run it can diff. */
 
 /** POST /api/tag/apply_rename_from_tags/ — rename from the files' tags.
  *
- *  There is no preview step to bind to: the dialog renders the plan
- *  itself, and this call carries the paths and the template together. The
- *  server re-plans every row rather than trusting anything the client
- *  sent, so a file renamed since the plan was drawn is not renamed
- *  twice, and the response is the authoritative result rather than a
- *  receipt for what the client believed. */
+ *  There is no preview step and no dry-run route: the dialog renders the
+ *  plan itself, and this call carries the paths and the template together.
+ *  The server plans and renames in one pass rather than trusting anything
+ *  the client sent, so a file renamed since the plan was drawn is not
+ *  renamed twice — and the response is the authoritative result rather
+ *  than a receipt for what the client believed. A row that comes back
+ *  `taken` is one the library already had, and the batch loop is the only
+ *  place that can see two files wanting one name. */
 export async function applyRenameFromTags(
   paths: string[],
   template: string,
@@ -572,12 +569,11 @@ export interface ParseOptions {
  *  server-side, enqueues `TypeApplyParsedFilenames`, and returns the
  *  asynq task_id.
  *
- *  The request is self-contained: the paths and the rule go in together,
- *  so there is no preview token to hold, expire, or re-fetch. It used to
- *  take a token minted by preview_parse_filenames, which made the write
- *  impossible without a fresh round trip and gave a dialog left open over
- *  lunch a 401 it could only answer by re-previewing — a plan the
- *  operator could already see, computed again, for nothing.
+ *  The request is self-contained: the paths and the rule go in together.
+ *  It used to take a token minted by a preview, which cost a second round
+ *  trip before every write and gave a dialog left open over lunch a 401
+ *  it could only answer by re-previewing — a plan the operator could
+ *  already see, computed again, for nothing.
  *
  *  The worker writes every field the row carries — no rename, no cover,
  *  no sidecar — and a field the row does not carry is left alone, so

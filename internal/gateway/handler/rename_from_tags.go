@@ -3,9 +3,15 @@
 // # The split
 //
 // 解析文件名 reads a name and writes tags. This reads tags and writes
-// names. Both are per-file operations driven by a template, and both go
-// through a preview before anything is written; the two dialogs are
-// deliberately the same shape so the second one needs no explanation.
+// names. Both are per-file operations driven by a template, and both used
+// to answer a preview request before anything was written; the two dialogs
+// are deliberately the same shape so the second one needs no explanation.
+//
+// Neither asks the server for that plan any more. The dialogs render it
+// from the rows' cached tags, which is what a 500-file batch actually
+// needed — ten rows of it, immediately, instead of a round trip per rule
+// change. So there is no dry-run route here: the apply IS the planner, and
+// the response is the plan plus what it did.
 //
 // The engine underneath is not new — utils.RenderTemplate plus
 // SanitizePath plus the collision check in update.go already do it, and
@@ -15,8 +21,6 @@
 //   - the variables actually cover the tags people have (genre and year
 //     did not, and an unfound key used to be left in the output as
 //     literal `${year}` text — see renameTemplateVars);
-//   - a dry run exists, so a 500-file rename can be read before it is
-//     committed;
 //   - collisions are detected across the BATCH, not just against what is
 //     already on disk. Two files whose templates render to the same name
 //     is the failure that loses data, and per-file checks cannot see it.
@@ -66,7 +70,7 @@ const (
 	RenameFailed = "failed"
 )
 
-// MaxRenameRows mirrors MaxPreviewRows: one bulk rename of a label's back
+// MaxRenameRows mirrors MaxParseRows: one bulk rename of a label's back
 // catalogue is the largest sane request, and it stays under the 28 MiB
 // body limit the /api middleware enforces.
 const MaxRenameRows = 5000
@@ -87,7 +91,7 @@ type RenamePlanRow struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-// renameRequest is the shared body of preview and apply.
+// renameRequest is the apply's body.
 type renameRequest struct {
 	Paths    []string `json:"paths" binding:"required"`
 	Template string   `json:"template" binding:"required"`
@@ -150,9 +154,12 @@ func planRename(root, abs, tmpl string) RenamePlanRow {
 // that need the whole batch in view: a name already on disk, and a name
 // another row in this same batch also wants.
 //
-// dryRun stops before any os.Rename; apply performs them. Both call this,
-// so the counts a preview shows are the counts apply will report.
-func resolveRenames(root string, req renameRequest, dryRun bool) []RenamePlanRow {
+// The planning IS the operation — there is no separate dry run to drift
+// from it. That is why the checks below matter more than they used to: the
+// dialog's local plan cannot stat the target directory, so an occupied
+// name is first noticed here, and it is the batch loop above that can see
+// two files wanting one name at all.
+func resolveRenames(root string, req renameRequest) []RenamePlanRow {
 	rows := make([]RenamePlanRow, 0, len(req.Paths))
 	// claimed is keyed by the FULL target path, lowercased. Keying on
 	// the bare name instead would make two tracks in different folders
@@ -204,16 +211,14 @@ func resolveRenames(root string, req renameRequest, dryRun bool) []RenamePlanRow
 		}
 		claimed[key] = true
 
-		if !dryRun {
-			if err := os.Rename(abs, target); err != nil {
-				row.Status = RenameFailed
-				row.Detail = err.Error()
-			} else {
-				// Sidecars (.lrc, .nfo, cover.jpg) are named after the
-				// old basename and would be orphaned otherwise — the
-				// library would stop listing the lyrics.
-				tag.MoveSidecars(abs, target)
-			}
+		if err := os.Rename(abs, target); err != nil {
+			row.Status = RenameFailed
+			row.Detail = err.Error()
+		} else {
+			// Sidecars (.lrc, .nfo, cover.jpg) are named after the
+			// old basename and would be orphaned otherwise — the
+			// library would stop listing the lyrics.
+			tag.MoveSidecars(abs, target)
 		}
 		rows = append(rows, row)
 	}
@@ -221,8 +226,8 @@ func resolveRenames(root string, req renameRequest, dryRun bool) []RenamePlanRow
 }
 
 // tallyRenames counts statuses for the summary line. Kept next to the
-// handlers because the preview's numbers and the apply's numbers must
-// come from the same place or the dialog lies by omission.
+// handler because the notice the dialog shows and the rows it just
+// rendered have to come from the same count.
 func tallyRenames(rows []RenamePlanRow) map[string]int {
 	t := map[string]int{}
 	for _, r := range rows {
@@ -231,49 +236,16 @@ func tallyRenames(rows []RenamePlanRow) map[string]int {
 	return t
 }
 
-// PreviewRenameFromTags handles POST /api/tag/preview_rename_from_tags/.
-//
-//	{
-//	  "paths":    ["a.flac", "b.flac"],   // relative to MUSIC_DIR
-//	  "template": "${artist} - ${title}"
-//	}
-//
-//	→ 200 { rows: [...RenamePlanRow...], tally: {ok: n, ...} }
-//	→ Failure(...) if the template is empty or has no placeholders.
-//
-// Nothing is written. The point is to let an operator read 500 old→new
-// pairs before committing to them, which the batch editor's rename
-// toggle could not offer.
-func PreviewRenameFromTags(c *gin.Context) {
-	var req renameRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Failure(c, "invalid request: "+err.Error())
-		return
-	}
-	if len(req.Paths) == 0 {
-		Failure(c, "paths is empty")
-		return
-	}
-	if len(req.Paths) > MaxRenameRows {
-		Failure(c, fmt.Sprintf("too many paths (max %d)", MaxRenameRows))
-		return
-	}
-	if err := utils.TemplateFieldError(req.Template); err != nil {
-		Failure(c, err.Error())
-		return
-	}
-	rows := resolveRenames(utils.MusicRoot(), req, true)
-	SuccessData(c, gin.H{"rows": rows, "tally": tallyRenames(rows), "dry_run": true})
-}
-
 // ApplyRenameFromTags handles POST /api/tag/apply_rename_from_tags/.
 //
-// Same body as the preview. Re-plans every row rather than trusting a
-// client-supplied plan: a file can have been renamed, or the template
-// edited, between the preview and the click, and applying a stale plan is
-// how a rename lands on the wrong file.
+//	{ "paths": ["a.flac", "b.flac"], "template": "${artist} - ${title}" }
 //
 //	→ 200 { rows: [...], tally: {...} }
+//
+// It plans and renames in the same pass, and answers with both halves:
+// the rows it computed and what it did with them. A row that came back
+// `taken` is one the operator's own library already had, and it is the
+// only place that fact is now reported.
 func ApplyRenameFromTags(c *gin.Context) {
 	var req renameRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -292,6 +264,6 @@ func ApplyRenameFromTags(c *gin.Context) {
 		Failure(c, err.Error())
 		return
 	}
-	rows := resolveRenames(utils.MusicRoot(), req, false)
-	SuccessData(c, gin.H{"rows": rows, "tally": tallyRenames(rows), "dry_run": false})
+	rows := resolveRenames(utils.MusicRoot(), req)
+	SuccessData(c, gin.H{"rows": rows, "tally": tallyRenames(rows)})
 }

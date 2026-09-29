@@ -1,38 +1,37 @@
 // Package handler — parsed_filenames.go backs the 解析文件名 write.
 //
-// The flow:
+// POST /api/tag/apply_parsed_filenames/ (paths, options) →
+//   - SafeJoin each path under MUSIC_DIR.
+//   - PortParseFilename → cache.ParsedResult per path.
+//   - Re-verify every path with SafeAbs.
+//   - Apply the caller's overrides, if any.
+//   - Enqueue asynq TypeApplyParsedFilenames; return { task_id }.
 //
-//  1. POST /api/tag/apply_parsed_filenames/ (paths, options) →
-//     - SafeJoin each path under MUSIC_DIR.
-//     - PortParseFilename → cache.ParsedResult per path.
-//     - Re-verify every path.
-//     - Skip unparsable rows.
-//     - Enqueue asynq TypeApplyParsedFilenames; return { task_id }.
+// # There is no preview route, and no token
 //
-// # The client previews, locally
+// This was a two-call round trip: a preview parsed the paths and saved
+// them behind a 10-minute one-shot token, and the apply spent that token.
+// The token existed so the write could not be handed a plan the client had
+// never seen — a good property for an endpoint whose caller is a script,
+// and a bad one for a dialog: 解析文件名 renders the plan itself from each
+// row's filename (frontend/src/components/scraper/parseAssist.ts mirrors
+// PortParseFilename, and its tests run against this package's own
+// fixture). Holding a token nobody read only bought an expired-preview
+// 401 to a dialog left open over lunch, and a second round trip before
+// every write.
 //
-// This used to be a two-call round trip: preview_parse_filenames parsed
-// the paths, saved them behind a 10-minute one-shot token, and the apply
-// spent that token. The token existed so the write could not be handed a
-// plan the client had never seen — a good property for an endpoint whose
-// caller is a script, and a bad one for a dialog: the client now renders
-// the plan itself from each row's filename (frontend/parseAssist.ts
-// mirrors PortParseFilename), and holding a token it does not read only
-// bought an expired-preview 401 to a dialog left open over lunch.
-//
-// So the apply takes the paths and the rule together and derives the plan
-// with the same code either way. The token path is kept so an older
-// client — or a script that wants to preview and then write exactly what
-// it previewed — still works.
+// So paths and rule travel together and the plan is derived here. The
+// unparsable rows are still kept in the payload so the worker skips them
+// silently: an operator who selected 1000 files and got 700 written
+// should not have the other 300 count as failures.
 //
 // Security: every path is SafeJoined here and SafeAbs'd again on the way
-// out. A 401 envelope (not 404) on ErrTokenExpired tells the frontend
-// "re-preview" rather than "missing resource" — matches the
-// auth/refresh-token retry UX.
+// out — TrimPrefix is a no-op when the prefix does not match, so
+// SafeJoin would otherwise treat an absolute path as relative (REVIEW.md
+// P2-6).
 package handler
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -121,74 +120,6 @@ func checkPathCount(c *gin.Context, n int) bool {
 	return true
 }
 
-// PreviewParseFilenames handles POST /api/tag/preview_parse_filenames/.
-//
-//	{
-//	  "paths":   ["album/Artist - Album - 01 - Title.flac", ...], // relative to MUSIC_DIR
-//	  "options": {
-//	    "separator": "\\s*-\\s*",                                  // optional
-//	    "pattern":   "^(?P<artist>.+?) - (?P<album>.+?) - ...$"       // optional
-//	  }
-//	}
-//
-//	→ 200 OK { token, results: [...same shape as cache.ParsedResult...] }
-//	→ Failure(...) if paths is missing / empty / over MaxParseRows, or
-//	           the pattern does not compile / names a field that does
-//	           not exist. Note the envelope convention: Failure answers
-//	           HTTP 200 with result:false and code "400" (see
-//	           handler/response.go), and the frontend turns that into a
-//	           thrown Error carrying `message` (api/envelope.ts).
-//	→ 422 Unprocessable if any path fails SafeJoin (suspicious payload) —
-//	           that one is a real status code, written directly.
-//
-// # Who calls this now
-//
-// The app does not: 解析文件名 renders its plan locally. This endpoint
-// stays because it is the only way to obtain a token, which is the only
-// way to write a plan that was parsed by the server rather than by the
-// client — the property a script wants and the dialog gave up on
-// purpose. The parsing below is the same code the apply runs.
-//
-// # Why a bad pattern fails the request and is not a per-row unparsable
-//
-// The pattern used to be compiled inside the per-file loop, so a typo
-// turned every row unparsable and the response said nothing about why —
-// 5000 files, one silent mistake. It is now compiled once, in
-// planPaths, and the error names the offending group and lists the
-// fields that exist. The preview is worthless with a broken pattern, so
-// failing the request is more useful than returning a table of blanks.
-//
-// The client checks the same things before rendering anything
-// (frontend/src/components/scraper/parseAssist.ts) and additionally
-// rejects constructs Go's RE2 refuses but V8 accepts — lookahead,
-// lookbehind, backreferences — which is verified against
-// regexp.Compile in internal/utils/filenames_preset_test.go rather than
-// assumed.
-func PreviewParseFilenames(c *gin.Context) {
-	var req parseRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Failure(c, "invalid request: "+err.Error())
-		return
-	}
-	if !checkPathCount(c, len(req.Paths)) {
-		return
-	}
-	results, ok := planPaths(c, req.Paths, req.Options)
-	if !ok {
-		return
-	}
-
-	token, err := cache.DefaultPreviewCache.Save(cache.ParsedBundle{Results: results})
-	if err != nil {
-		Failure(c, "save preview: "+err.Error())
-		return
-	}
-	SuccessData(c, gin.H{
-		"token":   token,
-		"results": results,
-	})
-}
-
 // ApplyOverwrite is one per-row override the frontend can submit in the
 // apply call. Path key is the EXACT path the server parsed (preserves
 // ambiguity resolution — if the user typed a new artist in the modal
@@ -207,23 +138,17 @@ type ApplyOverwrite struct {
 
 // ApplyParsedFilenames handles POST /api/tag/apply_parsed_filenames/.
 //
-// Two request shapes, one plan:
-//
-//	{ "paths": ["a/b.flac", ...], "options": { "pattern": "..." } }   // current
-//	{ "token": "abc123..." }                                          // legacy
-//
-// Either way every row is re-verified against MUSIC_DIR on the way out,
-// and unparsable rows are kept in the bundle so the worker skips them
-// silently — an operator may have selected 1000 files and only want the
-// 700 that parsed.
+//	{
+//	  "paths":   ["album/Artist - Album - 01 - Title.flac", ...], // relative to MUSIC_DIR
+//	  "options": { "pattern": "^(?P<artist>.+?) - ...$" }          // optional
+//	}
 //
 //	→ 200 OK { task_id, state }
-//	→ 401 Unauth if ErrTokenExpired (a legacy token caller must
-//	   re-preview).
-//	→ 422 Unprocessable if any path fails SafeJoin on re-verify.
+//	→ Failure(...) if paths is empty, over MaxParseRows, or the pattern
+//	   does not compile / names a field that does not exist.
+//	→ 422 Unprocessable if any path fails SafeJoin.
 func ApplyParsedFilenames(c *gin.Context) {
 	var req struct {
-		Token     string           `json:"token"`
 		Overrides []ApplyOverwrite `json:"overrides"`
 		parseRequest
 	}
@@ -231,32 +156,12 @@ func ApplyParsedFilenames(c *gin.Context) {
 		Failure(c, "invalid request: "+err.Error())
 		return
 	}
-
-	var rows []cache.ParsedResult
-	switch {
-	case req.Token != "":
-		bundle, err := cache.DefaultPreviewCache.Load(req.Token)
-		if err != nil {
-			if errors.Is(err, cache.ErrTokenExpired) {
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"error":  "preview_expired",
-					"detail": "re-preview required (preview TTL elapsed or token unknown)",
-				})
-				return
-			}
-			Failure(c, "load preview: "+err.Error())
-			return
-		}
-		rows = bundle.Results
-	default:
-		if !checkPathCount(c, len(req.Paths)) {
-			return
-		}
-		var ok bool
-		rows, ok = planPaths(c, req.Paths, req.Options)
-		if !ok {
-			return
-		}
+	if !checkPathCount(c, len(req.Paths)) {
+		return
+	}
+	rows, ok := planPaths(c, req.Paths, req.Options)
+	if !ok {
+		return
 	}
 
 	// Index overrides by absolute path for O(1) lookup.

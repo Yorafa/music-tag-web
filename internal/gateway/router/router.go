@@ -67,10 +67,6 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		authed.POST("/fetch_id3_by_title/", handler.FetchID3ByTitle)
 		authed.POST("/fetch_lyric/", handler.FetchLyric)
 		authed.POST("/tidy_folder/", handler.TidyFolder)
-		// Read-only dry run of the same derivation, so the dialog can
-		// show where files would go before any of them move. Registered
-		// next to the mutation because it is meaningless apart from it.
-		authed.POST("/tidy_folder/preview/", handler.PreviewTidyFolder)
 		authed.POST("/upload_image/", handler.UploadImage)
 		// /api/search_music/ is the unified search endpoint for all
 		// registered tag- and download-source plugins (youtube search
@@ -110,18 +106,14 @@ func Setup(r *gin.Engine, cfg *config.Config, gormDB *gorm.DB) {
 		// overrides with secrets redacted (presence-only). Used by the
 		// SettingsModal "Sources" tab.
 		authed.GET("/sources/override/", handler.GetSourceOverride)
-		// C.2 Filename Parse preview/apply round-trip:
-		//   POST /preview  → returns token + per-row (artist/title/status).
-		//   POST /apply   → consumes token, enqueues TypeApplyParsedFilenames.
-		// Token TTL is enforced inside cache.DefaultPreviewCache.Load;
-		// expired/unknown tokens surface as 401 "preview_expired" so
-		// the modal can show a clean "re-preview" prompt.
-		authed.POST("/tag/preview_parse_filenames/", handler.PreviewParseFilenames)
+		// 解析文件名 — parse a filename into tags and write them. The
+		// request carries the paths and the rule together and enqueues
+		// TypeApplyParsedFilenames. The dialog renders its own plan
+		// locally, so there is no preview route and no token to expire.
 		authed.POST("/tag/apply_parsed_filenames/", handler.ApplyParsedFilenames)
-		// The inverse of the two above: tags → filename. The preview
-		// is a dry run and writes nothing, which is the whole point —
-		// a bulk rename is not something to apply unread.
-		authed.POST("/tag/preview_rename_from_tags/", handler.PreviewRenameFromTags)
+		// The inverse of the one above: tags → filename. Synchronous,
+		// because a rename is an os.Rename and the work is bounded by
+		// the selection the operator just made.
 		authed.POST("/tag/apply_rename_from_tags/", handler.ApplyRenameFromTags)
 		// Side-effecting task routes are POST, not GET (REVIEW.md P1-1).
 		// JWTAuth also accepts the JWT from an AUTHORIZATION cookie (the
