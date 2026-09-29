@@ -395,9 +395,16 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   // retries, silently. See handler.TidyFolder.
   // The ROWS, not the paths: the dialog renders its plan from each row's
   // cached tags, and derives the paths it submits from the same rows.
+  //
+  // The selection and nothing else. It used to fall back to every row when
+  // nothing was selected, on the theory that a tidy is a library-wide
+  // operation — which is exactly why it was the one button in this row
+  // that reorganised the whole collection off a single unselected click.
+  // The three dialogs behind 解析文件名 / 从标签改名 / 整理目录 all refuse
+  // to open without a selection now, so this can just be the selection.
   const tidyTargetRows = useMemo(
-    () => (hasSelection ? rows.filter((r) => selectedIds.includes(r.fullPath)) : rows),
-    [rows, selectedIds, hasSelection],
+    () => rows.filter((r) => selectedIds.includes(r.fullPath)),
+    [rows, selectedIds],
   );
 
   // Reconcile the queued rows against disk, dropping the ones whose file
@@ -484,7 +491,11 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
   // both faster and more likely to be what the user meant.
   const handleCheckDuplicate = async () => {
     if (!hasSelection) {
-      useNoticeStore.getState().push('请先选择要查重的音乐行', 'warn');
+      // Same words as the buttons either side of it. They all refuse the
+      // same way, so they should all say the same thing — three different
+      // phrasings of "select something first" across one row of controls
+      // reads as three different rules.
+      useNoticeStore.getState().push('请先选择至少一首音乐', 'info');
       return;
     }
     const targetRows = rows.filter((r) => selectedIds.includes(r.id));
@@ -780,8 +791,8 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           variant="outline"
           size="sm"
           onClick={() => {
-            if (!hasSelection && rows.length === 0) {
-              useNoticeStore.getState().push('曲库无待整理文件', 'info');
+            if (!hasSelection) {
+              useNoticeStore.getState().push('请先选择至少一首音乐', 'info');
               return;
             }
             setTidyOpen(true);
@@ -800,7 +811,7 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
           variant="outline"
           size="sm"
           onClick={handleCheckDuplicate}
-          disabled={isCheckingDup || !hasSelection}
+          disabled={isCheckingDup}
           className="h-8 gap-1 text-xs"
           title="对选中的行做只读查重（文件名 / 哈希 / 声纹 / 元数据），不修改任何文件"
         >
@@ -1012,13 +1023,13 @@ export function WorkstationToolbar({ onOpenDirPicker }: Props) {
       <RenameFromTagsDialog
         open={renameFromTagsOpen}
         onOpenChange={setRenameFromTagsOpen}
-        rows={selectedIds.length > 0 ? rows.filter((r) => selectedIds.includes(r.fullPath)) : rows}
+        rows={rows.filter((r) => selectedIds.includes(r.fullPath))}
       />
 
       <ParseFilenamesModal
         open={parseOpen}
         onOpenChange={setParseOpen}
-        rows={selectedIds.length > 0 ? rows.filter((r) => selectedIds.includes(r.fullPath)) : rows}
+        rows={rows.filter((r) => selectedIds.includes(r.fullPath))}
         initialPattern={parsePattern}
         onPatternChange={setParsePattern}
       />
